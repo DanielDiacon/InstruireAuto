@@ -1,0 +1,891 @@
+.intro {
+   width: 100%;
+   display: grid;
+   gap: 20px;
+   padding: 24px 24px 0 24px;
+   grid-template-columns: 1fr 1fr;
+   &.admin {
+      grid-template-columns: 2fr 3fr;
+   }
+   &::-webkit-scrollbar {
+      background: transparent;
+   }
+   &__left {
+      background: var(--black-s);
+      border-radius: 35px;
+      padding: 25px;
+      overflow: hidden;
+      position: relative;
+      &::after {
+         content: "";
+         position: absolute;
+         top: -80%;
+         right: -80%;
+         width: 150%;
+         height: 150%;
+         background: radial-gradient(
+            circle,
+            rgba(243, 252, 121, 0.2),
+            transparent
+         );
+         filter: blur(40px);
+         pointer-events: none;
+      }
+      h2 {
+         font-size: 48px;
+         line-height: 1;
+         color: var(--white-p);
+         font-family: "Clash Display";
+         font-weight: 500;
+         z-index: 2;
+         & .highlight-name {
+            position: relative;
+            background: linear-gradient(
+               90deg,
+               var(--white-s),
+               var(--accent-l)
+            ); // galben-verde moale
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            color: transparent;
+         }
+      }
+      p {
+         font-size: 18px;
+         line-height: 1.4;
+         color: var(--white-t);
+         z-index: 2;
+      }
+   }
+   &__instructori {
+      background: var(--black-s);
+      border-radius: 35px;
+      overflow: hidden;
+      position: relative;
+      &::after {
+         content: "";
+         position: absolute;
+         top: -80%;
+         right: -80%;
+         width: 150%;
+         height: 150%;
+         background: radial-gradient(
+            circle,
+            rgba(243, 252, 121, 0.2),
+            transparent
+         );
+         filter: blur(40px);
+         pointer-events: none;
+      }
+   }
+   &__right {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 20px;
+   }
+   &.admin .intro__right {
+      grid-template-columns: 5fr 2fr;
+   }
+   &__progress {
+      background: var(--black-s);
+      border-radius: 35px;
+   }
+   &__clock-wrapper {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 20px;
+   }
+
+   &__clock {
+      aspect-ratio: 1/1;
+      position: relative;
+      border-radius: 50%;
+   }
+
+   &__clock-icon {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      pointer-events: none;
+      background: linear-gradient(135deg, #d9d7a9, #d1f7a9);
+      background: linear-gradient(135deg, var(--accent-t), var(--accent-l));
+      mask-image: url("../assets/svg/clock-bg.svg");
+      mask-size: cover;
+      mask-repeat: no-repeat;
+      mask-position: center;
+
+      &::after {
+         content: "";
+         position: absolute;
+         top: 50%;
+         left: 50%;
+         width: 120%;
+         height: 120%;
+         transform: translate(-50%, -50%);
+         background: radial-gradient(circle, var(--accent-l), transparent);
+         //filter: blur(25px);
+         z-index: -1;
+      }
+
+      div {
+         display: flex;
+         justify-content: center;
+         align-items: center;
+      }
+
+      svg {
+         width: 100%;
+         height: 100%;
+         //color: var(--accent-l);
+         display: none;
+      }
+   }
+
+   &__date {
+      background: var(--black-s);
+      border-radius: 35px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      position: relative;
+      overflow: hidden;
+      &::after {
+         content: "";
+         position: absolute;
+         bottom: -180%;
+         left: 50%; // ← în loc de right
+         transform: translateX(-50%);
+         width: 300%;
+         height: 300%;
+         background: radial-gradient(
+            circle,
+            transparent,
+            transparent,
+            rgba(243, 252, 121, 0.2),
+            transparent,
+            transparent,
+            transparent,
+            transparent
+         );
+
+         filter: blur(10px);
+         pointer-events: none;
+         z-index: 0;
+      }
+      p {
+         color: var(--white-s);
+      }
+      h3 {
+         font-size: 48px;
+         line-height: 0.8;
+         color: var(--accent-l);
+         font-family: "Clash Display";
+         font-weight: 500;
+         z-index: 2;
+         span {
+            font-family: lexend;
+            font-size: 14px;
+         }
+      }
+      > span {
+         position: absolute;
+         padding: 7px 14px;
+         font-size: 14px;
+         font-weight: 500;
+         border-radius: 25px;
+         background: var(--accent-t);
+         color: var(--accent-l);
+         right: 16px;
+         top: 16px;
+         margin: 2px;
+      }
+   }
+}
+
+.react-clock {
+   width: 100% !important;
+   height: 100% !important;
+   z-index: 2;
+   &__face {
+      position: relative;
+      border: 0 !important;
+      width: 100%;
+      transition: var(--elastic-s) !important;
+      height: 100%;
+   }
+
+   &__mark {
+      &__body {
+         display: none;
+      }
+   }
+   &__hand {
+      transition: var(--elastic-s) !important;
+      &__body {
+         width: 10px !important;
+         background-color: var(--accent-d) !important;
+         border-radius: 20px;
+      }
+      .react-clock__hour-hand__body {
+         opacity: 0.5;
+      }
+      &.react-clock__second-hand .react-clock__second-hand__body {
+         width: 10px !important;
+         position: relative;
+         transition: var(--elastic-s) !important;
+
+         &::after {
+            content: "";
+            position: absolute;
+            bottom: 0%;
+            left: 0%;
+            width: 10px;
+            height: 10px;
+            background-color: var(--green-d);
+            border-radius: 50%;
+            box-shadow: 0 0 4px rgba(255, 200, 220, 0.4);
+            z-index: 2;
+         }
+      }
+   }
+}
+
+.intro__progress {
+   border-radius: 35px;
+   padding: 25px;
+   overflow: hidden;
+   position: relative;
+
+   &::after {
+      content: "";
+      position: absolute;
+      top: -80%;
+      left: -80%;
+      width: 150%;
+      height: 150%;
+      background: radial-gradient(
+         circle,
+         rgba(243, 252, 121, 0.2),
+         transparent
+      );
+      filter: blur(40px);
+      pointer-events: none;
+   }
+   h2 {
+      font-size: 32px;
+      line-height: 1;
+      color: var(--white-p);
+      font-family: "Clash Display";
+      font-weight: 500;
+      z-index: 2;
+   }
+   span {
+      position: absolute;
+      padding: 7px 14px;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 25px;
+      background: var(--accent-t);
+      color: var(--accent-l);
+      right: 16px;
+      bottom: 16px;
+   }
+
+   > div {
+      min-width: 100%;
+      min-height: calc(100% - 50px);
+      position: relative;
+      .CircularProgressbar {
+         z-index: 2;
+         // SVG wrapper-ul
+         position: absolute;
+         top: 0;
+         left: 0;
+         object-fit: contain;
+         width: 100%;
+         padding: 20px;
+         height: 100%;
+
+         &-trail {
+            // path gri
+            stroke: #00000000 !important;
+         }
+
+         &-path {
+            // path colorat (progres)
+            stroke: var(--accent-l) !important;
+         }
+
+         &-text {
+            // textul procentual (ex: 68%)
+            fill: var(--white-s) !important;
+            font-size: 16px !important;
+            width: 10px !important;
+         }
+         &._out {
+            transform: scaleX(-1) rotate(14deg);
+            .CircularProgressbar-path {
+               stroke: var(--black-p) !important;
+            }
+         }
+      }
+
+      > div {
+         margin-top: 10px;
+         text-align: center;
+         font-size: 14px;
+         // textul "Lecții finalizate"
+      }
+   }
+}
+
+.groups {
+   border-radius: 35px;
+   padding: 0 12px;
+   overflow: hidden;
+   position: relative;
+   background: var(--black-s);
+   z-index: 0;
+   display: flex;
+   flex-direction: column;
+   height: 100%;
+   &::after {
+      content: "";
+      position: absolute;
+      top: -80%;
+      left: -80%;
+      width: 150%;
+      height: 150%;
+      background: radial-gradient(
+         circle,
+         rgba(243, 252, 121, 0.2),
+         transparent
+      );
+      filter: blur(40px);
+      pointer-events: none;
+      z-index: 1;
+   }
+   &__header {
+      padding: 12px 0 0px 12px;
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+      z-index: 20;
+   }
+   &__right {
+      z-index: 10;
+      display: flex;
+      position: absolute;
+      width: 100%;
+      gap: 6px;
+      right: 0;
+   }
+   &__search {
+      width: 100%;
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+   }
+   &__input {
+      transition: var(--elastic-s);
+      background: var(--black-p);
+      color: var(--white-p);
+      border-radius: 25px;
+      width: 00%;
+      right: 0;
+      display: block;
+      top: 12px;
+      opacity: 0;
+      padding: 12px 0px;
+      margin-left: -100px;
+   }
+   &__icon {
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+      }
+      &.rotate45 svg {
+         rotate: 45deg;
+      }
+   }
+   &__header.open {
+      .groups__input {
+         opacity: 1;
+         padding: 12px 20px;
+         margin-left: 0px;
+         width: 100%;
+      }
+   }
+   h2 {
+      padding: 8px 0 0 0px;
+      font-size: 32px;
+      line-height: 1;
+      color: var(--white-p);
+      font-family: "Clash Display";
+      font-weight: 500;
+      position: relative;
+      z-index: 2;
+      flex-shrink: 0;
+      white-space: nowrap;
+   }
+   button {
+      background: var(--black-p);
+      color: var(--white-s);
+      border-radius: 25px;
+      padding: 14px 20px;
+      transition: var(--classic-s);
+      z-index: 2;
+      position: relative;
+      width: auto;
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         color: var(--accent-l);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 32px;
+      }
+   }
+
+   &__form {
+      border-radius: 22px;
+      background: var(--black-p);
+      display: flex;
+      flex-direction: column;
+      padding: 6px;
+      justify-content: space-between;
+      gap: 3px;
+      input {
+         border-radius: 16px;
+         padding: 10px 16px 11px 16px;
+         font-size: 14px;
+         background: var(--black-s);
+         color: var(--white-p);
+         width: 100%;
+      }
+      p {
+         padding: 0 6px;
+         color: var(--white-t);
+         opacity: 0.6;
+         height: 0;
+      }
+      button {
+         background: var(--black-s);
+         border-radius: 16px;
+         align-self: flex-end;
+         padding: auto;
+         padding: 12px 20px;
+         &:hover {
+            background: var(--green-d);
+            padding: 12px 24px;
+            color: var(--green-l);
+         }
+         &:active {
+            padding: 12px 24px;
+         }
+      }
+   }
+   &__grid-wrapper {
+      z-index: 2;
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+      position: relative;
+      margin-top: -12px;
+      flex-grow: 1;
+   }
+   &__grid {
+      position: absolute;
+      height: 100%;
+      width: 100%;
+      overflow-y: auto;
+      display: grid;
+      padding-top: 24px;
+      padding-bottom: 12px;
+      mask-image: linear-gradient(
+         to top,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         rgba(0, 0, 0, 0)
+      );
+      &::-webkit-scrollbar {
+         display: none;
+      }
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+   }
+   &__item {
+      border-radius: 22px;
+      background: var(--black-p);
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+
+      &-left {
+         display: flex;
+         flex-direction: column;
+         padding: 12px 12px 12px 16px;
+      }
+      &-right {
+         display: grid;
+         grid-template-rows: repeat(1fr);
+         padding: 6px;
+         gap: 6px;
+      }
+
+      h3 {
+         color: var(--white-p);
+      }
+      p {
+         color: var(--white-s);
+      }
+      span {
+         color: var(--white-s);
+         display: flex;
+         align-items: center;
+         position: absolute;
+         bottom: 12px;
+         left: 16px;
+         gap: 3px;
+         font-size: 12px;
+      }
+      &-key {
+         div {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+         }
+         svg {
+            width: 14px;
+            height: 14px;
+         }
+      }
+      &-icon {
+         background: var(--black-s);
+         color: var(--white-s);
+         border-radius: 16px;
+         padding: 11px 6px;
+         transition: var(--classic-s);
+         font-weight: 500;
+         &.edit {
+            border-radius: 16px 16px 8px 8px;
+         }
+         &.see {
+            border-radius: 8px 8px 16px 16px;
+         }
+         div {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+         }
+         svg {
+            height: 18px;
+         }
+      }
+   }
+}
+
+.instructori {
+   background: var(--black-s);
+   border-radius: 35px;
+   display: flex;
+   flex-direction: column;
+   justify-content: space-between;
+   position: relative;
+   overflow: hidden;
+   padding: 12px;
+   &::after {
+      content: "";
+      position: absolute;
+      bottom: -180%;
+      left: 50%; // ← în loc de right
+      transform: translateX(-50%);
+      width: 300%;
+      height: 300%;
+      background: radial-gradient(
+         circle,
+         transparent,
+         transparent,
+         rgba(243, 252, 121, 0.2),
+         transparent,
+         transparent,
+         transparent,
+         transparent
+      );
+
+      filter: blur(10px);
+      pointer-events: none;
+      z-index: 0;
+   }
+   &__info {
+      padding: 12px;
+   }
+   p {
+      color: var(--white-s);
+   }
+   h3 {
+      font-size: 48px;
+      line-height: 0.8;
+      color: var(--accent-l);
+      font-family: "Clash Display";
+      font-weight: 500;
+      z-index: 2;
+      span {
+         font-family: lexend;
+         font-size: 14px;
+      }
+   }
+
+   &__icon {
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+      }
+      &.big {
+         margin: -4px;
+         div {
+            height: 20px;
+         }
+         width: 20px;
+         height: 20px;
+      }
+   }
+   &__btns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      //flex-grow: 1;
+      //display: flex;
+      gap: 6px;
+      position: relative;
+      z-index: 2;
+      & > div {
+         gap: 6px;
+         flex-direction: column;
+         display: flex;
+      }
+   }
+   button {
+      background: var(--black-p);
+      color: var(--white-s);
+      border-radius: 21px;
+      padding: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: var(--classic-s);
+
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         color: var(--accent-l);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 21px;
+      }
+   }
+}
+
+.history {
+   border-radius: 35px;
+   padding: 0 12px;
+   overflow: hidden;
+   position: relative;
+   background: var(--black-s);
+   z-index: 0;
+   display: flex;
+   flex-direction: column;
+   height: 100%;
+   &::after {
+      content: "";
+      position: absolute;
+      top: -80%;
+      right: -80%;
+      width: 150%;
+      height: 150%;
+      background: radial-gradient(
+         circle,
+         rgba(243, 252, 121, 0.2),
+         transparent
+      );
+      filter: blur(40px);
+      pointer-events: none;
+   }
+   &__header {
+      padding: 12px 0 0px 12px;
+      display: flex;
+      justify-content: space-between;
+      z-index: 20;
+   }
+
+   button {
+      background: var(--black-p);
+      color: var(--white-s);
+      border-radius: 25px;
+      padding: 14px 20px;
+      transition: var(--classic-s);
+      z-index: 2;
+      position: relative;
+      width: auto;
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         color: var(--accent-l);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 32px;
+      }
+   }
+   h2 {
+      padding: 8px 0 0 0px;
+      font-size: 32px;
+      line-height: 1;
+      color: var(--white-p);
+      font-family: "Clash Display";
+      font-weight: 500;
+      position: relative;
+      z-index: 2;
+      flex-shrink: 0;
+   }
+
+   &__grid-wrapper {
+      z-index: 2;
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+      position: relative;
+      margin-top: -12px;
+      flex-grow: 1;
+   }
+
+   &__grid {
+      position: absolute;
+      height: 100%;
+      width: 100%;
+      overflow-y: auto;
+      display: grid;
+      padding-top: 24px;
+      padding-bottom: 12px;
+      mask-image: linear-gradient(
+         to top,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         #000,
+         rgba(0, 0, 0, 0)
+      );
+      &::-webkit-scrollbar {
+         display: none;
+      }
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+   }
+
+   &__item {
+      border-radius: 22px;
+      background: var(--black-p);
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+
+      &-left {
+         display: flex;
+         flex-direction: column;
+         padding: 12px 12px 48px 16px;
+      }
+      &-right {
+         padding: 6px;
+      }
+
+      h3 {
+         color: var(--white-p);
+      }
+      p {
+         color: var(--white-s);
+      }
+      span {
+         color: var(--white-s);
+         display: flex;
+         align-items: center;
+         position: absolute;
+         bottom: 12px;
+         left: 16px;
+         gap: 3px;
+         font-size: 12px;
+      }
+
+      &-icon {
+         background: var(--black-s);
+         //color: var(--white-s);
+         border-radius: 16px;
+         padding: 6px;
+         //transition: var(--classic-s);
+         //font-weight: 500;
+         div {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+         }
+         svg {
+            height: 20px;
+            width: 20px;
+         }
+         &.completed {
+            color: #0d3700;
+            background: #9cf680;
+         }
+
+         &.cancelled {
+            color: hsl(0, 100%, 13%);
+            background: hsl(0, 87%, 73%);
+         }
+
+         &.pending {
+            color: hsl(35, 87%, 13%);
+            background: hsl(35, 94%, 73%);
+         }
+      }
+   }
+
+   &__reschedule-info {
+      font-size: 0.85rem;
+      margin-top: 6px;
+      color: #333;
+   }
+}

@@ -1,0 +1,237 @@
+.sign {
+   display: flex;
+   padding: 6px;
+   display: grid;
+   grid-template-columns: 1fr 1fr;
+   //gap: 20px;
+   background: var(--black-p);
+   border-radius: 36px;
+   width: 100%;
+   position: relative;
+   &__left {
+      background-image: url("../assets/img/car-instruire-auto.png");
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      border-radius: 30px;
+      display: flex;
+      align-items: flex-start;
+      padding: 6px;
+   }
+   &__img-btn {
+      background: var(--accent-d);
+   }
+   &__img-btn.accent:hover {
+      border-radius: 26px;
+      padding: 8px 12px;
+      background: var(--accent-l);
+      span,
+      svg {
+         color: var(--accent-d);
+      }
+   }
+   &__right {
+      flex: 1;
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+   }
+   &__title {
+      font-family: "Clash Display";
+      line-height: 0.8;
+      font-size: 48px;
+      font-weight: 500;
+      color: var(--accent-l);
+   }
+   &__subtitle {
+      font-size: 16px;
+      color: var(--white-t);
+   }
+
+   &__form {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      padding: 20px 0 0 0;
+   }
+   &__form-row {
+      display: flex;
+      gap: 15px;
+   }
+   &__input {
+      padding: 15px 18px;
+      border-radius: 16px;
+      border: none;
+      background-color: var(--black-s);
+      color: var(--white-s);
+      font-size: 1rem;
+      width: 100%;
+   }
+   &__row-btns {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+   }
+   &__button {
+      background: var(--accent-d);
+      padding: 8px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      align-self: center;
+      border-radius: 32px;
+      font-weight: 500;
+      gap: 0px;
+      transition: var(--classic-s);
+      span {
+         padding: 7px 0 7px 14px;
+         color: var(--accent-l);
+         transition: var(--classic-f);
+      }
+      svg {
+         transition: var(--classic-f);
+      }
+      &:hover {
+         transition: var(--elastic-s);
+         background: var(--accent-l);
+         border-radius: 16px;
+         padding: 8px 12px;
+         gap: 2px;
+         transform: translateX(2px);
+         span {
+            color: var(--accent-d);
+         }
+         svg {
+            color: var(--accent-d);
+         }
+      }
+      &:active {
+         border-radius: 32px;
+         transition: var(--elastic-s);
+         background: var(--accent-l);
+         padding: 8px;
+         transform: translateX(0px) scale(0.95);
+
+         span {
+            color: var(--accent-d);
+         }
+         svg {
+            color: var(--accent-d);
+         }
+      }
+   }
+   &__button-icon {
+      rotate: 180deg;
+   }
+
+   &__icon {
+      color: var(--accent-l);
+      div {
+         display: grid;
+         place-items: center;
+      }
+   }
+   &__hr {
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+   }
+   &__icon-wave {
+      margin-left: -6px;
+      color: var(--black-s);
+   }
+
+   &__links {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+   }
+}
+// animation
+.sign__switcher {
+   position: relative;
+   min-height: 330px;
+}
+
+.sign__form-wrapper {
+   position: absolute;
+   top: 0;
+   left: 0;
+   width: 100%;
+   transition: all 0.4s ease;
+   opacity: 0;
+   transform: scaleX(0.96);
+   filter: blur(10px);
+   pointer-events: none;
+}
+
+.sign__form--active {
+   opacity: 1;
+   transform: scale(1);
+   pointer-events: auto;
+   z-index: 2;
+   filter: blur(0px);
+}
+
+.sign__form--leave {
+   z-index: 1;
+   opacity: 0;
+   transform: scaleX(0.96);
+}
+
+.sign__link-button {
+   background: var(--black-s);
+   padding: 8px;
+   display: flex;
+   justify-content: center;
+   align-items: center;
+   border-radius: 32px;
+   cursor: pointer;
+   gap: 0px;
+   transition: var(--classic-f);
+   font-weight: 500;
+   .sign__icon-inline > div {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+   }
+   span {
+      padding: 7px 14px 7px 0;
+      color: var(--accent-l); // implicit
+      transition: var(--classic-f);
+   }
+   svg {
+      transition: var(--classic-f);
+      transition: var(--elastic-s);
+      color: var(--accent-l);
+   }
+   &.arrow:hover svg {
+      transform: rotate(00deg);
+   }
+
+   &:hover {
+      transition: var(--elastic-s);
+      border-radius: 16px;
+      padding: 8px 10px;
+      gap: 2px;
+      svg {
+         transition: var(--elastic-s);
+         transform: rotate(360deg);
+      }
+   }
+
+   &:active {
+      transform: scale(0.95);
+      border-radius: 32px;
+      padding: 8px;
+      gap: 0;
+      transition: var(--elastic-s);
+      svg {
+         transition: var(--elastic-s);
+         transform: rotate(460deg);
+      }
+   }
+}
+
+

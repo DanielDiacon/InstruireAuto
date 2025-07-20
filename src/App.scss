@@ -1,0 +1,201 @@
+@import url("https://fonts.googleapis.com/css2?family=Lexend:wght@100..900&display=swap");
+@font-face {
+   font-family: "Clash Display";
+   src: url("./assets/fonts/ClashDisplay_Complete/Fonts/TTF/ClashDisplay-Variable.ttf")
+      format("truetype");
+   font-weight: 200 700; /* interval suportat */
+   font-style: normal;
+   font-display: swap;
+}
+
+$fontFamily: "Lexend", sans-serif;
+$fontSize: 14;
+
+// colors palette
+:root {
+   // accent pallet
+   --accent-l: #e6f680;
+   --accent-d: #3d2e00;
+   --accent-t: #616033;
+
+   // main colors
+   --black-p: hsl(0, 0%, 10%);
+   --black-s: hsl(0, 0%, 18%);
+   --black-t: hsl(0, 0%, 14%);
+   --white-p: #fff;
+   --white-s: #dfdfdf;
+   --white-t: #8a8a8a;
+   --bd: #6b6b6b5c;
+   //--calendar: #d5d1613a;
+
+   // other colors pallet
+   --green-l: #9cf680;
+   --green-d: #0d3700;
+   --blue-l: #80d1f6;
+   --blue-d: #002c41;
+
+   --red-l: #f68080;
+   --red-d: #410000;
+   --orange-l: hsl(35, 87%, 73%);
+   --orange-d: hsl(35, 100%, 13%);
+   // main bg gred
+   --main-bg: radial-gradient(
+      circle farthest-side,
+      #9ba22f 0%,
+      #993f3f 28%,
+      #994d00 63%,
+      #9e6b33 100%
+   );
+
+   // transitions
+   --elastic-s: 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+   --elastic-f: 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+   --classic-s: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+   --classic-f: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.darkmode {
+   // accent pallet
+   --accent-l: #584b00;
+   --accent-d: #e6f680;
+   --accent-t: #e3ef97d7;
+
+   // main colors
+
+   --black-p: #f2f4ef;
+   --black-s: #e6e9e3;
+   --black-t: #f0f1ec;
+   --white-p: hsl(0, 0%, 10%);
+   --white-s: hsl(0, 0%, 8%);
+   --white-t: hsl(0, 0%, 42%);
+   --bd: rgba(125, 125, 125, 0.178) !important;
+
+   // other colors pallet
+   --green-l: #0d3700;
+   --green-d: #9cf680;
+   --blue-l: #002c41;
+   --blue-d: #80d1f6;
+   --red-l: hsl(0, 100%, 13%);
+   --red-d: hsl(0, 87%, 73%);
+   --orange-l: hsl(35, 87%, 13%);
+   --orange-d: hsl(35, 94%, 73%);
+
+   // main bg gred
+   --main-bg: radial-gradient(
+      circle farthest-side,
+      #f1f9b3 0%,
+      #ffd1d1 28%,
+      #ffb066 63%,
+      #fce0b3 100%
+   );
+}
+// responsive size decives
+$tablet: 991.98px;
+$mobile: 767.98px;
+$mobileSmall: 480px;
+// null style
+@import "scss/_null.scss";
+// general style
+body {
+   line-height: 1.4;
+   font-family: $fontFamily;
+   font-size: $fontSize + px;
+   position: relative;
+   background: var(--black-p);
+}
+
+.no-scroll {
+   overflow: hidden;
+}
+// app <=>
+.App {
+   min-height: 100%;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   flex-direction: column;
+   overflow: hidden;
+   min-height: 100svh;
+}
+// container <=>
+.container {
+   max-width: 1140px;
+   width: 100%;
+   margin: 0 auto;
+   //fix for slider
+   > * {
+      min-width: 0;
+   }
+}
+.main-sign {
+   width: 100%;
+   background: var(--main-bg);
+   background-size: 350% 350%;
+   animation: Coolgradient 30s linear infinite;
+   height: 100svh;
+   display: flex;
+   align-items: center;
+}
+@keyframes Coolgradient {
+   0% {
+      background-position: 5% 0%;
+   }
+   50% {
+      background-position: 96% 100%;
+   }
+   100% {
+      background-position: 5% 0%;
+   }
+}
+
+.main {
+   z-index: 4;
+   width: 100%;
+   padding-left: 194px;
+   max-width: 1440px;
+   width: 100%;
+   margin: 0 auto;
+   @media (max-width: $mobile) {
+      padding-left: 0;
+      padding-bottom: 46px;
+   }
+}
+
+// scroll bar <=>
+@media only screen and (max-width: $mobile) {
+   ::-webkit-scrollbar {
+      display: none;
+   }
+}
+::-webkit-scrollbar {
+   background-color: var(--black-p);
+   width: 16px;
+}
+::-webkit-scrollbar-track {
+   background-color: var(--black-p);
+}
+::-webkit-scrollbar-thumb {
+   background-color: var(--white-p);
+   border-radius: 16px;
+   border: 4px solid var(--black-p);
+}
+::-webkit-scrollbar-button {
+   display: none;
+}
+
+// when copu text<=>
+::selection {
+   color: #101010;
+   background: hsl(55, 100%, 87%);
+}
+
+// imports
+@import "./scss/_utils";
+@import "./scss/_uim3";
+
+@import "./scss/_not-found";
+@import "./scss/_sign";
+@import "./scss/_panel";
+@import "./scss/_header";
+@import "./scss/_calendar";
+@import "./scss/_addprogramari";

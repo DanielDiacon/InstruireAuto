@@ -1,0 +1,47 @@
+{
+   "name": "Instruire Auto",
+   "short_name": "Instruire Auto",
+   "start_url": "/",
+   "display": "standalone",
+   "theme_color": "#000000",
+   "background_color": "#ffffff",
+   "icons": [
+      {
+         "src": "/android-chrome-192x192.png",
+         "sizes": "192x192",
+         "type": "image/png"
+      },
+      {
+         "src": "/android-chrome-512x512.png",
+         "sizes": "512x512",
+         "type": "image/png"
+      }
+   ],
+   "form_factor": {
+      "desktop": {
+         "screenshots": [
+            {
+               "src": "/desktop-screenshot.png",
+               "sizes": "1280x720",
+               "type": "image/png"
+            }
+         ]
+      },
+      "mobile": {
+         "screenshots": [
+            {
+               "src": "/mobile-screenshot.jpg",
+               "sizes": "360x640",
+               "type": "image/jpeg"
+            }
+         ]
+      }
+   },
+   "prefer_related_applications": true,
+   "related_applications": [
+      {
+         "platform": "play",
+         "id": "com.google.samples.apps.iosched"
+      }
+   ]
+}

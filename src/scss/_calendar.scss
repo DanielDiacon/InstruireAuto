@@ -1,0 +1,351 @@
+.calendar {
+   padding: 24px;
+
+   > div {
+      margin-top: 0 !important;
+      height: auto !important;
+   }
+}
+
+.rbc-calendar {
+   background: var(--black-s) !important;
+   padding: 0 !important;
+   border-radius: 35px !important;
+   overflow: hidden;
+
+   // Calendar container principal
+   & {
+      background: white;
+      border-radius: 12px;
+      padding: 1rem;
+   }
+}
+
+.rbc-toolbar {
+   padding: 12px 12px 0 12px;
+
+   &-label {
+      //background: pink;
+      color: var(--white-p) !important;
+   }
+}
+
+.rbc-btn-group {
+   display: flex !important;
+   gap: 6px !important;
+
+   &__icon {
+      div {
+         display: flex;
+      }
+   }
+   &__icon.deg180 {
+      svg {
+         rotate: 180deg;
+      }
+   }
+
+   button {
+      border: 0 !important;
+      background: var(--black-p) !important;
+      color: var(--white-s) !important;
+      border-radius: 25px !important;
+      padding: 14px 20px !important;
+      transition: var(--classic-s);
+      box-shadow: none !important;
+      font-weight: 500;
+      //margin: 0 !important;
+
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         color: var(--accent-l) !important;
+         border-radius: 16px !important;
+         padding: 14px 22px !important;
+      }
+
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px !important;
+         border-radius: 32px !important;
+      }
+
+      &.rbc-active {
+         background: var(--accent-l) !important;
+         color: var(--accent-d) !important;
+      }
+   }
+}
+
+.rbc-month-view {
+   gap: 6px !important;
+   border: 0 !important;
+   padding: 12px 17px 20px 17px;
+
+   // Structura lunară (celulele zilelor)
+   & {
+      .rbc-month-row {
+         min-height: 70px !important;
+         border: 0 !important;
+         display: flex;
+
+         .rbc-day-bg {
+            border: 1px solid #eee;
+         }
+
+         .rbc-event {
+            padding: 0 9px 2px 8px;
+            margin: 0;
+            background: transparent;
+         }
+
+         .rbc-event-content {
+            background-color: var(--accent-t);
+            color: var(--white-p);
+            border-radius: 6px;
+            padding: 1px 5px;
+            pointer-events: none;
+            pointer-events: all;
+            font-size: 12px;
+            transition: var(--classic-f);
+            &:hover {
+               background-color: var(--accent-l);
+               color: var(--accent-d);
+               scale: 1.03;
+            }
+         }
+
+         .rbc-row-segment {
+            margin: 0;
+            padding: 0;
+            position: relative;
+         }
+
+         .rbc-show-more {
+            font-size: 10px;
+            color: #fff;
+            background: #929292d7;
+            border-radius: 16px;
+            padding: 2px 5px;
+            font-weight: 400;
+            //margin: 0 6px;
+            //position: absolute;
+            position: relative;
+            bottom: -1px;
+            left: 8px;
+            cursor: pointer;
+
+            &:hover {
+               text-decoration: underline;
+            }
+         }
+      }
+   }
+}
+
+.rbc-row {
+   gap: 6px !important;
+} // Rând generic
+
+.rbc-row-bg {
+   //background: blue;
+   gap: 0 !important;
+}
+
+.rbc-row-content {
+   pointer-events: none;
+   //background: red;
+
+   .rbc-row {
+      gap: 0 !important; // 222222222222222222222222222222222222222222
+   }
+}
+
+.rbc-header {
+   border: 0 !important;
+   padding: 0 !important;
+   color: var(--white-s);
+   font-weight: 400 !important;
+   padding: 2px !important;
+   margin-bottom: 3px;
+   border-radius: 12px;
+   background: transparent !important;
+   text-align: center;
+
+   &.rbc-today {
+      background: var(--accent-l) !important;
+      border-radius: 12px;
+      color: var(--accent-d);
+   }
+}
+
+.rbc-day-bg {
+   border: 1px solid var(--bd) !important;
+   padding: 6px;
+   border-radius: 10px;
+   margin: 0 3px;
+   transition: var(--classic-s);
+
+   &.rbc-off-range-bg {
+      background: var(--bd);
+   }
+   &:hover {
+      background: var(--black-p);
+      cursor: pointer;
+   }
+   &.rbc-today {
+      background: var(--accent-l);
+      &:hover {
+         background: #fff;
+      }
+   }
+}
+
+.rbc-date-cell {
+   padding: 6px 10px 0 0 !important;
+   color: var(--white-s);
+
+   &.rbc-now {
+      color: var(--accent-d) !important;
+   }
+
+   &.rbc-current {
+      color: var(--white-p);
+   }
+}
+
+.rbc-date-cell.rbc-off-range {
+   color: var(--white-t);
+}
+
+.rbc-button-link {
+   //background: #fb00ff !important;
+}
+
+// Săptămâna -------------------- //
+.rbc-time-view {
+   border: 0 !important;
+   padding: 12px 12px 0px 12px;
+
+   .rbc-time-header {
+      //background: blue !important;
+      gap: 6px !important;
+   }
+
+   .rbc-allday-cell {
+      display: none;
+   }
+
+   .rbc-time-header,
+   .rbc-time-header-content {
+      border: 0 !important;
+   }
+
+   .rbc-events-container {
+      margin: 0 !important; //marginea din dreapta -
+   }
+
+   .rbc-event {
+      background-color: var(--accent-t);
+      color: var(--white-p);
+      padding: 6px;
+      border-radius: 10px;
+      width: 100% !important;
+      margin: -1% 0 0 0 !important;
+      left: 0 !important;
+      border: 4px solid var(--black-s) !important;
+      gap: 2px;
+      transition: var(--classic-f) !important;
+      &.rbc-selected {
+         background-color: var(--accent-t) !important;
+      }
+      &:focus {
+         outline: none !important;
+         box-shadow: none !important;
+         background-color: var(--accent-t);
+      }
+      &:hover {
+         color: var(--accent-d);
+         background-color: var(--accent-l) !important;
+      }
+   }
+
+   .rbc-event-label {
+      font-size: 8px;
+      line-height: 1;
+      width: 100%;
+      text-wrap: wrap;
+      opacity: 0.8;
+   }
+
+   .rbc-event-content {
+      font-size: 10px;
+   }
+}
+
+.rbc-time-header-gutter {
+   //background: #000 !important;
+}
+
+.rbc-overflowing {
+   //background: green !important;
+}
+
+.rbc-label {
+   //background: pink !important;
+   color: var(--white-s);
+}
+
+.rbc-row-content {
+   //background: #000 !important;
+   //display: grid;
+   //grid-template-rows: auto 1fr 1fr;
+   //width: 100%;
+}
+
+.rbc-time-content {
+   gap: 6px !important;
+   border: 0 !important;
+   max-height: 400px;
+}
+
+.rbc-time-gutter {
+   //gap: 6px !important;
+}
+
+.rbc-time-column {
+   //padding: 10px;
+   //background: #000;
+   gap: 3px;
+   margin-bottom: 12px;
+}
+
+.rbc-timeslot-group {
+   border: 0 !important;
+}
+
+.rbc-time-slot {
+   border: 0 !important;
+}
+
+.rbc-day-slot.rbc-now.rbc-today {
+   background: var(--bd);
+   background: #d5d16100;
+}
+
+.rbc-day-slot.rbc-time-column {
+   border: 1px solid var(--bd) !important;
+   overflow: hidden;
+   border-radius: 10px;
+
+   .rbc-timeslot-group {
+      border-bottom: 1px solid var(--bd) !important;
+      z-index: 3 !important;
+      opacity: 0.5;
+      pointer-events: none;
+   }
+}
+
+.rbc-events-container {
+   border: 0 !important;
+}

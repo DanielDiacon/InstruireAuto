@@ -1,0 +1,6 @@
+User-Agent: Googlebot
+Disallow:
+Allow: /portfolio
+Sitemap: https://daniel-diacon.com/sitemap.xml
+```&#8203;:contentReference[oaicite:0]{index=0}
+
