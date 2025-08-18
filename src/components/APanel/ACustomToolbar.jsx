@@ -1,0 +1,51 @@
+import React from "react";
+import { ReactSVG } from "react-svg";
+import arrow from "../../assets/svg/arrow-s.svg";
+import add from "../../assets/svg/add-s.svg";
+import SOpenProgramari from "../Utils/SOpenProg";
+import { useUserContext } from "../../UserContext";
+
+function ACustomToolbar({ label, onView, views, view, onNavigate }) {
+   const { setPopupName } = useUserContext();
+   return (
+      <div className="rbc-toolbar">
+         <span className="rbc-btn-group">
+            <button onClick={() => onNavigate("TODAY")}>Astăzi</button>
+            <button onClick={() => onNavigate("PREV")}>
+               <ReactSVG className="rbc-btn-group__icon" src={arrow} />
+            </button>
+            <button onClick={() => onNavigate("NEXT")}>
+               <ReactSVG className="rbc-btn-group__icon deg180" src={arrow} />
+            </button>
+         </span>
+
+         <span className="rbc-toolbar-label">{label}</span>
+
+         <span className="rbc-btn-group">
+            {views.includes("month") && (
+               <button
+                  onClick={() => onView("month")}
+                  disabled={view === "month"}
+               >
+                  Lună
+               </button>
+            )}
+            {views.includes("week") && (
+               <button
+                  onClick={() => onView("week")}
+                  disabled={view === "week"}
+               >
+                  Săptămână
+               </button>
+            )}
+
+            {/* Butonul tău custom */}
+            <SOpenProgramari onClick={() => setPopupName("addProg")}>
+               <ReactSVG className="rbc-btn-group__icon" src={add} />
+            </SOpenProgramari>
+         </span>
+      </div>
+   );
+}
+
+export default ACustomToolbar;

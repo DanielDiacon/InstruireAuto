@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useContext, useEffect, useState, useCallback } from "react";
 import { Calendar, dateFnsLocalizer } from "react-big-calendar";
 import format from "date-fns/format";
 import parse from "date-fns/parse";
@@ -8,32 +8,28 @@ import ro from "date-fns/locale/ro";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 
 import Header from "../components/Header/Header";
-import M3Progress from "../components/UI/M3Progress";
-import { ReactSVG } from "react-svg";
-import clockBG from "../assets/svg/clock-bg.svg";
-import eyeIcon from "../assets/svg/eye.svg";
-import editIcon from "../assets/svg/edit.svg";
-import keyIcon from "../assets/svg/key.svg";
-import addIcon from "../assets/svg/add-s.svg";
-import cancelIcon from "../assets/svg/cancel.svg";
-import successIcon from "../assets/svg/success.svg";
-import clockIcon from "../assets/svg/clock.svg";
-
-import Clock from "react-clock";
 import "react-clock/dist/Clock.css";
+import ADayInfo from "../components/Popups/ADayInfo";
+import { openPopup } from "../components/Utils/popupStore";
 
-import CustomToolbar from "../components/Utils/CustomToolbar";
-import SOpenProgramari from "../components/Utils/SOpenProg";
-import AOpenAddGroup from "../components/Utils/AddInstrBtn";
-import AddInstrBtn from "../components/Utils/AddInstrBtn";
-import AOpenProg from "../components/Utils/AOpenProg";
-import ADayInfo from "../components/Utils/ADayInfo";
-import SAddProg from "../components/Utils/SAddProg";
-import AAddProg from "../components/Utils/AAddProg";
-import AddInstr from "../components/Utils/AddInstr";
-import searchIcon from "../assets/svg/search.svg";
-
-import { generateEvents, calendarEvents } from "../data/generateEvents";
+import { calendarEvents } from "../data/generateEvents";
+import { getAllReservations } from "../api/reservationsService";
+import { getUsers } from "../api/usersService";
+import {
+   createGroups,
+   deleteGroup,
+   getGroups,
+   patchGroup,
+} from "../api/groupsService";
+import { getInstructors } from "../api/instructorsService";
+import { useUserContext, UserContext } from "../UserContext";
+import Popup from "../components/Utils/Popup";
+import ReservationHistory from "../components/APanel/ReservationHistory";
+import GroupManager from "../components/APanel/GroupManager";
+import ACalendarView from "../components/APanel/ACalendar";
+import InstructorManager from "../components/APanel/InstructorManager";
+import ClockDisplay from "../components/UI/ClockDisplay";
+import StudentsManager from "../components/APanel/StudentsManager";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -46,133 +42,97 @@ const localizer = dateFnsLocalizer({
 });
 
 function APanel() {
-   // ---- Initialization ----
+   // --- States ---
+   const [selectedDate, setSelectedDate] = useState(null);
+   const [selectedHourEvents, setSelectedHourEvents] = useState([]);
+   const [showDayPopup, setShowDayPopup] = useState(false);
+   const [currentView, setCurrentView] = useState("month");
+   const [events, setEvents] = useState(calendarEvents);
+   const [reservations, setReservations] = useState([]);
+   const [users, setUsers] = useState([]);
+   const [groups, setGroups] = useState([]);
+   const [instructors, setInstructors] = useState([]);
+
+   const { user } = useContext(UserContext);
+   // --- Effects ---
    useEffect(() => {
       document.title = "Instruire Auto | APanel";
    }, []);
 
+   // Fetch date inițiale: rezervări, utilizatori, grupe
+
    useEffect(() => {
-      const interval = setInterval(() => setValue(new Date()), 1000);
-      return () => clearInterval(interval);
+      async function fetchData() {
+         if (!user || user.role !== "ADMIN") return;
+
+         try {
+            const [resData, userData, groupData, instructorData] =
+               await Promise.all([
+                  getAllReservations(),
+                  getUsers(),
+                  getGroups(),
+                  getInstructors(), // 👈 aici
+               ]);
+
+            setReservations(resData);
+            setUsers(userData);
+            setInstructors(instructorData); // 👈 aici
+
+            const sortedGroups = groupData.sort(
+               (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+            );
+            setGroups(sortedGroups);
+
+            const formattedEvents = resData.map((item) => {
+               const start = new Date(item.startTime);
+               const end = new Date(start.getTime() + 90 * 60 * 1000);
+               return { id: item.id, title: "Programare", start, end };
+            });
+            setEvents(formattedEvents);
+         } catch (err) {
+            console.error("Eroare la preluare:", err);
+         }
+      }
+
+      fetchData();
+   }, [user]);
+
+   // --- Funcții ajutătoare ---
+
+   // Filtrare evenimente pentru săptămână (unice pe oră)
+   const filterEventsForWeek = useCallback((events) => {
+      const seen = new Set();
+      return events.filter((event) => {
+         const key = `${event.start.getFullYear()}-${event.start.getMonth()}-${event.start.getDate()}-${event.start.getHours()}-${event.start.getMinutes()}`;
+         if (seen.has(key)) return false;
+         seen.add(key);
+         return true;
+      });
    }, []);
 
-   // ---- States ----
-   const [value, setValue] = useState(new Date());
-   const [selectedDate, setSelectedDate] = useState(null);
-   const [selectedEvent, setSelectedEvent] = useState(null);
-   const [selectedHourEvents, setSelectedHourEvents] = useState([]);
-   const [showDayPopup, setShowDayPopup] = useState(false);
-   const [showForm, setShowForm] = useState(false);
-   const [newGroupName, setNewGroupName] = useState("");
-   const [currentView, setCurrentView] = useState("month");
-   const [events, setEvents] = useState(calendarEvents);
-   const [searchOpen, setSearchOpen] = useState(false);
+   // Evenimente filtrate în funcție de view
+   const eventsToShow =
+      currentView === "week" ? filterEventsForWeek(events) : events;
 
-   const [groups, setGroups] = useState([
-      { name: "Grupa-251", members: 2, key: "4BD54R3" },
-      { name: "Grupa-315", members: 3, key: "9XR1K7D" },
-      { name: "Grupa-251", members: 2, key: "4BD54R3" },
-      { name: "Grupa-315", members: 3, key: "9XR1K7D" },
-      { name: "Grupa-251", members: 2, key: "4BD54R3" },
-      { name: "Grupa-315", members: 3, key: "9XR1K7D" },
-      { name: "Grupa-251", members: 2, key: "4BD54R3" },
-      { name: "Grupa-315", members: 3, key: "9XR1K7D" },
-      { name: "Grupa-251", members: 2, key: "4BD54R3" },
-      { name: "Grupa-315", members: 3, key: "9XR1K7D" },
-      { name: "Grupa-251", members: 2, key: "4BD54R3" },
-      { name: "Grupa-315", members: 3, key: "9XR1K7D" },
-   ]);
+   // Formatare rezervare pentru afișare
 
-   const mockHistory = [
-      {
-         id: 1,
-         person: "Ana Ionescu",
-         instructor: "Ion Popescu",
-         time: "10:00 - 11:00",
-         status: "completed",
-      },
-      {
-         id: 2,
-         person: "Mihai Tudor",
-         instructor: null,
-         time: "11:00 - 12:00",
-         status: "pending",
-      },
-      {
-         id: 4,
-         person: "Ioana Filip",
-         instructor: "Ion Popescu",
-         time: "15:00 - 16:00",
-         status: "cancelled",
-      },
-      {
-         id: 1,
-         person: "Ana Ionescu",
-         instructor: "Ion Popescu",
-         time: "10:00 - 11:00",
-         status: "completed",
-      },
-      {
-         id: 2,
-         person: "Mihai Tudor",
-         instructor: null,
-         time: "11:00 - 12:00",
-         status: "pending",
-      },
-      {
-         id: 4,
-         person: "Ioana Filip",
-         instructor: "Ion Popescu",
-         time: "15:00 - 16:00",
-         status: "cancelled",
-      },
-      {
-         id: 1,
-         person: "Ana Ionescu",
-         instructor: "Ion Popescu",
-         time: "10:00 - 11:00",
-         status: "completed",
-      },
-      {
-         id: 2,
-         person: "Mihai Tudor",
-         instructor: null,
-         time: "11:00 - 12:00",
-         status: "pending",
-      },
-      {
-         id: 4,
-         person: "Ioana Filip",
-         instructor: "Ion Popescu",
-         time: "15:00 - 16:00",
-         status: "cancelled",
-      },
-   ];
-
-   // ---- Handlers ----
-   const handleViewChange = (view) => {
-      setCurrentView(view);
-   };
+   // Selectare zi în calendar (slot)
    const handleDayClick = ({ start }) => {
-      setSelectedDate(start);
-      const hour = start.getHours();
-      const minute = start.getMinutes();
-
       const eventsAtThatHour = events.filter((ev) => {
          const evStart = new Date(ev.start);
          return (
             evStart.getFullYear() === start.getFullYear() &&
             evStart.getMonth() === start.getMonth() &&
             evStart.getDate() === start.getDate() &&
-            evStart.getHours() === hour &&
-            evStart.getMinutes() === minute
+            evStart.getHours() === start.getHours() &&
+            evStart.getMinutes() === start.getMinutes()
          );
       });
 
-      setSelectedHourEvents(eventsAtThatHour);
-      setSelectedEvent(null);
-      setShowDayPopup(true);
-      document.body.classList.add("popup-day-info");
+      openPopup("dayInfo", {
+         selectedDate: start,
+         programari: formattedReservations,
+      });
    };
 
    const handleEventClick = (event) => {
@@ -190,280 +150,118 @@ function APanel() {
          );
       });
 
-      setSelectedDate(event.start);
-      setSelectedHourEvents(eventsAtThatHour);
-      setSelectedEvent(event); // Afișează primul sau cel apăsat
-      setShowDayPopup(true);
-      document.body.classList.add("popup-day-info");
-   };
-
-   const generateKey = () =>
-      Math.random().toString(36).substring(2, 8).toUpperCase();
-
-   const handleAddGroup = () => {
-      if (!newGroupName.trim()) return;
-      const newGroup = {
-         name: newGroupName,
-         members: Math.floor(Math.random() * 10) + 1,
-         key: generateKey(),
-      };
-      setGroups([...groups, newGroup]);
-      setNewGroupName("");
-      setShowForm(false);
-   };
-
-   const eventsToShow =
-      currentView === "week" ? filterEventsForWeek(events) : events;
-   function filterEventsForWeek(events) {
-      const seen = new Set();
-      const filtered = [];
-
-      events.forEach((event) => {
-         const key = `${event.start.getFullYear()}-${event.start.getMonth()}-${event.start.getDate()}-${event.start.getHours()}-${event.start.getMinutes()}`;
-         if (!seen.has(key)) {
-            seen.add(key);
-            filtered.push(event);
-         }
+      openPopup("dayInfo", {
+         selectedDate: event.start,
+         programari: formattedReservations,
       });
+   };
 
-      return filtered;
-   }
+   // Schimbare view calendar
+   const handleViewChange = (view) => setCurrentView(view);
+
+   const findUserById = (id) => users.find((u) => u.id === id);
+   const findInstructorById = (id) =>
+      instructors.find((inst) => inst.id === id);
+
+   const getFormattedReservations = (
+      reservations,
+      findUserById,
+      findInstructorById
+   ) => {
+      return reservations.map((res) => {
+         const start = new Date(res.startTime);
+         const end = new Date(start.getTime() + 90 * 60 * 1000); // 90 min
+
+         const personUser = findUserById(res.userId);
+         const person = personUser
+            ? `${personUser.firstName} ${personUser.lastName}`
+            : "Anonim";
+
+         const instructorObj = findInstructorById(res.instructorId);
+         const instructor = instructorObj
+            ? `${instructorObj.firstName} ${instructorObj.lastName}`
+            : "Necunoscut";
+
+         const status = res.status || "pending";
+
+         const time = `${start.getHours()}:${start
+            .getMinutes()
+            .toString()
+            .padStart(2, "0")} - ${end.getHours()}:${end
+            .getMinutes()
+            .toString()
+            .padStart(2, "0")}`;
+
+         return {
+            id: res.id,
+            start,
+            end,
+            time,
+            person,
+            instructor,
+            status,
+         };
+      });
+   };
+   const formattedReservations = getFormattedReservations(
+      reservations,
+      findUserById,
+      findInstructorById
+   );
+
+   const [selectedStudent, setSelectedStudent] = useState(null);
+   const handleSelectStudent = (student) => {
+      setSelectedStudent(student);
+   };
+
    // ---- Render ----
    return (
       <>
-         <Header status="admin">
-            <SAddProg />
-            <AAddProg />
-            <AddInstr />
+         <Header>
+            {/*<SAddProg />*/}
+            {/*<AAddProg />*/}
+            <Popup />
             <ADayInfo
                selectedDate={selectedDate}
                showDayPopup={showDayPopup}
-               selectedEvent={selectedEvent}
-               selectedHourEvents={selectedHourEvents}
-               programari={events}
+               formatReservation
+               programari={formattedReservations}
             />
          </Header>
          <main className="main">
             <section className="intro admin">
-               <div className="history">
-                  <div className="history__header">
-                     <h2>Istoric Programări</h2>
-                     <AOpenProg>
-                        <ReactSVG
-                           className="rbc-btn-group__icon"
-                           src={addIcon}
-                        />
-                     </AOpenProg>
-                  </div>
-
-                  <div className="history__grid-wrapper">
-                     <div className="history__grid">
-                        {mockHistory.map((entry, index) => (
-                           <div
-                              key={entry.id + "-" + index}
-                              className={`history__item history__item--${entry.status}`}
-                           >
-                              <div className="history__item-left">
-                                 <h3>{entry.person}</h3>
-                                 <p>
-                                    {entry.instructor
-                                       ? `cu ${entry.instructor}`
-                                       : "fără instructor"}
-                                 </p>
-                                 <span>{entry.time}</span>
-                              </div>
-
-                              <div className="history__item-right">
-                                 {entry.status === "completed" && (
-                                    <ReactSVG
-                                       className="history__item-icon completed"
-                                       src={successIcon}
-                                    />
-                                 )}
-                                 {entry.status === "cancelled" && (
-                                    <ReactSVG
-                                       className="history__item-icon cancelled"
-                                       src={cancelIcon}
-                                    />
-                                 )}
-                                 {entry.status === "pending" && (
-                                    <ReactSVG
-                                       className="history__item-icon pending"
-                                       src={clockIcon}
-                                    />
-                                 )}
-                              </div>
-                           </div>
-                        ))}
-                     </div>
-                  </div>
-               </div>
+               <StudentsManager />
                <div className="intro__right">
-                  <div className="groups">
-                     <div
-                        className={`groups__header ${searchOpen ? "open" : ""}`}
-                     >
-                        <h2>Toate Grupele</h2>
+                  <GroupManager onSelectStudent={handleSelectStudent} />
 
-                        <div className="groups__right">
-                           <div className="groups__search">
-                              <input
-                                 type="text"
-                                 placeholder="Caută grupă..."
-                                 className="groups__input"
-                              />
-                              <button
-                                 onClick={() => setSearchOpen(!searchOpen)}
-                              >
-                                 <ReactSVG
-                                    className={`groups__icon ${
-                                       searchOpen ? "rotate45" : ""
-                                    }`}
-                                    src={searchOpen ? addIcon : searchIcon}
-                                 />
-                              </button>
-                           </div>
-                           <button onClick={() => setShowForm((prev) => !prev)}>
-                              <ReactSVG
-                                 className="groups__icon "
-                                 src={addIcon}
-                              />
-                           </button>
-                        </div>
-                     </div>
-
-                     <div className="groups__grid-wrapper">
-                        <div className="groups__grid">
-                           {showForm && (
-                              <div className="groups__form">
-                                 <input
-                                    type="text"
-                                    placeholder="Numele grupei"
-                                    value={newGroupName}
-                                    onChange={(e) =>
-                                       setNewGroupName(e.target.value)
-                                    }
-                                 />
-                                 <p>0 per</p>
-
-                                 <button onClick={handleAddGroup}>
-                                    Creează
-                                 </button>
-                              </div>
-                           )}
-                           {groups.map((group, index) => (
-                              <div className="groups__item" key={index}>
-                                 <div className="groups__item-left">
-                                    <h3>{group.name}</h3>
-                                    <p>{group.members} per</p>
-                                    <span>
-                                       <ReactSVG
-                                          className="groups__item-key"
-                                          src={keyIcon}
-                                       />
-                                       {group.key}
-                                    </span>
-                                 </div>
-                                 <div className="groups__item-right">
-                                    <ReactSVG
-                                       className="groups__item-icon edit"
-                                       src={editIcon}
-                                    />
-                                    <ReactSVG
-                                       className="groups__item-icon see"
-                                       src={eyeIcon}
-                                    />
-                                 </div>
-                              </div>
-                           ))}
-                        </div>
-                     </div>
-                  </div>
                   <div className="intro__clock-wrapper">
-                     <div className="intro__clock">
-                        <Clock
-                           value={value}
-                           className="material-clock"
-                           renderMinuteMarks={false}
-                           renderHourMarks={true}
-                           renderNumbers={false}
-                           hourHandLength={40}
-                           hourHandOppositeLength={5}
-                           minuteHandLength={60}
-                           minuteHandOppositeLength={5}
-                           secondHandLength={70}
-                           hourHandWidth={4}
-                           minuteHandWidth={5}
-                           secondHandWidth={5}
-                        />
-                        <ReactSVG className="intro__clock-icon" src={clockBG} />
-                     </div>
-                     <div className="instructori">
-                        <div className="instructori__btns">
-                           <div>
-                              <AddInstrBtn>
-                                 <ReactSVG
-                                    className="instructori__icon"
-                                    src={addIcon}
-                                 />
-                              </AddInstrBtn>
-                              <AddInstrBtn>
-                                 <ReactSVG
-                                    className="instructori__icon big"
-                                    src={editIcon}
-                                 />
-                              </AddInstrBtn>
-                           </div>
-                           <AddInstrBtn>
-                              <ReactSVG
-                                 className="instructori__icon big"
-                                 src={eyeIcon}
-                              />
-                           </AddInstrBtn>
-                        </div>
-                        <div className="instructori__info">
-                           <h3>
-                              20
-                              <span>de</span>
-                           </h3>
-                           <p>Instructori</p>
-                        </div>
-                     </div>
+                     <ClockDisplay />
+
+                     <InstructorManager
+                        instructors={instructors}
+                        openPopup={openPopup}
+                     />
                   </div>
                </div>
             </section>
 
             <section className="calendar">
-               <div style={{ height: 500, marginTop: "2rem" }}>
-                  <Calendar
-                     selectable
-                     onSelectSlot={handleDayClick}
-                     onSelectEvent={handleEventClick}
-                     localizer={localizer}
-                     events={eventsToShow} // Aici folosim lista filtrată sau completă
-                     startAccessor="start"
-                     endAccessor="end"
-                     views={["month", "week"]}
-                     defaultView="month"
-                     onView={handleViewChange} // handler pentru schimbarea view-ului
-                     style={{
-                        background: "white",
-                        borderRadius: "12px",
-                        padding: "1rem",
-                     }}
-                     messages={{
-                        today: "Astăzi",
-                        month: "Lună",
-                        week: "Săptămână",
-                        day: "Zi",
-                        agenda: "Agendă",
-                        noEventsInRange: "Nicio programare în această perioadă",
-                     }}
-                     components={{
-                        toolbar: CustomToolbar,
-                     }}
-                  />
-               </div>
+               <ACalendarView
+                  events={eventsToShow}
+                  localizer={localizer}
+                  currentView={currentView}
+                  onSelectSlot={handleDayClick} // click pe o zi liberă
+                  onSelectEvent={handleEventClick} // click pe eveniment existent
+                  onViewChange={handleViewChange} // schimbare lună/săptămână
+               />
+            </section>
+            <section className="modules">
+               <ReservationHistory
+                  formattedReservations={formattedReservations}
+               />
+               {/*<ReservationHistory
+                  formattedReservations={formattedReservations}
+               />*/}
             </section>
          </main>
       </>

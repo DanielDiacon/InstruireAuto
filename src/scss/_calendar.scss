@@ -1,5 +1,5 @@
 .calendar {
-   padding: 24px;
+   padding: 24px 24px 0 24px;
 
    > div {
       margin-top: 0 !important;
@@ -182,21 +182,23 @@
 .rbc-day-bg {
    border: 1px solid var(--bd) !important;
    padding: 6px;
-   border-radius: 10px;
+   border-radius: 12px;
    margin: 0 3px;
    transition: var(--classic-s);
+   //background: var(--black-p);
 
    &.rbc-off-range-bg {
       background: var(--bd);
    }
    &:hover {
+      //background: var(--bd);
       background: var(--black-p);
       cursor: pointer;
    }
    &.rbc-today {
       background: var(--accent-l);
       &:hover {
-         background: #fff;
+         opacity: 0.8;
       }
    }
 }

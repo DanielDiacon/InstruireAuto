@@ -16,153 +16,18 @@
    opacity: 1;
 }
 
-.popup-toggle-button {
-   width: 100%;
-   display: flex;
-   align-items: center;
-   gap: 8px;
-   cursor: pointer;
-   transition: 0.1s;
-   &__icon {
-      color: var(--white-s);
-      width: 66px;
-      background: var(--black-s);
-      padding: 8px;
-      display: grid;
-      place-items: center;
-      border-radius: 25px;
-      transition: var(--elastic-s);
-      div {
-         display: grid;
-         place-items: center;
-      }
-      svg {
-         min-width: 24px;
-         min-height: 24px;
-         width: 24px;
-         height: 24px;
-      }
-   }
-   &__nav-text {
-      position: relative;
-      transition: 0.3s;
-      white-space: nowrap;
-      font-size: 14px;
-      color: var(--white-s);
-   }
-   &:hover &__icon {
-      width: 70px;
-   }
-}
-
-.popup-panel {
-   position: fixed;
-   visibility: hidden;
-   opacity: 0;
-   width: 33vw;
-   //min-width: 38vw;
-   top: 0px;
-   left: -3%;
-   border-radius: 0px;
-   height: calc(100vh - 0px);
-   background-color: var(--black-p);
-   z-index: 1001000000;
-   padding: 0px;
-   display: flex;
-   flex-direction: column;
-   transition: var(--elastic-s);
-   &__overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background-color: rgba(0, 0, 0, 0.5);
-      backdrop-filter: blur(10px);
-      z-index: 1000;
-      visibility: hidden;
-      transition: var(--classic-f);
-      opacity: 0;
-   }
-
-   &__inner {
-      flex: 1;
-      padding-right: 6px;
-      overflow-y: auto;
-      scrollbar-width: thin; // Firefox
-      scrollbar-color: white transparent; // Firefox
-
-      &::-webkit-scrollbar {
-         width: 6px; // subțire
-      }
-
-      &::-webkit-scrollbar-track {
-         background: transparent;
-      }
-
-      &::-webkit-scrollbar-thumb {
-         border-radius: 8px;
-      }
-   }
-
-   &__header {
+.react-icon {
+   div {
       display: flex;
-      justify-content: space-between;
+      justify-content: center;
       align-items: center;
-      margin-bottom: 1rem;
-   }
-
-   &__title {
-      font-size: 32px;
-      line-height: 0.8;
-      color: var(--white-p);
-      font-family: "Clash Display";
-      font-weight: 500;
-      z-index: 2;
-   }
-
-   &__close {
-      background: transparent;
-      border: none;
-      font-size: 1.5rem;
-      cursor: pointer;
-      line-height: 1;
    }
 }
-.popup-day-info .popup-panel.popup-day-info,
-.popup-instr-add .popup-panel.popup-instr-add,
-.popup-a-add-prog .popup-panel.popup-a-add-prog,
-.popup-s-add-prog .popup-panel.popup-s-add-prog {
-   transition-duration: 0.6s !important;
-   transition: var(--elastic-s);
-   left: 6px;
-   visibility: visible;
-   opacity: 1;
-   top: 6px;
-   border-radius: 35px;
-   height: calc(100vh - 12px);
-   min-width: 400px;
-   padding: 25px 19px 25px 25px;
-   width: 40vw;
-}
-.popup-day-info .popup-panel__overlay.popup-day-info,
-.popup-instr-add .popup-panel__overlay.popup-instr-add,
-.popup-a-add-prog .popup-panel__overlay.popup-a-add-prog,
-.popup-s-add-prog .popup-panel__overlay.popup-s-add-prog {
-   visibility: visible;
-   opacity: 1;
-}
 
-.popup-panel__content {
-   ul {
-      display: grid;
-      gap: 0 20px;
-      grid-template-columns: 1fr 1fr;
-   }
-   li {
-      padding: 20px;
-      background: var(--black-s);
-      border-radius: 20px;
-      color: var(--white-p);
-   }
+.highlight {
+   background-color: var(--accent-d);
+   border-radius: 6px;
+   font-style: normal;
+   //display: inline-block;
+   //padding: 0 4px;
 }

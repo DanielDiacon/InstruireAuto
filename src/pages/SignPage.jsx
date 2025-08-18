@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import { ReactSVG } from "react-svg";
 import DarkModeToggle from "../components/Header/DarkModeToggle";
 import M3Link from "../components/UI/M3Link";
@@ -7,12 +7,51 @@ import addIcon from "../assets/svg/add.svg";
 import loginIcon from "../assets/svg/login.svg";
 import arrowIcon from "../assets/svg/arrow.svg";
 import resetIcon from "../assets/svg/reset.svg";
+import eyeClosedIcon from "../assets/svg/eye-off.svg";
+import eyeOpenIcon from "../assets/svg/eye-open.svg";
 import waveSegmentIcon from "../assets/svg/waveSegment.svg";
 import waveSegmentEndIcon from "../assets/svg/waveSegmentEnd.svg";
+import { UserContext } from "../UserContext";
+import { signin, fetchUserInfo, signup } from "../api/authService";
 
 function SignPage() {
-   // mod poate fi: "sign-in", "sign-up" sau "reset-password"
+   const { setUser } = useContext(UserContext);
+
    const [mode, setMode] = useState("sign-in");
+
+   const [showLoginPassword, setShowLoginPassword] = useState(false);
+   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
+   const [showRegisterConfirmPassword, setShowRegisterConfirmPassword] =
+      useState(false);
+
+   const [registerForm, setRegisterForm] = useState({
+      name: "",
+      email: "",
+      groupToken: "",
+      phone: "",
+      password: "",
+      confirmPassword: "",
+   });
+
+   const [loginForm, setLoginForm] = useState({
+      email: "",
+      password: "",
+   });
+   const redirectByRole = (role) => {
+      switch (role) {
+         case "USER":
+            window.location.href = "/student";
+            break;
+         case "ADMIN":
+            window.location.href = "/admin";
+            break;
+         case "MANAGER":
+            window.location.href = "/manager";
+            break;
+         default:
+            window.location.href = "/";
+      }
+   };
 
    useEffect(() => {
       if (mode === "sign-in") {
@@ -24,9 +63,75 @@ function SignPage() {
       }
    }, [mode]);
 
+   const handleRegisterChange = (e) => {
+      const { name, value } = e.target;
+      setRegisterForm((prev) => ({ ...prev, [name]: value }));
+   };
+
+   const handleRegisterSubmit = async (e) => {
+      e.preventDefault();
+
+      if (registerForm.password !== registerForm.confirmPassword) {
+         alert("Parolele nu coincid.");
+         return;
+      }
+      const payload = {
+         email: registerForm.email,
+         password: registerForm.password,
+         firstName: registerForm.name.split(" ")[0],
+         lastName: registerForm.name.split(" ")[1] || "",
+         groupToken: registerForm.groupToken,
+         phone: registerForm.phone, 
+      };
+
+      try {
+         const response = await signup(payload);
+         if (response.access_token) {
+            document.cookie = `access_token=${
+               response.access_token
+            }; path=/; max-age=${60 * 60 * 24 * 7}`;
+
+            const userInfo = await fetchUserInfo();
+            setUser(userInfo);
+
+            redirectByRole(userInfo.role);
+         }
+      } catch (err) {
+         alert("Eroare la înregistrare. Încearcă din nou.");
+      }
+   };
+
+   const handleLoginChange = (e) => {
+      const { name, value } = e.target;
+      setLoginForm((prev) => ({ ...prev, [name]: value }));
+   };
+
+   const handleLoginSubmit = async (e) => {
+      e.preventDefault();
+
+      try {
+         const response = await signin({
+            email: loginForm.email,
+            password: loginForm.password,
+         });
+
+         if (response.access_token) {
+            document.cookie = `access_token=${
+               response.access_token
+            }; path=/; max-age=${60 * 60 * 24 * 7}`;
+
+            const userInfo = await fetchUserInfo();
+            setUser(userInfo);
+
+            redirectByRole(userInfo.role);
+         }
+      } catch (err) {
+         alert("Eroare la autentificare. Verifică datele și încearcă din nou.");
+      }
+   };
+
    return (
       <main className="main-sign">
-         
          <div className="container">
             <div className="sign">
                <div className="sign__left">
@@ -55,17 +160,46 @@ function SignPage() {
                         <p className="sign__subtitle">
                            Intră în contul tău completând datele de logare.
                         </p>
-                        <form className="sign__form">
+                        <form
+                           className="sign__form"
+                           onSubmit={handleLoginSubmit}
+                        >
                            <input
                               type="email"
+                              name="email"
                               placeholder="Adresa de E-mail"
                               className="sign__input"
+                              value={loginForm.email}
+                              onChange={handleLoginChange}
+                              required
                            />
-                           <input
-                              type="password"
-                              placeholder="Parola"
-                              className="sign__input"
-                           />
+                           <div className="sign__input-wrapper">
+                              <input
+                                 type={showLoginPassword ? "text" : "password"}
+                                 name="password"
+                                 placeholder="Parola"
+                                 className="sign__input"
+                                 value={loginForm.password}
+                                 onChange={handleLoginChange}
+                                 required
+                              />
+                              <button
+                                 type="button"
+                                 className="sign__eye-btn"
+                                 onClick={() =>
+                                    setShowLoginPassword((prev) => !prev)
+                                 }
+                              >
+                                 <ReactSVG
+                                    src={
+                                       showLoginPassword
+                                          ? eyeClosedIcon
+                                          : eyeOpenIcon
+                                    }
+                                 />
+                              </button>
+                           </div>
+
                            <div className="sign__row-btns">
                               {/* Buton pentru a comuta la resetare parola */}
                               <button
@@ -104,39 +238,114 @@ function SignPage() {
                            Creează-ți un cont nou completând informațiile de mai
                            jos.
                         </p>
-                        <form className="sign__form">
+                        <form
+                           className="sign__form"
+                           onSubmit={handleRegisterSubmit}
+                        >
                            <div className="sign__form-row">
                               <input
                                  type="text"
                                  placeholder="Nume Prenume"
                                  className="sign__input"
+                                 name="name"
+                                 value={registerForm.name}
+                                 onChange={handleRegisterChange}
+                                 required
                               />
                               <input
                                  type="email"
                                  placeholder="Adresă E-mail"
                                  className="sign__input"
+                                 name="email"
+                                 value={registerForm.email}
+                                 onChange={handleRegisterChange}
                                  required
                               />
                            </div>
-                           <input
-                              type="text"
-                              placeholder="Cheie Unică"
-                              className="sign__input"
-                              required
-                           />
                            <div className="sign__form-row">
                               <input
-                                 type="password"
-                                 placeholder="Parolă"
+                                 type="text"
+                                 placeholder="Cheie Unică"
                                  className="sign__input"
+                                 name="groupToken"
+                                 value={registerForm.groupToken}
+                                 onChange={handleRegisterChange}
                                  required
                               />
                               <input
-                                 type="password"
-                                 placeholder="Confirmă Parola"
+                                 type="text"
+                                 placeholder="Nr. Telefon"
                                  className="sign__input"
+                                 name="phone"
+                                 value={registerForm.phone}
+                                 onChange={handleRegisterChange}
                                  required
                               />
+                           </div>
+                           <div className="sign__form-row">
+                              <div className="sign__input-wrapper">
+                                 <input
+                                    type={
+                                       showRegisterPassword
+                                          ? "text"
+                                          : "password"
+                                    }
+                                    placeholder="Parolă"
+                                    className="sign__input"
+                                    name="password"
+                                    value={registerForm.password}
+                                    onChange={handleRegisterChange}
+                                    required
+                                 />
+                                 <button
+                                    type="button"
+                                    className="sign__eye-btn"
+                                    onClick={() =>
+                                       setShowRegisterPassword((prev) => !prev)
+                                    }
+                                 >
+                                    <ReactSVG
+                                       src={
+                                          showRegisterPassword
+                                             ? eyeClosedIcon
+                                             : eyeOpenIcon
+                                       }
+                                    />
+                                 </button>
+                              </div>
+
+                              <div className="sign__input-wrapper">
+                                 <input
+                                    type={
+                                       showRegisterConfirmPassword
+                                          ? "text"
+                                          : "password"
+                                    }
+                                    placeholder="Confirmă Parola"
+                                    className="sign__input"
+                                    name="confirmPassword"
+                                    value={registerForm.confirmPassword}
+                                    onChange={handleRegisterChange}
+                                    required
+                                 />
+                                 <button
+                                    type="button"
+                                    className="sign__eye-btn"
+                                    onClick={() =>
+                                       setShowRegisterConfirmPassword(
+                                          (prev) => !prev
+                                       )
+                                    }
+                                 >
+                                    <ReactSVG
+                                       src={
+                                          showRegisterConfirmPassword
+                                             ? eyeClosedIcon
+                                             : eyeOpenIcon
+                                       }
+                                    />
+                                 </button>
+                              </div>
                            </div>
 
                            <button type="submit" className="sign__button">

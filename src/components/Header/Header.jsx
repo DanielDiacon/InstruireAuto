@@ -1,39 +1,33 @@
-import React, { useRef, useEffect, useState } from "react";
-import { NavLink as RouterLink } from "react-router-dom";
+import React, { useRef, useEffect, useState, useContext } from "react";
+import { NavLink as RouterLink, useNavigate } from "react-router-dom";
 import { ReactSVG } from "react-svg";
+import Cookies from "js-cookie";
 import { toggleMenu, closeAll } from "./toggleSettings";
-import SmoothLink from "./SmoothLink";
-import handleScrollToTop from "../Utils/ScrollToTop";
-import me from "../../assets/img/photo-1438761681033-6461ffad8d80.jpeg";
 
-import addIcon from "../../assets/svg/calendar-add.svg";
-import calendarIcon from "../../assets/svg/calendar.svg";
-import accIcon from "../../assets/svg/acc.svg";
+import logoutIcon from "../../assets/svg/logout.svg";
 import crownIcon from "../../assets/svg/crown.svg";
 import wrenchIcon from "../../assets/svg/wrench.svg";
 import studentIcon from "../../assets/svg/graduate.svg";
 import DarkModeToggle from "./DarkModeToggle";
-import SOpenProgramari from "../Utils/SOpenProg";
-import AddInstrBtn from "../Utils/AddInstrBtn";
+import { UserContext } from "../../UserContext";
 
-const Header = ({ status, children, showDayPopup, programari }) => {
+const Header = ({ children }) => {
    const [headerHeight, setHeaderHeight] = useState("100svh");
    const [isHeaderVisible, setHeaderVisible] = useState(true);
-   const lastScrollY = useRef(window.scrollY); // Inițializează cu poziția curentă a scrollului
+   const lastScrollY = useRef(window.scrollY);
+   const navigate = useNavigate();
+   const { user } = useContext(UserContext); // <- aici luăm userul
+
    let iconSrc;
-   let numePrenume;
    let statusName;
-   if (status === "admin") {
+   if (user.role === "ADMIN") {
       iconSrc = crownIcon;
-      numePrenume = "Constantin Mavrocordat";
       statusName = "Administrator";
-   } else if (status === "manager") {
+   } else if (user.role === "MANAGER") {
       iconSrc = wrenchIcon;
-      numePrenume = "Alexandru Rusu";
       statusName = "Manager";
    } else {
       iconSrc = studentIcon;
-      numePrenume = "Lucia Munteanu";
       statusName = "Student";
    }
    useEffect(() => {
@@ -76,7 +70,12 @@ const Header = ({ status, children, showDayPopup, programari }) => {
    const handleClickHeader = () => {
       setHeaderVisible(true);
    };
-
+   const handleLogout = () => {
+      Cookies.remove("access_token"); // șterge cookie-ul
+      localStorage.clear(); // curăță stocarea locală
+      sessionStorage.clear(); // curăță sesiunea
+      navigate("/"); // redirecționează spre login
+   };
    const headerStyles = window.matchMedia("(max-width: 768px)").matches
       ? {
            height: `${headerHeight}px`,
@@ -96,8 +95,22 @@ const Header = ({ status, children, showDayPopup, programari }) => {
                   <div className="header__top">
                      <div className="header__profil-wrapper">
                         <div className="header__profil">
-                           <h1>{numePrenume}</h1>
-                           <p>{statusName}</p>
+                           <h1>
+                              {user ? (
+                                 <>
+                                    {user.firstName} <br /> {user.lastName}
+                                 </>
+                              ) : (
+                                 "..."
+                              )}
+                           </h1>
+                           <p>
+                              {user.role === "USER"
+                                 ? "Student"
+                                 : user.role === "ADMIN"
+                                 ? "Administrator"
+                                 : "Manager"}
+                           </p>
 
                            <ReactSVG className="header__statut" src={iconSrc} />
                         </div>
@@ -140,7 +153,7 @@ const Header = ({ status, children, showDayPopup, programari }) => {
                      <div className="header__menu menu">
                         <nav className="menu__body" id="navbar">
                            <ul className="menu__list">
-                              <li>
+                              {/*<li>
                                  <SOpenProgramari>
                                     <ReactSVG
                                        className="popup-toggle-button__icon"
@@ -163,10 +176,23 @@ const Header = ({ status, children, showDayPopup, programari }) => {
                                        Instructori
                                     </span>
                                  </AddInstrBtn>
-                              </li>
+                              </li>*/}
                            </ul>
                         </nav>
-                        <DarkModeToggle />
+                        <div className="settings__wrapper">
+                           <DarkModeToggle />
+                           <button
+                              onClick={handleLogout}
+                              className="settings__mode-btn "
+                           >
+                              <div className="settings__icons">
+                                 <ReactSVG
+                                    className="settings__icon-logout"
+                                    src={logoutIcon}
+                                 />
+                              </div>
+                           </button>
+                        </div>
                      </div>
                   </div>
                </div>

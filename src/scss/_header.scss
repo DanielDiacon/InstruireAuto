@@ -10,6 +10,7 @@
    user-select: none;
    //background: var(--black-s);
    transition: max-width 0.3s;
+   //background: #000;
    &__body {
       max-width: 100%;
       height: 100%;
@@ -26,12 +27,12 @@
       transition: max-width 0.3s;
    }
    &__profil-wrapper {
-      padding: 6px 6px 0 6px;
+      padding: 14px 0 0 14px;
    }
    &__profil {
       overflow: hidden;
       padding: 40px 12px 12px 12px;
-      border-radius: 16px;
+      border-radius: 18px;
       background: var(--black-s);
       h1 {
          font-size: 24px;
@@ -131,7 +132,8 @@
       color: var(--white-s);
       background: var(--black-s);
       width: 66px;
-      padding: 8px;
+      //padding: 8px ;
+      padding: 13px;
       display: grid;
       place-items: center;
       transition: var(--elastic-s);
@@ -155,11 +157,12 @@
 // togle menu
 .settings {
    transition: 0.3s;
-   position: absolute;
-   left: 0;
-   bottom: 0;
    padding: 12px;
-   &__item {
+   &__wrapper {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      display: flex;
    }
    &__mode-btn {
       width: 100%;
@@ -170,7 +173,8 @@
       transition: 0.1s;
       border-radius: 25px;
    }
-
+   &__mode-btn {
+   }
    &__icons {
       position: relative;
       display: flex;
@@ -199,6 +203,7 @@
       transition: var(--elastic-s);
    }
 
+   &__icon-logout,
    &__icon {
       color: var(--accent-d);
       padding: 8px;
@@ -218,9 +223,14 @@
          height: 24px;
       }
    }
+   &__icon-logout {
+      padding: 8px 6px 8px 10px;
+   }
+   &__icons:hover &__icon-logout,
    &__icons:hover &__icon {
       color: var(--accent-l);
    }
+   &__icons:active &__icon-logout,
    &__icons:active &__icon {
       color: var(--accent-l);
    }
@@ -229,10 +239,12 @@
       display: none;
    }
 }
+
 .sign .settings {
    right: 0;
    top: 0;
    left: auto;
+   position: absolute;
    bottom: auto;
    &__icons {
       width: 50px;

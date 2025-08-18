@@ -75,8 +75,8 @@ $fontSize: 14;
    --green-d: #9cf680;
    --blue-l: #002c41;
    --blue-d: #80d1f6;
-   --red-l: hsl(0, 100%, 13%);
-   --red-d: hsl(0, 87%, 73%);
+   --red-l: hsl(0, 100%, 10%);
+   --red-d: hsl(0, 90%, 80%);
    --orange-l: hsl(35, 87%, 13%);
    --orange-d: hsl(35, 94%, 73%);
 
@@ -150,14 +150,20 @@ body {
 
 .main {
    z-index: 4;
-   width: 100%;
    padding-left: 194px;
    max-width: 1440px;
-   width: 100%;
    margin: 0 auto;
+   transform: translateX(0%);
+   transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1);
    @media (max-width: $mobile) {
       padding-left: 0;
       padding-bottom: 46px;
+   }
+}
+body.popup-open .main {
+   transform: translateX(15%);
+   @media only screen and (max-width: $mobile) {
+      transform: translateX(50%);
    }
 }
 
@@ -189,13 +195,60 @@ body {
    background: hsl(55, 100%, 87%);
 }
 
+.loading-overlay {
+   position: fixed;
+   top: 0;
+   left: 0;
+   right: 0;
+   bottom: 0;
+   background: var(--black-p);
+   z-index: 10000;
+   display: flex;
+   flex-direction: column;
+   justify-content: center;
+   align-items: center;
+   transition: opacity 0.5s ease, transform 0.5s ease;
+   transform: translateX(-0%);
+   opacity: 1;
+   pointer-events: all;
+   p {
+      color: var(--white-p);
+   }
+}
+.loading-overlay.fade-out {
+   transform: translateX(-100%);
+   opacity: 0;
+   pointer-events: none; /* să nu blocheze interacțiunea */
+}
+.spinner {
+   width: 40px;
+   height: 40px;
+   border: 4px solid var(--black-p);
+   border-top-color: var(--accent-l);
+   border-radius: 50%;
+   animation: spin 1s infinite linear;
+   margin-bottom: 12px;
+}
+
+@keyframes spin {
+   to {
+      transform: rotate(360deg);
+   }
+}
+
 // imports
 @import "./scss/_utils";
-@import "./scss/_uim3";
-
-@import "./scss/_not-found";
+@import "./scss/_popup";
 @import "./scss/_sign";
-@import "./scss/_panel";
 @import "./scss/_header";
+
+//panels
+@import "./scss/_panel";
+@import "./scss/APanel/studentsManager";
+@import "./scss/APanel/groupsManager";
 @import "./scss/_calendar";
-@import "./scss/_addprogramari";
+
+//popups
+@import "./scss/Popups/addinstr";
+@import "./scss/Popups/addprog";
+@import "./scss/Popups/studentInfo";

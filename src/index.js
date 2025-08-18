@@ -1,11 +1,21 @@
-import React from 'react';
-import ReactDOM from 'react-dom';
-import App from './App';
+import React from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import { UserProvider } from "./UserContext";
 
-// Renderizează componenta principală a aplicației în elementul cu id-ul 'root'
-ReactDOM.render(
+// 🟢 importuri Redux
+import { Provider } from "react-redux";
+import { store } from "./store"; // fișierul store/index.js creat anterior
+
+const container = document.getElementById("root");
+const root = createRoot(container);
+
+root.render(
    <React.StrictMode>
-      <App />
-   </React.StrictMode>,
-   document.getElementById('root')
+      <Provider store={store}>
+         <UserProvider>
+            <App />
+         </UserProvider>
+      </Provider>
+   </React.StrictMode>
 );

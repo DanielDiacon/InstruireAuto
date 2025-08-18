@@ -2,9 +2,8 @@ import React from "react";
 import { ReactSVG } from "react-svg";
 import arrow from "../../assets/svg/arrow-s.svg";
 import add from "../../assets/svg/add-s.svg";
-import SOpenProgramari from "./SOpenProg";
-
-function CustomToolbar({ label, onView, views, view, onNavigate }) {
+import { openPopup } from "../Utils/popupStore";
+function SCustomToolbar({ label, onView, views, view, onNavigate }) {
    return (
       <div className="rbc-toolbar">
          <span className="rbc-btn-group">
@@ -38,13 +37,15 @@ function CustomToolbar({ label, onView, views, view, onNavigate }) {
             )}
 
             {/* Butonul tău custom */}
-            <SOpenProgramari>
-               <ReactSVG className="rbc-btn-group__icon" src={add} />
-               {/*<span>Adauga</span>*/}
-            </SOpenProgramari>
+            <button
+               className="react-icon"
+               onClick={() => openPopup("sAddProg")}
+            >
+               <ReactSVG src={add} />
+            </button>
          </span>
       </div>
    );
 }
 
-export default CustomToolbar;
+export default SCustomToolbar;

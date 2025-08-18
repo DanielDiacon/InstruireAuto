@@ -1,50 +1,70 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import React from "react";
 import "./App.scss";
-import NotFound from "./pages/NotFound";
+
 import Register from "./pages/Register";
 import SignPage from "./pages/SignPage";
 import SPanel from "./pages/SPanel";
 import MPanel from "./pages/MPanel";
 import APanel from "./pages/APanel";
+import ProtectedRoute from "./ProtectedRoute";
 
 const App = () => {
-   //document.addEventListener(
-   //   "wheel",
-   //   function (e) {
-   //      if (e.ctrlKey) {
-   //         e.preventDefault();
-   //      }
-   //   },
-   //   { passive: false }
-   //);
+   const darkMode = localStorage.getItem("darkMode") === "enabled";
+
+   if (darkMode) {
+      document.body.classList.add("darkmode");
+      document
+         .querySelector('meta[name="theme-color"]')
+         ?.setAttribute("content", "hsl(0, 3%, 93%)");
+      document
+         .querySelector('meta[name="theme-color"]#nav-color-meta')
+         ?.setAttribute("content", "hsl(0, 3%, 93%)");
+   } else {
+      document.body.classList.remove("darkmode");
+      document
+         .querySelector('meta[name="theme-color"]')
+         ?.setAttribute("content", "hsl(240, 0%, 8%)");
+      document
+         .querySelector('meta[name="theme-color"]#nav-color-meta')
+         ?.setAttribute("content", "hsl(240, 0%, 8%)");
+   }
+
    return (
       <BrowserRouter basename="/">
-         <ul style={{ display: "flex", zIndex: 100, right: "0", position: "fixed" }}>
-            <li>
-               <a style={{ padding: "10px" }} href="/student">
-                  student
-               </a>
-            </li>
-            <li>
-               <a style={{ padding: "10px" }} href="/manager">
-                  manager
-               </a>
-            </li>
-            <li>
-               <a style={{ padding: "10px" }} href="/admin">
-                  admin
-               </a>
-            </li>
-         </ul>
          <div className="App">
             <Routes>
-               <Route path="/student" element={<SPanel />} />
-               <Route path="/manager" element={<MPanel />} />
-               <Route path="/admin" element={<APanel />} />
-               <Route path="register" element={<Register />} />
+               {/* Paginile protejate */}
+               <Route
+                  path="/student"
+                  element={
+                     <ProtectedRoute allowedRoles={["USER"]}>
+                        <SPanel />
+                     </ProtectedRoute>
+                  }
+               />
+
+               <Route
+                  path="/admin"
+                  element={
+                     <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <APanel />
+                     </ProtectedRoute>
+                  }
+               />
+
+               <Route
+                  path="/manager"
+                  element={
+                     <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <MPanel />
+                     </ProtectedRoute>
+                  }
+               />
+
+               {/* Public */}
+               <Route path="/register" element={<Register />} />
                <Route path="/" element={<SignPage />} />
-               <Route path="*" element={<NotFound />} />
             </Routes>
          </div>
       </BrowserRouter>
