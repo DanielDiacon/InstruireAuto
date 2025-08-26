@@ -73,7 +73,7 @@ function APanel() {
 
             setReservations(resData);
             setUsers(userData);
-            console.log(resData);
+            //console.log(resData);
 
             const sortedGroups = groupData.sort(
                (a, b) => new Date(b.createdAt) - new Date(a.createdAt)

@@ -256,8 +256,6 @@
       left: 0px;
       right: 0px;
       border: 3px solid var(--black-p);
-      top: calc(var(--ev-slots) * var(--slot-h));
-      height: calc(var(--ev-span) * var(--slot-h));
       border-radius: 18px;
       padding: 8px;
       overflow: hidden;
@@ -268,6 +266,9 @@
       flex-direction: column;
       position: relative;
       gap: 4px;
+      grid-row: calc(var(--ev-slots) + 1) / span var(--ev-span);
+      height: calc(var(--ev-units) * var(--slot-h));
+      top: calc(var(--ev-units) * 2 * var(--slot-h));
       &--virtual {
          width: 100%;
       }
@@ -463,9 +464,36 @@
    display: grid;
    grid-template-rows: repeat(var(--visible-slots), var(--slot-h));
 }
-
-.dayview__event {
-   grid-row: calc(var(--ev-slots) + 1) / span var(--ev-span);
-   position: absolute;
-   top: calc(var(--ev-units) * 2 * var(--slot-h));
+.dv-pan.is-panning,
+.dv-pan.is-panning * {
+   user-select: none !important;
+   -webkit-user-select: none !important;
+   -ms-user-select: none !important;
+   -webkit-user-drag: none;
 }
+
+/* opțional: în timp ce panning, ignoră highlight-ul ca țintă */
+.dv-pan.is-panning .highlight {
+   pointer-events: none;
+}
+
+/* (opțional) pentru touch să livreze pointermove corect */
+.dv-pan {
+   touch-action: pan-x pan-y;
+}
+.dayview__row.dv-pan {
+   /* blochează gesturile native (scroll/zoom) când gestionați voi pointerul */
+   touch-action: none;
+   cursor: grab;
+}
+
+.dayview__row.dv-pan.is-panning {
+   user-select: none; /* NU folosi pointer-events: none aici! */
+}
+
+.dayview__row.dv-pan.is-dragging {
+   cursor: grabbing;
+}
+.dayview__row.dv-pan { touch-action: none; cursor: grab; }
+.dayview__row.dv-pan.is-panning { user-select: none; }
+.dayview__row.dv-pan.is-dragging { cursor: grabbing; }

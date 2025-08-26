@@ -80,7 +80,10 @@ const normPlate = (s = "") => s.toString().replace(/[\s-]/g, "").toUpperCase();
 const hasAlphaNum = (s = "") => /[a-z0-9]/i.test(s);
 
 // === Highlight helpers (multi-token)
-
+const getGroupOrder = (g) => {
+   const v = Number(g?.order ?? g?.sortOrder ?? Infinity);
+   return Number.isFinite(v) ? v : Infinity; // cele fără order merg la final
+};
 function buildHighlightRegex(parts, flags = "gi") {
    const list = Array.from(new Set(parts.filter(Boolean).map(escapeRegExp)));
    if (!list.length) return null;
@@ -799,7 +802,11 @@ export default function CustomDayView(props = {}) {
    const baseGroups = useMemo(() => {
       return (instructorsGroups || [])
          .slice()
-         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+         .sort(
+            (a, b) =>
+               getGroupOrder(a) - getGroupOrder(b) ||
+               new Date(a.createdAt) - new Date(b.createdAt)
+         )
          .map((g) => {
             const raw = Array.isArray(g.instructors) ? g.instructors : [];
             const clean = uniqBy(raw, (i) => String(i.id))
@@ -864,9 +871,9 @@ export default function CustomDayView(props = {}) {
          : [{ id: "__unknown", name: "Necunoscut" }];
 
       const baseGroups = (instructorsGroups || [])
-         .slice()
-         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-         .map((g) => {
+     .slice()
+     .sort((a, b) => getGroupOrder(a) - getGroupOrder(b) || new Date(a.createdAt) - new Date(b.createdAt))
+      .map((g) => {
             const raw = Array.isArray(g.instructors) ? g.instructors : [];
             const clean = uniqBy(raw, (i) => String(i.id))
                .slice(0, maxColsPerGroup)
@@ -1130,13 +1137,13 @@ export default function CustomDayView(props = {}) {
    useEffect(() => {
       if (!indexReady || !anyTokens) return;
       if (__DV_NAV_STATE__.suspendAutoJump) return;
-
-      const handle = setTimeout(() => {
+      if (autoJumpTimerRef.current) clearTimeout(autoJumpTimerRef.current);
+      autoJumpTimerRef.current = setTimeout(() => {
+         // dacă între timp userul a început să tragă, nu mai sări nicăieri
+         if (__DV_NAV_STATE__.suspendAutoJump) return;
          const list = buildMatchDays();
          if (!list.length) return;
-
          const anchorTs = anchorTsRef.current ?? startOfDayTs(new Date());
-
          const nextTs = list.find((ts) => ts >= anchorTs) ?? null;
          let prevTs = null;
          for (let i = list.length - 1; i >= 0; i--) {
@@ -1147,31 +1154,36 @@ export default function CustomDayView(props = {}) {
          }
          const targetTs = nextTs ?? prevTs;
          if (targetTs == null) return;
-
          if (typeof onJumpToDate === "function") {
             onJumpToDate(new Date(targetTs));
-            releaseDrag(); // <<< ca să nu rămână „agățat” după navigare
+            releaseDrag(); // rămâne, e safe dacă nu e în drag (că oricum l-am oprit pe pointerDown)
          }
       }, 120);
 
-      return () => clearTimeout(handle);
+      return () => {
+         if (autoJumpTimerRef.current) clearTimeout(autoJumpTimerRef.current);
+         autoJumpTimerRef.current = null;
+      };
    }, [tokens, sectorFilter, indexReady, buildMatchDays, onJumpToDate]); // ← fără `date`
 
    // ====== Actualizează NAV-STATE pentru navigate() static ======
+   // ✅ un singur scroll-into-view per (căutare + zi), doar dacă n-ai derulat manual
    useEffect(() => {
-      const qKey = __DV_NAV_STATE__.queryKey; // tokens + sector
+      const qKey = __DV_NAV_STATE__.queryKey;
       if (!qKey) return;
-      // o cheie per căutare + per zi (ca să permiți UN snap și dacă auto-jump te duce pe altă zi)
+
       const snapKey = `${qKey}|${startOfDayTs(date)}`;
-      if (__DV_NAV_STATE__.suspendScrollSnap) return; // user a derulat
-      if (__DV_NAV_STATE__.snappedForKey === snapKey) return; // deja am făcut snap
+      if (__DV_NAV_STATE__.suspendScrollSnap) return;
+      if (__DV_NAV_STATE__.snappedForKey === snapKey) return;
 
       const root = scrollRef.current;
-      if (!root) return;
-      const el = root.querySelector(".highlight");
+      const el = root?.querySelector(".highlight");
       if (!el?.scrollIntoView) return;
 
-      programmaticScrollRef.current = true; // ca să nu marcăm scroll-ul ca manual
+      // dacă s-a început un drag între timp, nu face snap
+      if (dragRef.current.down || __DV_NAV_STATE__.suspendScrollSnap) return;
+
+      programmaticScrollRef.current = true;
       releaseDrag();
       el.scrollIntoView({
          block: "center",
@@ -1180,11 +1192,18 @@ export default function CustomDayView(props = {}) {
       });
       __DV_NAV_STATE__.snappedForKey = snapKey;
 
-      const t = setTimeout(() => {
+      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+      snapTimerRef.current = setTimeout(() => {
          programmaticScrollRef.current = false;
       }, 400);
-      return () => clearTimeout(t);
-   }, [date]); // rulează doar când se schimbă ziua (căutarea e urmărită prin NAV-STATE)
+
+      return () => {
+         if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+         snapTimerRef.current = null;
+      };
+   }, [date, uiGroups]);
+
+   // rulează doar când se schimbă ziua (căutarea e urmărită prin NAV-STATE)
    const styleVarsForEvent = (ev) => {
       const minsStart = toVisibleMinutes(ev.start);
       const minsEnd = toVisibleMinutes(ev.end);
@@ -1208,35 +1227,30 @@ export default function CustomDayView(props = {}) {
          st.pointerId = null;
       }
       el.classList.remove("is-dragging");
+      el.classList.remove("is-panning"); // 👈 adaugă asta
    }, []);
+
    // scroll to first highlight
    const scrollRef = useRef(null);
-   useEffect(() => {
-      if (!query.trim()) return;
-      const root = scrollRef.current;
-      if (!root) return;
-      const el = root.querySelector(".highlight");
-      if (el?.scrollIntoView) {
-         releaseDrag(); // <<< important
-         el.scrollIntoView({
-            block: "center",
-            inline: "center",
-            behavior: "smooth",
-         });
 
-         const t = setTimeout(releaseDrag, 400); // fallback după animație
-         const onScrollEnd = () => {
-            releaseDrag();
-            root.removeEventListener?.("scrollend", onScrollEnd);
-            clearTimeout(t);
-         };
-         root.addEventListener?.("scrollend", onScrollEnd);
-         return () => {
-            root.removeEventListener?.("scrollend", onScrollEnd);
-            clearTimeout(t);
-         };
+   // ✅ actualizează NAV-STATE când se schimbă căutarea sau sectorul
+   useEffect(() => {
+      const qKey = anyTokens
+         ? tokens.map((t) => `${t.kind}:${t.raw}`).join("#") +
+           `|${sectorFilter}`
+         : "";
+
+      const prevKey = __DV_NAV_STATE__.queryKey;
+      __DV_NAV_STATE__.queryKey = qKey;
+      __DV_NAV_STATE__.matchDays = anyTokens ? buildMatchDays() : [];
+
+      if (qKey !== prevKey) {
+         // pornește “curat”: permitem un singur auto-jump și un singur snap
+         __DV_NAV_STATE__.suspendAutoJump = false;
+         __DV_NAV_STATE__.suspendScrollSnap = false;
+         __DV_NAV_STATE__.snappedForKey = "";
       }
-   }, [query, date, uiGroups, releaseDrag]);
+   }, [anyTokens, tokens, sectorFilter, buildMatchDays]);
 
    const handleOpenStudentPopup = (student) => {
       openPopup("studentDetails", { student });
@@ -1263,12 +1277,30 @@ export default function CustomDayView(props = {}) {
       !!el?.closest?.(
          'button, a, input, textarea, select, [role="button"], [contenteditable=""], [contenteditable="true"]'
       );
+   // sus, la alte useRef-uri:
+   const autoJumpTimerRef = useRef(null);
+   const snapTimerRef = useRef(null);
+
+   // ...
+
    const onPointerDown = (e) => {
       const el = scrollRef.current;
       if (!el) return;
       if (e.button !== undefined && e.button !== 0) return;
       if (isInteractiveTarget(e.target)) return;
-      __DV_NAV_STATE__.suspendScrollSnap = true; // drag manual → nu mai snap-uim
+
+      // ⛔ oprește tot ce ține de căutare care „se mișcă singur”
+      __DV_NAV_STATE__.suspendScrollSnap = true;
+      __DV_NAV_STATE__.suspendAutoJump = true;
+      if (autoJumpTimerRef.current) {
+         clearTimeout(autoJumpTimerRef.current);
+         autoJumpTimerRef.current = null;
+      }
+      if (snapTimerRef.current) {
+         clearTimeout(snapTimerRef.current);
+         snapTimerRef.current = null;
+      }
+
       dragRef.current.down = true;
       dragRef.current.dragging = false;
       dragRef.current.pointerId = e.pointerId;
@@ -1276,20 +1308,29 @@ export default function CustomDayView(props = {}) {
       dragRef.current.startY = e.clientY;
       dragRef.current.scrollLeft = el.scrollLeft;
       dragRef.current.scrollTop = el.scrollTop;
+
+      try {
+         el.setPointerCapture?.(e.pointerId);
+      } catch {}
+      el.classList.add("is-panning");
+      e.preventDefault();
    };
+
    const onPointerMove = (e) => {
       const el = scrollRef.current;
       const st = dragRef.current;
       if (!el || !st.down) return;
+
       const dx = e.clientX - st.startX;
       const dy = e.clientY - st.startY;
+
       if (!st.dragging) {
          if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD)
             return;
          st.dragging = true;
          el.classList.add("is-dragging");
-         el.setPointerCapture?.(st.pointerId);
       }
+
       e.preventDefault();
       el.scrollLeft = st.scrollLeft - dx;
       el.scrollTop = st.scrollTop - dy;
@@ -1307,6 +1348,7 @@ export default function CustomDayView(props = {}) {
          st.pointerId = null;
       }
       el.classList.remove("is-dragging");
+      el.classList.remove("is-panning"); // 👈 reactivate selectarea textului
    };
    const onClickCapture = (e) => {
       if (dragRef.current.dragging) {
@@ -1407,6 +1449,7 @@ export default function CustomDayView(props = {}) {
             onWheel={onWheelZoom}
             onScroll={onUserScroll}
             onClickCapture={onClickCapture}
+            onDragStart={(e) => e.preventDefault()}
          >
             {uiGroups.map((group) => {
                const cols = Math.max(
@@ -1498,7 +1541,6 @@ export default function CustomDayView(props = {}) {
                                        />
                                     );
                                  })}
-                                 {console.log(events)}
                                  {events.map((ev) => {
                                     const person =
                                        ev.studentFirst + " " + ev.studentLast;
