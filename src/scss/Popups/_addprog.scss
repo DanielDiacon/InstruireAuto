@@ -1,24 +1,28 @@
-
 .saddprogramari {
    &__selector {
       display: grid;
       gap: 6px;
       grid-template-columns: 1fr 1fr;
       flex-wrap: wrap;
+      &.row {
+         padding: 0 0 6px 0px;
+         align-items: center;
+      }
    }
-
+   &__title {
+      color: var(--white-p);
+   }
    &__calendar {
-      // stiluri pentru calendar
       gap: 6px;
-      padding: 5px;
       display: flex;
       flex-direction: column;
       border-radius: 25px;
       color: var(--white-p);
    }
-
-   &__datepicker {
-      // dacă vrei să modifici stilurile din datepicker
+   &__day--inactive {
+      opacity: 0.4;
+      pointer-events: none;
+      cursor: not-allowed;
    }
 
    &__times {
@@ -30,14 +34,37 @@
    }
 
    &__times-list {
-      display: flex;
-      flex-direction: column;
+      //display: flex;
+      //flex-direction: column;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      position: relative;
       gap: 6px;
+   }
+   &__disclaimer {
+      position: absolute;
+      top: 0;
+      left: 0%;
+      width: 100%;
+      height: 100%;
+      color: var(--white-p);
+      text-shadow: 0 0 10px var(--black-p);
+      padding: 6px 12px;
+      border-radius: 24px;
+      z-index: 10;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+   }
+   &__time-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
    }
    //.rbc-btn-group button
    &__time-btn {
       border: 0;
-      background: var(--black-s);
+      background: var(--black-p);
       color: var(--white-s);
       border-radius: 25px;
       padding: 17px 20px;
@@ -77,6 +104,9 @@
             margin: 0;
          }
       }
+   }
+   &__time-btn:last-child {
+      grid-column: 1 / -1;
    }
 
    &__add-btn {
@@ -163,6 +193,8 @@
       gap: 8px;
       padding-left: 0;
       margin: 0.5rem 0;
+      height: 100px;
+      overflow: scroll;
    }
 
    &__added-item {
@@ -170,28 +202,13 @@
       border-radius: 16px;
       padding: 16px;
    }
-
-   &__send-btn {
-      margin-top: 1rem;
-      padding: 0.75rem 1.5rem;
-      background-color: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-
-      &:disabled {
-         background-color: #ccc;
-         cursor: not-allowed;
-      }
-   }
 }
 
 .react-datepicker {
    // container principal
    position: relative;
    width: 100%;
-   background: var(--black-s) !important;
+   background: var(--black-p) !important;
    border: 0px !important;
    border-radius: 23px !important;
    font-family: "lexend" !important;
@@ -289,7 +306,7 @@
       font-family: "lexend" !important;
       color: var(--white-s) !important;
       &:hover {
-         background: var(--black-p) !important;
+         background: var(--black-s) !important;
       }
       &:active {
          scale: 0.9;
@@ -320,7 +337,7 @@
 
       &--keyboard-selected,
       &--keyboard-selected:hover {
-         background: var(--black-s) !important;
+         background: var(--black-p) !important;
          color: var(--white-s) !important;
       }
 
@@ -361,3 +378,4 @@
       }
    }
 }
+

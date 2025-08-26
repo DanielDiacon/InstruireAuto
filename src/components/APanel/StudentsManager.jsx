@@ -30,11 +30,15 @@ function StudentsManager() {
       openPopup("studentDetails", { student });
    };
 
-   const filteredStudents = students.filter((s) =>
-      `${s.firstName} ${s.lastName} ${s.email} ${s.phone || ""}`
-         .toLowerCase()
-         .includes(search.query.toLowerCase())
-   );
+   const filteredStudents = students
+      // doar cei cu rolul USER
+      .filter((s) => s.role === "USER")
+      // și aplici căutarea după query
+      .filter((s) =>
+         `${s.firstName} ${s.lastName} ${s.email} ${s.phone || ""}`
+            .toLowerCase()
+            .includes(search.query.toLowerCase())
+      );
 
    // helper function
    function highlightText(text, query) {

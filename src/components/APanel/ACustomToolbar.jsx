@@ -2,11 +2,9 @@ import React from "react";
 import { ReactSVG } from "react-svg";
 import arrow from "../../assets/svg/arrow-s.svg";
 import add from "../../assets/svg/add-s.svg";
-import SOpenProgramari from "../Utils/SOpenProg";
-import { useUserContext } from "../../UserContext";
+import { openPopup } from "../Utils/popupStore";
 
 function ACustomToolbar({ label, onView, views, view, onNavigate }) {
-   const { setPopupName } = useUserContext();
    return (
       <div className="rbc-toolbar">
          <span className="rbc-btn-group">
@@ -38,11 +36,19 @@ function ACustomToolbar({ label, onView, views, view, onNavigate }) {
                   Săptămână
                </button>
             )}
+            {views.includes("day") && (
+               <button onClick={() => onView("day")} disabled={view === "day"}>
+                  Zi
+               </button>
+            )}
 
-            {/* Butonul tău custom */}
-            <SOpenProgramari onClick={() => setPopupName("addProg")}>
-               <ReactSVG className="rbc-btn-group__icon" src={add} />
-            </SOpenProgramari>
+            {/* Butonul pentru popup programări */}
+            <button
+               className="react-icon"
+               onClick={() => openPopup("sAddProg")}
+            >
+               <ReactSVG src={add} />
+            </button>
          </span>
       </div>
    );

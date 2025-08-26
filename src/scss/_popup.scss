@@ -1,22 +1,56 @@
+
 .popup-panel {
+   position: fixed;
+   top: 6px;
+   left: 6px;
+   width: 100%;
+   min-width: 500px;
+   background-color: var(--black-s);
+   z-index: 10000;
+   padding: 25px 25px 0 25px;
+   display: flex;
+   flex-direction: column;
+   height: calc(100vh - 12px);
+   border-radius: 35px;
+   opacity: 0;
+   transform: translateX(-100%);
+   transition: 0.6s cubic-bezier(0.175, 0.885, 0.32, 1);
+   overflow: hidden;
+   &__overlay {
+      cursor: pointer;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: rgba(0, 0, 0, 0.3);
+      z-index: 9999;
+      backdrop-filter: blur(10px);
+      opacity: 0;
+      transition: opacity 0.4s ease;
+      pointer-events: none;
+   }
+   &::after {
+      content: "";
+      position: absolute;
+      top: -80%;
+      left: -80%;
+      width: 150%;
+      height: 150%;
+      background: radial-gradient(
+         circle,
+         rgba(243, 252, 121, 0.1),
+         transparent
+      );
+      filter: blur(40px);
+      pointer-events: none;
+      z-index: 0;
+   }
    &__inner {
+      z-index: 10;
+      //background: #138356;
       flex: 1;
-      padding-right: 6px;
-      overflow-y: auto;
-      scrollbar-width: thin; // Firefox
-      scrollbar-color: white transparent; // Firefox
-
-      &::-webkit-scrollbar {
-         width: 6px; // subțire
-      }
-
-      &::-webkit-scrollbar-track {
-         background: transparent;
-      }
-
-      &::-webkit-scrollbar-thumb {
-         border-radius: 8px;
-      }
+      //overflow: hidden;
    }
 
    &__header {
@@ -32,19 +66,19 @@
       color: var(--white-p);
       font-family: "Clash Display";
       font-weight: 500;
-      z-index: 2;
+      z-index: 22;
    }
 
    &__close {
       position: absolute;
       top: 12px;
       right: 12px;
-      background: var(--black-s);
+      background: var(--black-p);
       color: var(--white-s);
       border-radius: 25px;
       padding: 14px 20px;
       transition: var(--classic-s);
-      z-index: 2;
+      z-index: 21;
       width: auto;
       cursor: pointer;
       svg {
@@ -63,51 +97,19 @@
          border-radius: 32px;
       }
    }
-   &__content {
-      ul {
-         display: grid;
-         gap: 0 20px;
-         grid-template-columns: 1fr 1fr;
-      }
-      li {
-         padding: 20px;
-         background: var(--black-s);
-         border-radius: 20px;
-         color: var(--white-p);
-      }
-   }
-}
-
-.popup-panel {
-   position: fixed;
-   top: 6px;
-   left: 6px;
-   width: 100%;
-   min-width: 500px;
-   background-color: var(--black-p);
-   z-index: 10000;
-   padding: 25px 19px 25px 25px;
-   display: flex;
-   flex-direction: column;
-   height: calc(100vh - 12px);
-   border-radius: 35px;
-   opacity: 0;
-   transform: translateX(-100%);
-   transition: 0.6s cubic-bezier(0.175, 0.885, 0.32, 1);
-   &__overlay {
-      cursor: pointer;
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background-color: rgba(0, 0, 0, 0.3);
-      z-index: 9999;
-      backdrop-filter: blur(10px);
-      opacity: 0;
-      transition: opacity 0.4s ease;
-      pointer-events: none;
-   }
+   //&__content {
+   //   ul {
+   //      display: grid;
+   //      gap: 0 20px;
+   //      grid-template-columns: 1fr 1fr;
+   //   }
+   //   li {
+   //      padding: 20px;
+   //      background: var(--black-s);
+   //      border-radius: 20px;
+   //      color: var(--white-p);
+   //   }
+   //}
 }
 
 /* Când e activ */

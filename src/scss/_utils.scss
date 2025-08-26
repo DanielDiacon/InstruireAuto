@@ -31,3 +31,23 @@
    //display: inline-block;
    //padding: 0 4px;
 }
+.instructors-popup__radio-wrapper.addprog{
+   &.active-botanica {
+      &::before {
+         background: var(--black-p);
+      }
+   }
+   &.active-ciocana {
+      &::before {
+         background: var(--black-p);
+      }
+   }
+   &.inacative {
+      opacity: 0.5;
+      cursor: not-allowed;
+      label {
+         cursor: not-allowed;
+         pointer-events: none;
+      }
+   }
+}

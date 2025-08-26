@@ -316,9 +316,11 @@
             }
          }
          &:hover {
-            border-radius: 32px;
+            border-radius: 23px;
+            padding: 13px 6px;
+            margin: -2px 0;
             svg {
-               scale: 1.05;
+               //scale: 1.05;
             }
          }
          &:active {

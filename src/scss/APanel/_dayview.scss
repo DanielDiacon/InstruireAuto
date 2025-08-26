@@ -1,0 +1,471 @@
+:root {
+   --slot-h: 30px; /* înălțime slot (poți schimba din props.layout.slotHeight) */
+   --hours-col-w: 160px; /* lățimea coloanei cu ore */
+   --group-gap: 12px; /* spațiu între grupe */
+   --cols: 1;
+   --colw: 120px; /* poate fi px sau % (din props.layout.colWidth) */
+
+   --event-default: var(--accent-t);
+   --event-red: hsl(0, 70%, 40%);
+   --event-orange: hsl(30, 70%, 40%);
+   --event-yellow: hsl(54, 100%, 33%);
+   --event-green: hsl(130, 70%, 23%);
+   --event-blue: hsl(210, 70%, 40%);
+   --event-indigo: hsl(255, 70%, 33%);
+   --event-purple: hsl(285, 66%, 32%);
+   --event-pink: hsl(330, 68%, 38%);
+}
+
+.darkmode {
+   --event-default: var(--accent-t);
+   --event-red: hsl(0, 100%, 87%);
+   --event-orange: hsl(30, 100%, 80%);
+   --event-yellow: hsl(54, 95%, 76%);
+   --event-green: hsl(130, 65%, 76%);
+   --event-blue: hsl(210, 90%, 74%);
+   --event-indigo: hsl(255, 98%, 83%);
+   --event-purple: hsl(285, 100%, 84%);
+   --event-pink: hsl(330, 96%, 81%);
+}
+
+.dayview {
+   display: flex;
+   flex-direction: column;
+   height: 100%; /* poate fi suprascris din props.layout.containerHeight */
+   background: var(--black-s);
+   color: var(--white-p);
+
+   /* ---------- Header + Toolbar ---------- */
+   &__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 12px;
+   }
+
+   &__header-left {
+      min-width: 250px;
+   }
+
+   &__toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 100%;
+      /* SEARCH */
+      .dv-search {
+         position: relative;
+         //min-width: 260px;
+         &__input {
+            width: 100%;
+            border-radius: 32px;
+            background: var(--black-p);
+            color: var(--white-p);
+            font-size: 14px;
+            padding: 12px 16px;
+            outline: none;
+            height: 100%;
+            &::placeholder {
+               color: var(--muted);
+            }
+         }
+      }
+
+      /* butoane zoom */
+      .dv-btn {
+         background: var(--black-p);
+         color: var(--white-p);
+         border-radius: 20px;
+         padding: 13px 13px;
+         font-size: 14px;
+         cursor: pointer;
+         height: 100%;
+
+         &--ghost {
+            border-radius: 10px;
+            padding: 12px 16px;
+         }
+      }
+   }
+
+   /* ---------- Canvas / row drag-pan ---------- */
+   &__row {
+      display: flex;
+      gap: var(--group-gap);
+      padding: 12px;
+      align-items: flex-start;
+      overflow: auto;
+      &.dv-pan {
+         position: relative;
+         cursor: grab;
+         touch-action: none;
+         scrollbar-width: none;
+         /* fade pe margini */
+         --fade: 16px;
+         mask-image: linear-gradient(
+               to right,
+               transparent 0,
+               #000 var(--fade),
+               #000 calc(100% - var(--fade)),
+               transparent 100%
+            ),
+            linear-gradient(
+               to bottom,
+               transparent 0,
+               #000 var(--fade),
+               #000 calc(100% - var(--fade)),
+               transparent 100%
+            );
+         mask-composite: intersect;
+
+         -webkit-mask-image: linear-gradient(
+               to right,
+               transparent,
+               #000 var(--fade),
+               #000 calc(100% - var(--fade)),
+               transparent
+            ),
+            linear-gradient(
+               to bottom,
+               transparent,
+               #000 var(--fade),
+               #000 calc(100% - var(--fade)),
+               transparent
+            );
+         -webkit-mask-composite: source-in;
+
+         &::-webkit-scrollbar {
+            display: none;
+         }
+
+         &.is-dragging {
+            cursor: grabbing;
+            user-select: none;
+            -webkit-user-select: none;
+         }
+      }
+   }
+
+   /* ---------- Group wrapper ---------- */
+   &__group-wrap {
+      min-width: calc(var(--hours-col-w) + var(--cols) * var(--colw));
+      border-radius: 16px 16px 22px 22px;
+      background: var(--black-p);
+      align-self: flex-start; /* ← forțează înălțimea după conținut */
+   }
+   &__group-header {
+      display: grid;
+      grid-template-columns: var(--hours-col-w) 1fr;
+      align-items: stretch;
+
+      .dayview__group-name {
+         //grid-column: 1/2;
+         padding: 8px 10px;
+         font-weight: 700;
+         text-overflow: ellipsis !important;
+         border-right: 1px solid var(--bd);
+         overflow: hidden;
+      }
+
+      .dayview__group-instructors {
+         display: grid !important;
+         width: 100%;
+         grid-template-columns: repeat(var(--cols), 1fr);
+      }
+   }
+
+   &__instructor-head {
+      padding: 6px;
+      text-align: center;
+      font-weight: 600;
+      font-size: 12px;
+
+      .dv-inst-name {
+         white-space: nowrap;
+         overflow: hidden;
+         text-overflow: ellipsis;
+      }
+      .dv-inst-plate {
+         opacity: 0.8;
+         font-size: 10px;
+      }
+   }
+
+   /* ---------- Group content: ore + coloane ---------- */
+   &__group-content {
+      display: grid;
+      grid-template-columns: var(--hours-col-w) 1fr;
+      margin-bottom: 0px;
+   }
+
+   &__hours {
+      position: relative;
+      min-height: calc(var(--visible-slots) * var(--slot-h));
+      border-right: 1px solid var(--bd);
+
+      .dayview__hour-mark {
+         position: absolute;
+         left: 0;
+         width: 100%;
+         padding: 0px 6px;
+         width: 100%;
+         text-align: center;
+         top: calc(var(--mark-slots) * var(--slot-h));
+         font-size: 12px;
+         color: var(--muted);
+         pointer-events: none;
+      }
+   }
+
+   /* Zona cu coloanele instructorilor */
+   &__columns {
+      display: grid;
+      grid-template-columns: repeat(var(--cols), minmax(var(--colw), 1fr));
+   }
+
+   &__event-col {
+      position: relative;
+      min-height: calc(var(--visible-slots) * var(--slot-h));
+      border-left: 1px solid var(--bd);
+
+      &:first-child {
+         border-left: none;
+      }
+
+      .dayview__slot-line {
+         height: var(--slot-h);
+         display: none;
+      }
+
+      /* linii ora majoră */
+      .dayview__mark-line {
+         position: absolute;
+         left: 0;
+         right: 0;
+         top: calc(var(--mark-slots) * var(--slot-h));
+         height: 0;
+         border-top: 1px solid var(--bd);
+         z-index: 10000;
+         pointer-events: none;
+      }
+   }
+   /* ---------- Eveniment (card) ---------- */
+   &__event {
+      position: absolute;
+      left: 0px;
+      right: 0px;
+      border: 3px solid var(--black-p);
+      top: calc(var(--ev-slots) * var(--slot-h));
+      height: calc(var(--ev-span) * var(--slot-h));
+      border-radius: 18px;
+      padding: 8px;
+      overflow: hidden;
+      color: var(--white-p);
+      font-size: 12px;
+      background: var(--event-default);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      gap: 4px;
+      &--virtual {
+         width: 100%;
+      }
+      &--default {
+         background: var(--event-default);
+      }
+      &--yellow {
+         background: var(--event-yellow);
+      }
+      &--green {
+         background: var(--event-green);
+      }
+      &--red {
+         background: var(--event-red);
+      }
+      &--orange {
+         background: var(--event-orange);
+      }
+      &--purple {
+         background: var(--event-purple);
+      }
+      &--pink {
+         background: var(--event-pink);
+      }
+      &--blue {
+         background: var(--event-blue);
+      }
+      &--indigo {
+         background: var(--event-indigo);
+      }
+
+      &-top {
+         display: flex;
+         align-items: center;
+         gap: 8px;
+         padding: 0 0 0 2px;
+         justify-content: space-between;
+      }
+
+      &-person {
+         display: flex;
+         align-items: center;
+         gap: 8px;
+         min-width: 0;
+
+         &-name {
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            color: var(--white-p);
+            text-overflow: ellipsis;
+         }
+      }
+
+      &-note {
+         font-size: 10px;
+         padding: 0 0 0 2px;
+         flex: 1;
+         width: 100%;
+         display: flex;
+         align-items: flex-start;
+         color: var(--white-s);
+         text-overflow: ellipsis !important;
+         justify-content: flex-start;
+      }
+   }
+
+   /* Meta pills */
+   .dv-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      align-items: center;
+      width: 100%;
+      .dv-meta-pill {
+         font-size: 10px;
+         padding: 2px 6px;
+         border-radius: 99px;
+         color: var(--white-p);
+         background: var(--bd);
+      }
+   }
+
+   /* ---------- Selector culoare (în card) ---------- */
+   &__color-trigger {
+      border: none;
+      background: transparent;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      //position: relative;
+      z-index: 2;
+      height: 100%;
+      .dayview__color-dot {
+         display: inline-block;
+         width: 14px;
+         height: 14px;
+         border-radius: 50%;
+         background: var(--white-p);
+      }
+   }
+
+   &__color-overlay {
+      height: 100%;
+      display: grid;
+      z-index: 20;
+
+      .dayview__color-grid {
+         position: absolute;
+         inset: 0;
+         display: grid;
+         width: 100%;
+         height: 100%;
+         background: var(--accent-l);
+         padding: 0px;
+         grid-template-columns: repeat(3, 1fr);
+         grid-template-rows: repeat(3, 1fr);
+         gap: 3px;
+         z-index: 21;
+         padding: 3px;
+         .dayview__color-cell,
+         .dayview__color-close {
+            border-radius: 12px;
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+            z-index: 10;
+         }
+
+         .dayview__color-cell {
+            &--yellow {
+               background: var(--event-yellow);
+            }
+            &--green {
+               background: var(--event-green);
+            }
+            &--red {
+               background: var(--event-red);
+            }
+            &--orange {
+               background: var(--event-orange);
+            }
+            &--purple {
+               background: var(--event-purple);
+            }
+            &--pink {
+               background: var(--event-pink);
+            }
+            &--blue {
+               background: var(--event-blue);
+            }
+            &--indigo {
+               background: var(--event-indigo);
+            }
+         }
+
+         .dayview__color-close {
+            font-size: 28px;
+            line-height: 1;
+            font-weight: 300;
+            position: relative;
+            &-icon {
+               position: absolute;
+               width: 100%;
+               height: 100%;
+               display: flex;
+               align-items: center;
+               justify-content: center;
+               color: var(--black-s);
+               svg {
+                  rotate: 45deg;
+               }
+            }
+            &:hover {
+            }
+         }
+      }
+   }
+
+   /* ---------- Selectori pentru elemente fără clasă specifică ---------- */
+   &__group-header {
+      h1,
+      h2,
+      h3,
+      p {
+         margin: 0;
+         color: var(--white-t);
+      }
+   }
+}
+.dayview__event-col {
+   position: relative;
+   display: grid;
+   grid-template-rows: repeat(var(--visible-slots), var(--slot-h));
+}
+
+.dayview__event {
+   grid-row: calc(var(--ev-slots) + 1) / span var(--ev-span);
+   position: absolute;
+   top: calc(var(--ev-units) * 2 * var(--slot-h));
+}

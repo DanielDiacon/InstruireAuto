@@ -5,23 +5,21 @@ import LoadingOverlay from "./LoadingOverlay";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
    const { user, loading } = useContext(UserContext);
-   const [showLoading, setShowLoading] = React.useState(true);
+   const [showLoading, setShowLoading] = useState(true);
 
-   // La mount, arătăm loading
-   // când loading devine false, începem fadeout
-   React.useEffect(() => {
+   useEffect(() => {
       if (!loading) {
-         // după 500ms de animație scoatem loading-ul din DOM
          const timer = setTimeout(() => setShowLoading(false), 500);
          return () => clearTimeout(timer);
       } else {
-         // dacă iarăși loading === true (ex: refresh), arătăm loading
          setShowLoading(true);
       }
    }, [loading]);
 
-   // Dacă userul nu e autentificat sau nu are rol, redirecționăm direct
+   // Dacă userul nu e autentificat, du-l pe pagina de login
    if (!user && !loading) return <Navigate to="/" replace />;
+
+   // Dacă userul are rol, dar nu e permis pe ruta asta
    if (user && !allowedRoles.includes(user.role))
       return <Navigate to="/" replace />;
 

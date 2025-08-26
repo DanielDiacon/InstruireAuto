@@ -47,7 +47,8 @@ export default function ADayInfoPopup({ selectedDate, programari, onClose }) {
          });
       } else {
          return programari.filter((event) =>
-            isSameDay(new Date(event.start), selected)
+            isSameDay(new Date(event.start), selected) 
+
          );
       }
    })();
@@ -74,7 +75,6 @@ export default function ADayInfoPopup({ selectedDate, programari, onClose }) {
       <div className="popup-panel__inner">
          <div className="popup-panel__header">
             <h3 className="popup-panel__title">{headerText}</h3>
-         
          </div>
 
          <div className="popup-panel__content">

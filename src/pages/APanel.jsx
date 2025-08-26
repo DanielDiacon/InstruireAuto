@@ -9,27 +9,25 @@ import "react-big-calendar/lib/css/react-big-calendar.css";
 
 import Header from "../components/Header/Header";
 import "react-clock/dist/Clock.css";
-import ADayInfo from "../components/Popups/ADayInfo";
+import Popup from "../components/Utils/Popup";
 import { openPopup } from "../components/Utils/popupStore";
 
-import { calendarEvents } from "../data/generateEvents";
 import { getAllReservations } from "../api/reservationsService";
 import { getUsers } from "../api/usersService";
-import {
-   createGroups,
-   deleteGroup,
-   getGroups,
-   patchGroup,
-} from "../api/groupsService";
+import { getGroups } from "../api/groupsService";
 import { getInstructors } from "../api/instructorsService";
-import { useUserContext, UserContext } from "../UserContext";
-import Popup from "../components/Utils/Popup";
-import ReservationHistory from "../components/APanel/ReservationHistory";
+import { useSelector, useDispatch } from "react-redux";
+import { fetchInstructors } from "../store/instructorsSlice";
+
+import StudentsManager from "../components/APanel/StudentsManager";
 import GroupManager from "../components/APanel/GroupManager";
-import ACalendarView from "../components/APanel/ACalendar";
 import InstructorManager from "../components/APanel/InstructorManager";
 import ClockDisplay from "../components/UI/ClockDisplay";
-import StudentsManager from "../components/APanel/StudentsManager";
+import ReservationHistory from "../components/APanel/ReservationHistory";
+import ACalendarView from "../components/APanel/ACalendar";
+
+import { useUserContext, UserContext } from "../UserContext";
+import InstructorsGroupManager from "../components/APanel/InstructorsGroupManager";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -42,41 +40,40 @@ const localizer = dateFnsLocalizer({
 });
 
 function APanel() {
-   // --- States ---
-   const [selectedDate, setSelectedDate] = useState(null);
-   const [selectedHourEvents, setSelectedHourEvents] = useState([]);
-   const [showDayPopup, setShowDayPopup] = useState(false);
-   const [currentView, setCurrentView] = useState("month");
-   const [events, setEvents] = useState(calendarEvents);
+   const dispatch = useDispatch();
+
+   const [events, setEvents] = useState([]);
    const [reservations, setReservations] = useState([]);
    const [users, setUsers] = useState([]);
    const [groups, setGroups] = useState([]);
-   const [instructors, setInstructors] = useState([]);
+   const [currentView, setCurrentView] = useState("month");
+   const instructors = useSelector((state) => state.instructors.list);
 
    const { user } = useContext(UserContext);
-   // --- Effects ---
+
+   // Set document title
    useEffect(() => {
       document.title = "Instruire Auto | APanel";
    }, []);
 
-   // Fetch date inițiale: rezervări, utilizatori, grupe
-
    useEffect(() => {
-      async function fetchData() {
-         if (!user || user.role !== "ADMIN") return;
+      if (!user || user.role !== "ADMIN") return;
 
+      // fetch Redux instructors
+      dispatch(fetchInstructors());
+
+      // fetch restul datelor
+      async function fetchData() {
          try {
-            const [resData, userData, groupData, instructorData] =
-               await Promise.all([
-                  getAllReservations(),
-                  getUsers(),
-                  getGroups(),
-                  getInstructors(), // 👈 aici
-               ]);
+            const [resData, userData, groupData] = await Promise.all([
+               getAllReservations(),
+               getUsers(),
+               getGroups(),
+            ]);
 
             setReservations(resData);
             setUsers(userData);
-            setInstructors(instructorData); // 👈 aici
+            console.log(resData);
 
             const sortedGroups = groupData.sort(
                (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
@@ -95,95 +92,40 @@ function APanel() {
       }
 
       fetchData();
-   }, [user]);
+   }, [user, dispatch]);
 
-   // --- Funcții ajutătoare ---
-
-   // Filtrare evenimente pentru săptămână (unice pe oră)
+   // Filter events for week view (one per hour)
    const filterEventsForWeek = useCallback((events) => {
       const seen = new Set();
       return events.filter((event) => {
-         const key = `${event.start.getFullYear()}-${event.start.getMonth()}-${event.start.getDate()}-${event.start.getHours()}-${event.start.getMinutes()}`;
+         const key = `${event.start.getFullYear()}-${event.start.getMonth()}-${event.start.getDate()}-${event.start.getHours()}`;
          if (seen.has(key)) return false;
          seen.add(key);
          return true;
       });
    }, []);
 
-   // Evenimente filtrate în funcție de view
    const eventsToShow =
       currentView === "week" ? filterEventsForWeek(events) : events;
-
-   // Formatare rezervare pentru afișare
-
-   // Selectare zi în calendar (slot)
-   const handleDayClick = ({ start }) => {
-      const eventsAtThatHour = events.filter((ev) => {
-         const evStart = new Date(ev.start);
-         return (
-            evStart.getFullYear() === start.getFullYear() &&
-            evStart.getMonth() === start.getMonth() &&
-            evStart.getDate() === start.getDate() &&
-            evStart.getHours() === start.getHours() &&
-            evStart.getMinutes() === start.getMinutes()
-         );
-      });
-
-      openPopup("dayInfo", {
-         selectedDate: start,
-         programari: formattedReservations,
-      });
-   };
-
-   const handleEventClick = (event) => {
-      const hour = event.start.getHours();
-      const minute = event.start.getMinutes();
-
-      const eventsAtThatHour = events.filter((ev) => {
-         const evStart = new Date(ev.start);
-         return (
-            evStart.getFullYear() === event.start.getFullYear() &&
-            evStart.getMonth() === event.start.getMonth() &&
-            evStart.getDate() === event.start.getDate() &&
-            evStart.getHours() === hour &&
-            evStart.getMinutes() === minute
-         );
-      });
-
-      openPopup("dayInfo", {
-         selectedDate: event.start,
-         programari: formattedReservations,
-      });
-   };
-
-   // Schimbare view calendar
-   const handleViewChange = (view) => setCurrentView(view);
 
    const findUserById = (id) => users.find((u) => u.id === id);
    const findInstructorById = (id) =>
       instructors.find((inst) => inst.id === id);
 
-   const getFormattedReservations = (
-      reservations,
-      findUserById,
-      findInstructorById
-   ) => {
+   const getFormattedReservations = (reservations) => {
       return reservations.map((res) => {
          const start = new Date(res.startTime);
-         const end = new Date(start.getTime() + 90 * 60 * 1000); // 90 min
-
+         const end = new Date(start.getTime() + 90 * 60 * 1000);
          const personUser = findUserById(res.userId);
+         const instructorObj = findInstructorById(res.instructorId);
+
          const person = personUser
             ? `${personUser.firstName} ${personUser.lastName}`
             : "Anonim";
-
-         const instructorObj = findInstructorById(res.instructorId);
          const instructor = instructorObj
             ? `${instructorObj.firstName} ${instructorObj.lastName}`
             : "Necunoscut";
-
          const status = res.status || "pending";
-
          const time = `${start.getHours()}:${start
             .getMinutes()
             .toString()
@@ -192,51 +134,40 @@ function APanel() {
             .toString()
             .padStart(2, "0")}`;
 
-         return {
-            id: res.id,
-            start,
-            end,
-            time,
-            person,
-            instructor,
-            status,
-         };
+         return { id: res.id, start, end, time, person, instructor, status };
       });
    };
-   const formattedReservations = getFormattedReservations(
-      reservations,
-      findUserById,
-      findInstructorById
-   );
+   const formattedReservations = getFormattedReservations(reservations);
 
-   const [selectedStudent, setSelectedStudent] = useState(null);
-   const handleSelectStudent = (student) => {
-      setSelectedStudent(student);
+   // Calendar slot click
+   const handleDayClick = ({ start }) => {
+      openPopup("dayInfo", {
+         selectedDate: start,
+         programari: formattedReservations,
+      });
    };
 
-   // ---- Render ----
+   // Calendar event click
+   const handleEventClick = (event) => {
+      openPopup("dayInfo", {
+         selectedDate: event.start,
+         programari: formattedReservations,
+      });
+   };
+
+   const handleViewChange = (view) => setCurrentView(view);
    return (
       <>
          <Header>
-            {/*<SAddProg />*/}
-            {/*<AAddProg />*/}
             <Popup />
-            <ADayInfo
-               selectedDate={selectedDate}
-               showDayPopup={showDayPopup}
-               formatReservation
-               programari={formattedReservations}
-            />
          </Header>
          <main className="main">
             <section className="intro admin">
                <StudentsManager />
                <div className="intro__right">
-                  <GroupManager onSelectStudent={handleSelectStudent} />
-
+                  <GroupManager />
                   <div className="intro__clock-wrapper">
                      <ClockDisplay />
-
                      <InstructorManager
                         instructors={instructors}
                         openPopup={openPopup}
@@ -245,24 +176,20 @@ function APanel() {
                </div>
             </section>
 
-            <section className="calendar">
-               <ACalendarView
-                  events={eventsToShow}
-                  localizer={localizer}
-                  currentView={currentView}
-                  onSelectSlot={handleDayClick} // click pe o zi liberă
-                  onSelectEvent={handleEventClick} // click pe eveniment existent
-                  onViewChange={handleViewChange} // schimbare lună/săptămână
-               />
-            </section>
             <section className="modules">
                <ReservationHistory
                   formattedReservations={formattedReservations}
                />
-               {/*<ReservationHistory
-                  formattedReservations={formattedReservations}
-               />*/}
+               <InstructorsGroupManager></InstructorsGroupManager>
             </section>
+            <ACalendarView
+               events={events}
+               localizer={localizer}
+               currentView={currentView}
+               onSelectSlot={handleDayClick}
+               onSelectEvent={handleEventClick}
+               onViewChange={handleViewChange}
+            />
          </main>
       </>
    );

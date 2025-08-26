@@ -61,6 +61,14 @@ const App = () => {
                      </ProtectedRoute>
                   }
                />
+               <Route
+                  path="/instructor"
+                  element={
+                     <ProtectedRoute allowedRoles={["INSTRUCTOR"]}>
+                        <SPanel />
+                     </ProtectedRoute>
+                  }
+               />
 
                {/* Public */}
                <Route path="/register" element={<Register />} />

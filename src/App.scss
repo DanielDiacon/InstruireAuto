@@ -151,7 +151,9 @@ body {
 .main {
    z-index: 4;
    padding-left: 194px;
-   max-width: 1440px;
+   //max-width: 1440px;
+   max-width: 1920px;
+   width: 100%;
    margin: 0 auto;
    transform: translateX(0%);
    transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1);
@@ -246,9 +248,11 @@ body.popup-open .main {
 @import "./scss/_panel";
 @import "./scss/APanel/studentsManager";
 @import "./scss/APanel/groupsManager";
+@import "./scss/APanel/instrGropus";
+@import "./scss/APanel/_dayview";
 @import "./scss/_calendar";
 
 //popups
+@import "./scss/Popups/studentInfo";
 @import "./scss/Popups/addinstr";
 @import "./scss/Popups/addprog";
-@import "./scss/Popups/studentInfo";

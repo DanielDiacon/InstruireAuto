@@ -48,6 +48,9 @@ function SignPage() {
          case "MANAGER":
             window.location.href = "/manager";
             break;
+         case "INSTRUCTOR":
+            window.location.href = "/instructor";
+            break;
          default:
             window.location.href = "/";
       }
@@ -81,7 +84,7 @@ function SignPage() {
          firstName: registerForm.name.split(" ")[0],
          lastName: registerForm.name.split(" ")[1] || "",
          groupToken: registerForm.groupToken,
-         phone: registerForm.phone, 
+         phone: registerForm.phone,
       };
 
       try {

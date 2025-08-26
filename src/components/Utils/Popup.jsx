@@ -11,6 +11,7 @@ import ADayInfoPopup from "../Popups/ADayInfo";
 import StudentInfo from "../Popups/StudentInfo";
 import { ReactSVG } from "react-svg";
 import addIcon from "../../assets/svg/add-s.svg"; // <-- aici importi iconul X (sau îl redenumești)
+import ReservationEdit from "../Popups/EditReservation";
 
 export default function Popup() {
    const [popupState, setPopupState] = useState({
@@ -52,7 +53,7 @@ export default function Popup() {
 
    const renderContent = () => {
       if (popupState.type) {
-         console.log("Popup props:", popupState.props);
+         //console.log("Popup props:", popupState.props);
       }
       switch (popupState.type) {
          case "addProg":
@@ -65,6 +66,8 @@ export default function Popup() {
             return <ADayInfoPopup {...popupState.props} />;
          case "studentDetails":
             return <StudentInfo {...popupState.props} />;
+         case "reservationEdit":
+            return <ReservationEdit {...popupState.props} />;
          default:
             return null;
       }
