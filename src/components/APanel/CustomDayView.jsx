@@ -13,6 +13,7 @@ import { fetchStudents } from "../../store/studentsSlice";
 import { openPopup } from "../Utils/popupStore";
 import { ReactSVG } from "react-svg";
 import addIcon from "../../assets/svg/add.svg";
+import arrowIcon from "../../assets/svg/arrow.svg";
 
 /* ====== NAV STATE GLOBAL (pt. Next/Prev cu search activ) ====== */
 let __DV_NAV_STATE__ = {
@@ -128,6 +129,7 @@ export default function CustomDayView(props = {}) {
    const date = props.date ? new Date(props.date) : new Date();
    const { onViewStudent, onChangeColor, onJumpToDate } = props;
    const dispatch = useDispatch();
+   const [pendingOrder, setPendingOrder] = useState({}); // { [groupId]: number }
 
    // READY FLAGS
    const [indexReady, setIndexReady] = useState(false);
@@ -286,6 +288,15 @@ export default function CustomDayView(props = {}) {
       return blocks;
    }, [dayStart, dayEnd, hiddenAbs]);
    const LESSON_MINUTES = 90;
+   const getOrder = useCallback(
+      (g) => {
+         const id = String(g?.id);
+         if (pendingOrder[id] != null) return pendingOrder[id];
+         const v = Number(g?.order ?? g?.sortOrder);
+         return Number.isFinite(v) ? v : Infinity;
+      },
+      [pendingOrder]
+   );
 
    // Sloturi standard ale zilei, derivate din timeMarks.
    // HOISTED: folosită peste tot fără TDZ
@@ -804,7 +815,7 @@ export default function CustomDayView(props = {}) {
          .slice()
          .sort(
             (a, b) =>
-               getGroupOrder(a) - getGroupOrder(b) ||
+               getOrder(a) - getOrder(b) ||
                new Date(a.createdAt) - new Date(b.createdAt)
          )
          .map((g) => {
@@ -871,9 +882,13 @@ export default function CustomDayView(props = {}) {
          : [{ id: "__unknown", name: "Necunoscut" }];
 
       const baseGroups = (instructorsGroups || [])
-     .slice()
-     .sort((a, b) => getGroupOrder(a) - getGroupOrder(b) || new Date(a.createdAt) - new Date(b.createdAt))
-      .map((g) => {
+         .slice()
+         .sort(
+            (a, b) =>
+               getOrder(a) - getOrder(b) ||
+               new Date(a.createdAt) - new Date(b.createdAt)
+         )
+         .map((g) => {
             const raw = Array.isArray(g.instructors) ? g.instructors : [];
             const clean = uniqBy(raw, (i) => String(i.id))
                .slice(0, maxColsPerGroup)
@@ -1257,6 +1272,102 @@ export default function CustomDayView(props = {}) {
       onViewStudent?.({ studentId: student?.id });
    };
 
+   // === Swap order pentru grupe (UI + callback) ===
+   const [swapAnim, setSwapAnim] = useState({}); // { [groupId]: 'left' | 'right' }
+
+   const getGroupById = useCallback(
+      (gid) =>
+         (instructorsGroups || []).find((g) => String(g.id) === String(gid)),
+      [instructorsGroups]
+   );
+
+   const visibleGroupIds = useMemo(() => {
+      // doar grupe reale, filtrate după sector + căutare, în ordinea afișată
+      return (uiGroups || [])
+         .filter((g) => g.id !== "__ungrouped")
+         .map((g) => g.id);
+   }, [uiGroups]);
+
+   const swapGroup = useCallback(
+      (groupId, dir /* 'left' | 'right' */) => {
+         const idx = visibleGroupIds.indexOf(groupId);
+         if (idx === -1) return;
+
+         const neighborIdx = dir === "left" ? idx - 1 : idx + 1;
+         if (neighborIdx < 0 || neighborIdx >= visibleGroupIds.length) return;
+
+         const otherId = visibleGroupIds[neighborIdx];
+
+         // pornește animația pe ambele
+         setSwapAnim({
+            [groupId]: dir,
+            [otherId]: dir === "left" ? "right" : "left",
+         });
+
+         // după ~260ms: oprește animația și emite callback pentru persist
+         setTimeout(() => {
+            setSwapAnim({});
+
+            const a = getGroupById(groupId);
+            const b = getGroupById(otherId);
+            if (!a || !b) return;
+
+            // 1) ia ordinele curente (cu fallback dacă lipsesc)
+            // 1) ia ordinele curente (cu fallback dacă lipsesc)
+            let aOrder = getOrder(a);
+            let bOrder = getOrder(b);
+            if (!Number.isFinite(aOrder) || !Number.isFinite(bOrder)) {
+               // fallback: index vizual ca ordine temporară
+               const indexAsOrder = Object.fromEntries(
+                  visibleGroupIds.map((id, idx) => [id, idx])
+               );
+               aOrder = indexAsOrder[groupId];
+               bOrder = indexAsOrder[otherId];
+            }
+            // 2) setează OPTIMIST ordinea local (fără flicker)
+            setPendingOrder((prev) => ({
+               ...prev,
+               [groupId]: bOrder,
+               [otherId]: aOrder,
+            }));
+            if (typeof props.onSwapGroupOrder === "function") {
+              const p = props.onSwapGroupOrder({
+                  updates: [
+                     { id: String(groupId), order: bOrder },
+                     { id: String(otherId), order: aOrder },
+                  ],
+               });
+               // 3) curăță override-ul DOAR după ce backend-ul a confirmat
+     Promise.resolve(p)
+       .then(() => {
+         setPendingOrder((prev) => {
+           const next = { ...prev };
+           delete next[groupId];
+           delete next[otherId];
+           return next;
+         });
+       })
+       .catch(() => {
+         // rollback optimist la eroare
+         setPendingOrder((prev) => {
+           const next = { ...prev };
+           delete next[groupId];
+           delete next[otherId];
+           return next;
+         });
+       });
+            } else {
+               if (typeof window !== "undefined") {
+                  console.warn(
+                     "[CustomDayView] onSwapGroupOrder nu e definit – rulează doar animația."
+                  );
+               }
+            }
+         }, 300);
+      },
+      [visibleGroupIds, getGroupById, props]
+   );
+
    // ---------- Drag to pan (X+Y) ----------
    const onUserScroll = useCallback(() => {
       if (!programmaticScrollRef.current) {
@@ -1459,7 +1570,12 @@ export default function CustomDayView(props = {}) {
                return (
                   <section
                      key={group.id}
-                     className="dayview__group-wrap"
+                     className={
+                        "dayview__group-wrap" +
+                        (swapAnim[group.id]
+                           ? ` dv-swap-anim dv-swap-anim--${swapAnim[group.id]}`
+                           : "")
+                     }
                      style={{
                         "--cols": cols,
                         "--colw": `calc(${COL_W} * var(--zoom))`,
@@ -1467,9 +1583,43 @@ export default function CustomDayView(props = {}) {
                      aria-label={group.name}
                   >
                      <header className="dayview__group-header">
-                        <div className="dayview__group-name">
-                           {highlightTokens(group.name, tokens)}
+                        <div
+                           className="dv-swap-controls"
+                           role="group"
+                           aria-label="Schimbă poziția grupei"
+                        >
+                           <button
+                              type="button"
+                              className="dv-swap-btn dv-swap-btn--left"
+                              title="Mută grupa la stânga"
+                              aria-label="Mută grupa la stânga"
+                              onClick={() => swapGroup(group.id, "left")}
+                              disabled={visibleGroupIds.indexOf(group.id) <= 0}
+                           >
+                              <ReactSVG
+                                 src={arrowIcon}
+                                 className="dv-swap-icon react-icon"
+                              />
+                           </button>
+                           <button
+                              type="button"
+                              className="dv-swap-btn dv-swap-btn--right"
+                              title="Mută grupa la dreapta"
+                              aria-label="Mută grupa la dreapta"
+                              onClick={() => swapGroup(group.id, "right")}
+                              disabled={
+                                 visibleGroupIds.indexOf(group.id) ===
+                                 visibleGroupIds.length - 1
+                              }
+                           >
+                              <ReactSVG
+                                 src={arrowIcon}
+                                 className="dv-swap-icon react-icon rotate180"
+                              />
+                           </button>
                         </div>
+
+                        {/* (opțional) poți afișa sectorul sau alt meta aici dacă vrei) */}
                         <div className="dayview__group-instructors">
                            {group.instructors.map(({ inst }) => (
                               <div

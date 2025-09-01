@@ -1,33 +1,39 @@
 :root {
-   --slot-h: 30px; /* înălțime slot (poți schimba din props.layout.slotHeight) */
+   /* Dimensiuni/layout */
+   --slot-h: 30px; /* înălțime slot (override prin props.layout.slotHeight) */
    --hours-col-w: 160px; /* lățimea coloanei cu ore */
    --group-gap: 12px; /* spațiu între grupe */
    --cols: 1;
-   --colw: 120px; /* poate fi px sau % (din props.layout.colWidth) */
+   --colw: 120px; /* poate fi px sau % (override prin props.layout.colWidth) */
 
+   /* Culori evenimente (tema light) */
    --event-default: var(--accent-t);
-   --event-red: hsl(0, 70%, 40%);
-   --event-orange: hsl(30, 70%, 40%);
-   --event-yellow: hsl(54, 100%, 33%);
-   --event-green: hsl(130, 70%, 23%);
-   --event-blue: hsl(210, 70%, 40%);
-   --event-indigo: hsl(255, 70%, 33%);
-   --event-purple: hsl(285, 66%, 32%);
-   --event-pink: hsl(330, 68%, 38%);
+   --event-red: hsl(0 70% 40%);
+   --event-orange: hsl(30 70% 40%);
+   --event-yellow: hsl(54 100% 33%);
+   --event-green: hsl(130 70% 23%);
+   --event-blue: hsl(210 70% 40%);
+   --event-indigo: hsl(255 70% 33%);
+   --event-purple: hsl(285 66% 32%);
+   --event-pink: hsl(330 68% 38%);
 }
 
 .darkmode {
+   /* Culori evenimente (tema dark) */
    --event-default: var(--accent-t);
-   --event-red: hsl(0, 100%, 87%);
-   --event-orange: hsl(30, 100%, 80%);
-   --event-yellow: hsl(54, 95%, 76%);
-   --event-green: hsl(130, 65%, 76%);
-   --event-blue: hsl(210, 90%, 74%);
-   --event-indigo: hsl(255, 98%, 83%);
-   --event-purple: hsl(285, 100%, 84%);
-   --event-pink: hsl(330, 96%, 81%);
+   --event-red: hsl(0 100% 87%);
+   --event-orange: hsl(30 100% 80%);
+   --event-yellow: hsl(54 95% 76%);
+   --event-green: hsl(130 65% 76%);
+   --event-blue: hsl(210 90% 74%);
+   --event-indigo: hsl(255 98% 83%);
+   --event-purple: hsl(285 100% 84%);
+   --event-pink: hsl(330 96% 81%);
 }
 
+/* ===========================================================
+   DAYVIEW
+   =========================================================== */
 .dayview {
    display: flex;
    flex-direction: column;
@@ -35,7 +41,7 @@
    background: var(--black-s);
    color: var(--white-p);
 
-   /* ---------- Header + Toolbar ---------- */
+   /* ---------------- Header + Toolbar ---------------- */
    &__header {
       display: flex;
       align-items: center;
@@ -53,54 +59,66 @@
       align-items: center;
       gap: 6px;
       height: 100%;
-      /* SEARCH */
+
       .dv-search {
          position: relative;
-         //min-width: 260px;
+
          &__input {
             width: 100%;
+            height: 100%;
+            padding: 12px 16px;
             border-radius: 32px;
             background: var(--black-p);
             color: var(--white-p);
             font-size: 14px;
-            padding: 12px 16px;
             outline: none;
-            height: 100%;
+
             &::placeholder {
                color: var(--muted);
             }
          }
       }
 
-      /* butoane zoom */
       .dv-btn {
+         height: 100%;
+         padding: 13px 13px;
+         border-radius: 18px;
          background: var(--black-p);
          color: var(--white-p);
-         border-radius: 20px;
-         padding: 13px 13px;
+         transition: all var(--elastic-f), background var(--classic-f);
          font-size: 14px;
          cursor: pointer;
-         height: 100%;
-
-         &--ghost {
+         &:hover {
             border-radius: 10px;
+            background: var(--accent-l);
+            color: var(--accent-d);
+         }
+         &:active {
+            border-radius: 18px;
+            scale: 0.92;
+         }
+         &--ghost {
             padding: 12px 16px;
+            border-radius: 10px;
+            pointer-events: none;
          }
       }
    }
 
-   /* ---------- Canvas / row drag-pan ---------- */
+   /* ---------------- Canvas / Row (drag-pan) ---------------- */
    &__row {
       display: flex;
+      align-items: flex-start;
       gap: var(--group-gap);
       padding: 12px;
-      align-items: flex-start;
       overflow: auto;
+
       &.dv-pan {
          position: relative;
          cursor: grab;
-         touch-action: none;
+         touch-action: none; /* gestionăm manual gesturile */
          scrollbar-width: none;
+
          /* fade pe margini */
          --fade: 16px;
          mask-image: linear-gradient(
@@ -139,39 +157,59 @@
             display: none;
          }
 
+         &.is-panning,
          &.is-dragging {
-            cursor: grabbing;
             user-select: none;
             -webkit-user-select: none;
+            -ms-user-select: none;
+            -webkit-user-drag: none;
+         }
+
+         &.is-dragging {
+            cursor: grabbing;
+         }
+
+         /* opțional: în timp ce panning, ignoră highlight-ul ca țintă */
+         &.is-panning .highlight {
+            pointer-events: none;
          }
       }
    }
 
-   /* ---------- Group wrapper ---------- */
+   /* ---------------- Group wrapper ---------------- */
    &__group-wrap {
       min-width: calc(var(--hours-col-w) + var(--cols) * var(--colw));
-      border-radius: 16px 16px 22px 22px;
+      align-self: flex-start; /* forțează înălțimea după conținut */
       background: var(--black-p);
-      align-self: flex-start; /* ← forțează înălțimea după conținut */
+      border-radius: 16px 16px 22px 22px;
    }
+
    &__group-header {
       display: grid;
       grid-template-columns: var(--hours-col-w) 1fr;
       align-items: stretch;
 
       .dayview__group-name {
-         //grid-column: 1/2;
          padding: 8px 10px;
          font-weight: 700;
+         overflow: hidden;
          text-overflow: ellipsis !important;
          border-right: 1px solid var(--bd);
-         overflow: hidden;
       }
 
       .dayview__group-instructors {
          display: grid !important;
          width: 100%;
          grid-template-columns: repeat(var(--cols), 1fr);
+      }
+
+      /* reset mic pt. titluri în header */
+      h1,
+      h2,
+      h3,
+      p {
+         margin: 0;
+         color: var(--white-t);
       }
    }
 
@@ -186,17 +224,18 @@
          overflow: hidden;
          text-overflow: ellipsis;
       }
+
       .dv-inst-plate {
-         opacity: 0.8;
          font-size: 10px;
+         opacity: 0.8;
       }
    }
 
-   /* ---------- Group content: ore + coloane ---------- */
+   /* ---------------- Group content: ore + coloane ---------------- */
    &__group-content {
       display: grid;
       grid-template-columns: var(--hours-col-w) 1fr;
-      margin-bottom: 0px;
+      margin-bottom: 0;
    }
 
    &__hours {
@@ -206,19 +245,17 @@
 
       .dayview__hour-mark {
          position: absolute;
+         top: calc(var(--mark-slots) * var(--slot-h));
          left: 0;
          width: 100%;
-         padding: 0px 6px;
-         width: 100%;
+         padding: 0 6px;
          text-align: center;
-         top: calc(var(--mark-slots) * var(--slot-h));
          font-size: 12px;
          color: var(--muted);
          pointer-events: none;
       }
    }
 
-   /* Zona cu coloanele instructorilor */
    &__columns {
       display: grid;
       grid-template-columns: repeat(var(--cols), minmax(var(--colw), 1fr));
@@ -228,6 +265,8 @@
       position: relative;
       min-height: calc(var(--visible-slots) * var(--slot-h));
       border-left: 1px solid var(--bd);
+      display: grid; /* pentru liniile de slot */
+      grid-template-rows: repeat(var(--visible-slots), var(--slot-h));
 
       &:first-child {
          border-left: none;
@@ -235,10 +274,10 @@
 
       .dayview__slot-line {
          height: var(--slot-h);
-         display: none;
+         display: none; /* ascuns, păstrat pt. compat */
       }
 
-      /* linii ora majoră */
+      /* linii oră majoră */
       .dayview__mark-line {
          position: absolute;
          left: 0;
@@ -250,28 +289,32 @@
          pointer-events: none;
       }
    }
-   /* ---------- Eveniment (card) ---------- */
+
+   /* ---------------- Eveniment (card) ---------------- */
    &__event {
       position: absolute;
-      left: 0px;
-      right: 0px;
+      left: 0;
+      right: 0;
+      padding: 8px;
       border: 3px solid var(--black-p);
       border-radius: 18px;
-      padding: 8px;
-      overflow: hidden;
+      background: var(--event-default);
       color: var(--white-p);
       font-size: 12px;
-      background: var(--event-default);
       display: flex;
       flex-direction: column;
-      position: relative;
       gap: 4px;
-      grid-row: calc(var(--ev-slots) + 1) / span var(--ev-span);
-      height: calc(var(--ev-units) * var(--slot-h));
-      top: calc(var(--ev-units) * 2 * var(--slot-h));
+      overflow: hidden;
+
+      /* Pozitionare pe baza JS: --ev-slots (start), --ev-span (durata in sloturi) */
+      top: calc(var(--ev-slots) * var(--slot-h));
+      height: calc(var(--ev-span) * var(--slot-h));
+
       &--virtual {
          width: 100%;
       }
+
+      /* variante culoare */
       &--default {
          background: var(--event-default);
       }
@@ -303,9 +346,9 @@
       &-top {
          display: flex;
          align-items: center;
+         justify-content: space-between;
          gap: 8px;
          padding: 0 0 0 2px;
-         justify-content: space-between;
       }
 
       &-person {
@@ -315,34 +358,35 @@
          min-width: 0;
 
          &-name {
+            color: var(--white-p);
             font-weight: 500;
             white-space: nowrap;
             overflow: hidden;
-            color: var(--white-p);
             text-overflow: ellipsis;
          }
       }
 
       &-note {
-         font-size: 10px;
-         padding: 0 0 0 2px;
-         flex: 1;
          width: 100%;
+         flex: 1;
+         padding: 0 0 0 2px;
+         font-size: 10px;
+         color: var(--white-s);
          display: flex;
          align-items: flex-start;
-         color: var(--white-s);
-         text-overflow: ellipsis !important;
          justify-content: flex-start;
+         text-overflow: ellipsis !important;
       }
    }
 
-   /* Meta pills */
+   /* ---------------- Meta pills ---------------- */
    .dv-meta-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 3px;
       align-items: center;
+      gap: 3px;
       width: 100%;
+
       .dv-meta-pill {
          font-size: 10px;
          padding: 2px 6px;
@@ -352,28 +396,27 @@
       }
    }
 
-   /* ---------- Selector culoare (în card) ---------- */
+   /* ---------------- Selector culoare (în card) ---------------- */
    &__color-trigger {
       border: none;
       background: transparent;
       padding: 0;
       margin: 0;
-      cursor: pointer;
-      //position: relative;
-      z-index: 2;
       height: 100%;
+      cursor: pointer;
+
       .dayview__color-dot {
-         display: inline-block;
          width: 14px;
          height: 14px;
+         display: inline-block;
          border-radius: 50%;
          background: var(--white-p);
       }
    }
 
    &__color-overlay {
-      height: 100%;
       display: grid;
+      height: 100%;
       z-index: 20;
 
       .dayview__color-grid {
@@ -382,19 +425,19 @@
          display: grid;
          width: 100%;
          height: 100%;
+         padding: 3px;
          background: var(--accent-l);
-         padding: 0px;
          grid-template-columns: repeat(3, 1fr);
          grid-template-rows: repeat(3, 1fr);
          gap: 3px;
          z-index: 21;
-         padding: 3px;
+
          .dayview__color-cell,
          .dayview__color-close {
-            border-radius: 12px;
-            cursor: pointer;
             display: grid;
             place-items: center;
+            border-radius: 12px;
+            cursor: pointer;
             z-index: 10;
          }
 
@@ -426,44 +469,31 @@
          }
 
          .dayview__color-close {
-            font-size: 28px;
-            line-height: 1;
-            font-weight: 300;
             position: relative;
+            font-size: 28px;
+            font-weight: 300;
+            line-height: 1;
+
             &-icon {
                position: absolute;
-               width: 100%;
-               height: 100%;
+               inset: 0;
                display: flex;
                align-items: center;
                justify-content: center;
                color: var(--black-s);
+
                svg {
                   rotate: 45deg;
                }
             }
-            &:hover {
-            }
          }
       }
    }
+}
 
-   /* ---------- Selectori pentru elemente fără clasă specifică ---------- */
-   &__group-header {
-      h1,
-      h2,
-      h3,
-      p {
-         margin: 0;
-         color: var(--white-t);
-      }
-   }
-}
-.dayview__event-col {
-   position: relative;
-   display: grid;
-   grid-template-rows: repeat(var(--visible-slots), var(--slot-h));
-}
+/* ===========================================================
+   Utils panning (evită selecția în timpul dragului)
+   =========================================================== */
 .dv-pan.is-panning,
 .dv-pan.is-panning * {
    user-select: none !important;
@@ -472,28 +502,84 @@
    -webkit-user-drag: none;
 }
 
-/* opțional: în timp ce panning, ignoră highlight-ul ca țintă */
-.dv-pan.is-panning .highlight {
-   pointer-events: none;
+/* ===========================================================
+   Swap controls + animații
+   =========================================================== */
+.dv-swap-controls {
+   display: inline-flex;
+   align-items: center;
+   gap: 4px;
+   padding: 4px;
 }
 
-/* (opțional) pentru touch să livreze pointermove corect */
-.dv-pan {
-   touch-action: pan-x pan-y;
-}
-.dayview__row.dv-pan {
-   /* blochează gesturile native (scroll/zoom) când gestionați voi pointerul */
-   touch-action: none;
-   cursor: grab;
+.dv-swap-btn {
+   position: relative;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   height: 100%;
+   padding: 10px 14px;
+   border-radius: 14px;
+   background: var(--black-s);
+   color: var(--white-p);
+   font-size: 24px;
+   line-height: 0;
+   cursor: pointer;
+   transition: all var(--elastic-f), background var(--classic-f);
+
+   &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+   }
+   &:not(:disabled):hover {
+      background: var(--accent-l);
+      color: var(--accent-d);
+   }
+   &:hover {
+      border-radius: 10px;
+   }
+   &:active {
+      border-radius: 14px;
+      scale: 0.92;
+   }
 }
 
-.dayview__row.dv-pan.is-panning {
-   user-select: none; /* NU folosi pointer-events: none aici! */
+.dv-swap-icon {
+   padding: 0;
+   position: absolute;
+
+   svg {
+      width: 28px;
+      height: 28px;
+   }
+   &.rotate180 svg {
+      rotate: 180deg;
+   }
 }
 
-.dayview__row.dv-pan.is-dragging {
-   cursor: grabbing;
+.dv-swap-anim {
+   will-change: transform, opacity;
 }
-.dayview__row.dv-pan { touch-action: none; cursor: grab; }
-.dayview__row.dv-pan.is-panning { user-select: none; }
-.dayview__row.dv-pan.is-dragging { cursor: grabbing; }
+.dv-swap-anim--left {
+   animation: dv-slide-left 0.3s ease both;
+}
+.dv-swap-anim--right {
+   animation: dv-slide-right 0.3s ease both;
+}
+
+@keyframes dv-slide-left {
+   from {
+      transform: translateX(0);
+   }
+   to {
+      transform: translateX(calc(-100% - 16px));
+   }
+}
+@keyframes dv-slide-right {
+   from {
+      transform: translateX(0);
+   }
+   to {
+      transform: translateX(calc(100% + 16px));
+   }
+}

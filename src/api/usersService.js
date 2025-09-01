@@ -1,66 +1,75 @@
 import apiClientService from "./ApiClientService";
 
-// Get all users
+// === utils ===
+const clean = (o = {}) =>
+   Object.fromEntries(
+      Object.entries(o).filter(([_, v]) => v !== undefined && v !== null)
+   );
+
+/** GET /users */
 export async function getUsers() {
-  const response = await apiClientService.get("/users");
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Server error: ${text}`);
-  }
-  return response.json();
+   const res = await apiClientService.get("/users");
+   if (!res.ok) throw new Error(await res.text());
+   return res.json();
 }
 
-// Get user by ID
+/** GET /users/:id */
 export async function getUserById(userId) {
-  const response = await apiClientService.get(`/users/${userId}`);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Server error: ${text}`);
-  }
-  return response.json();
+   const res = await apiClientService.get(`/users/${userId}`);
+   if (!res.ok) throw new Error(await res.text());
+   return res.json();
 }
 
-// Create new user
+/** POST /users  — IMPORTANT: trimitem JSON stringificat */
 export async function createUser(userData) {
-  const response = await apiClientService.post("/users", userData);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Server error: ${text}`);
-  }
-  return response.json();
+   const payload = clean(userData);
+   console.log("[createUser] payload JSON ->", payload);
+
+   const res = await apiClientService.post(
+      "/users",
+      JSON.stringify(payload),
+      "application/json; charset=UTF-8"
+   );
+   if (!res.ok) {
+      const text = await res.text();
+      console.error("[createUser] HTTP error:", res.status, text);
+      throw new Error(text || `HTTP ${res.status}`);
+   }
+   const json = await res.json();
+   console.log("[createUser] response <-", json);
+   return json;
 }
 
-// Update user
+/** PATCH /users/:id — IMPORTANT: trimitem JSON stringificat */
 export async function updateUser(userId, userData) {
-  const res = await apiClientService.patch(
-    `/users/${userId}`,
-    JSON.stringify(userData) // convertim obiectul JS în JSON
-  );
+   const payload = clean(userData);
+   console.log("[updateUser] payload JSON ->", payload);
 
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-
-  return res.json();
+   const res = await apiClientService.patch(
+      `/users/${userId}`,
+      JSON.stringify(payload),
+      "application/json; charset=UTF-8"
+   );
+   if (!res.ok) {
+      const text = await res.text();
+      console.error("[updateUser] HTTP error:", res.status, text);
+      throw new Error(text || `HTTP ${res.status}`);
+   }
+   const json = await res.json();
+   console.log("[updateUser] response <-", json);
+   return json;
 }
 
-
-// Delete user
+/** DELETE /users/:id */
 export async function deleteUser(userId) {
-  const response = await apiClientService.delete(`/users/${userId}`);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Server error: ${text}`);
-  }
-  return true;
+   const res = await apiClientService.delete(`/users/${userId}`);
+   if (!res.ok) throw new Error(await res.text());
+   return true;
 }
 
-// Get all users in a group
+/** GET /users/group/:groupId */
 export async function getUsersInGroup(groupId) {
-  const response = await apiClientService.get(`/users/group/${groupId}`);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Server error: ${text}`);
-  }
-  return response.json();
+   const res = await apiClientService.get(`/users/group/${groupId}`);
+   if (!res.ok) throw new Error(await res.text());
+   return res.json();
 }

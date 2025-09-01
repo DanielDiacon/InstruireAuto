@@ -135,6 +135,10 @@ body {
    height: 100svh;
    display: flex;
    align-items: center;
+   padding: 16px;
+   @media (max-width: $mobile) {
+      padding: 10px;
+   }
 }
 @keyframes Coolgradient {
    0% {
@@ -157,9 +161,8 @@ body {
    margin: 0 auto;
    transform: translateX(0%);
    transition: transform 0.8s cubic-bezier(0.32, 0.72, 0, 1);
-   @media (max-width: $mobile) {
-      padding-left: 0;
-      padding-bottom: 46px;
+   @media (max-width: $tablet) {
+      padding: 0 0 96px 0;
    }
 }
 body.popup-open .main {
@@ -237,7 +240,12 @@ body.popup-open .main {
       transform: rotate(360deg);
    }
 }
-
+@media (max-width: 860px) {
+   body.popup-open {
+      overflow: hidden;
+      touch-action: none;
+   }
+}
 // imports
 @import "./scss/_utils";
 @import "./scss/_popup";
@@ -248,8 +256,12 @@ body.popup-open .main {
 @import "./scss/_panel";
 @import "./scss/APanel/studentsManager";
 @import "./scss/APanel/groupsManager";
+@import "./scss/APanel/instrManager";
 @import "./scss/APanel/instrGropus";
-@import "./scss/APanel/_dayview";
+@import "./scss/APanel/dayview";
+@import "./scss/SPanel/nextLesson";
+
+@import "./scss/today";
 @import "./scss/_calendar";
 
 //popups

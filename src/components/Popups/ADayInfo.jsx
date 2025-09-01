@@ -47,8 +47,7 @@ export default function ADayInfoPopup({ selectedDate, programari, onClose }) {
          });
       } else {
          return programari.filter((event) =>
-            isSameDay(new Date(event.start), selected) 
-
+            isSameDay(new Date(event.start), selected)
          );
       }
    })();

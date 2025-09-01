@@ -1,0 +1,60 @@
+.intro__date {
+   background: var(--black-s);
+   border-radius: 35px;
+   padding: 24px;
+   display: flex;
+   flex-direction: column;
+   justify-content: flex-end;
+   position: relative;
+   overflow: hidden;
+   &::after {
+      content: "";
+      position: absolute;
+      bottom: -180%;
+      left: 50%; // ← în loc de right
+      transform: translateX(-50%);
+      width: 300%;
+      height: 300%;
+      background: radial-gradient(
+         circle,
+         transparent,
+         transparent,
+         rgba(243, 252, 121, 0.2),
+         transparent,
+         transparent,
+         transparent,
+         transparent
+      );
+
+      filter: blur(10px);
+      pointer-events: none;
+      z-index: 0;
+   }
+   p {
+      color: var(--white-s);
+   }
+   h3 {
+      font-size: 48px;
+      line-height: 0.8;
+      color: var(--accent-l);
+      font-family: "Clash Display";
+      font-weight: 500;
+      z-index: 2;
+      span {
+         font-family: lexend;
+         font-size: 14px;
+      }
+   }
+   > span {
+      position: absolute;
+      padding: 7px 14px;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 25px;
+      background: var(--accent-t);
+      color: var(--accent-l);
+      right: 16px;
+      top: 16px;
+      //margin: 2px;
+   }
+}

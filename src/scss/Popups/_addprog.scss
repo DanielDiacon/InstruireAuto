@@ -1,10 +1,12 @@
 .saddprogramari {
+   padding-bottom: 1px;
    &__selector {
       display: grid;
       gap: 6px;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
       flex-wrap: wrap;
       &.row {
+         grid-template-columns: 1fr 1fr;
          padding: 0 0 6px 0px;
          align-items: center;
       }
@@ -34,12 +36,11 @@
    }
 
    &__times-list {
-      //display: flex;
-      //flex-direction: column;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
       position: relative;
+      display: grid;
       gap: 6px;
+      padding-bottom: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
    }
    &__disclaimer {
       position: absolute;
@@ -61,7 +62,6 @@
       opacity: 0.4;
       cursor: not-allowed;
    }
-   //.rbc-btn-group button
    &__time-btn {
       border: 0;
       background: var(--black-p);
@@ -95,8 +95,8 @@
          }
       }
       &--disabled {
+         opacity: 0.4;
          cursor: not-allowed;
-         opacity: 0.6;
          &:hover {
             color: var(--white-s);
             border-radius: 32px;
@@ -105,10 +105,12 @@
          }
       }
    }
-   &__time-btn:last-child {
-      grid-column: 1 / -1;
+   &__add-btns {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      padding: 6px;
    }
-
    &__add-btn {
       background: var(--accent-l);
       padding: 8px;
@@ -121,10 +123,26 @@
       transition: var(--classic-s);
       margin: 0;
       font-weight: 500;
+      grid-column: auto / span var(--span, 1);
       &-icon > div {
          display: flex;
          justify-content: center;
          align-items: center;
+      }
+      &-icon.delete {
+         color: var(--white-p);
+
+         background: #f6808000;
+         border-radius: 10px;
+         padding: 8px;
+         transition: var(--classic-f);
+         cursor: pointer;
+         &:hover {
+            color: #410000;
+            background: #f68080;
+            padding: 9px;
+            margin: -1px;
+         }
       }
       span {
          padding: 7px 14px 7px 0;
@@ -136,12 +154,40 @@
          color: var(--accent-d);
       }
       &.arrow {
-         //align-self: center;
          span {
             padding: 7px 0 7px 14px;
          }
          svg {
             transform: rotate(180deg);
+         }
+      }
+      &.list {
+         background: var(--black-p);
+
+         span {
+            padding: 7px 14px 7px 14px;
+            color: var(--white-s);
+         }
+      }
+
+      &.arrow0 {
+         background: var(--black-p);
+
+         span {
+            color: var(--white-s);
+            padding: 7px 14px 7px 0;
+         }
+         svg {
+            transform: rotate(0deg);
+            color: var(--white-s);
+         }
+         &:hover {
+            span {
+               color: var(--accent-l);
+            }
+            svg {
+               color: var(--accent-l);
+            }
          }
       }
       &:hover {
@@ -166,9 +212,7 @@
       }
 
       &:disabled {
-         filter: grayscale(100);
-         opacity: 0.6;
-         //background: var(--accent-t);
+         opacity: 0.4;
          cursor: not-allowed;
          &:hover {
             margin: 0;
@@ -181,7 +225,6 @@
       }
    }
    &__added {
-      margin-top: 16px;
       color: var(--white-p);
    }
 
@@ -193,16 +236,120 @@
       gap: 8px;
       padding-left: 0;
       margin: 0.5rem 0;
-      height: 100px;
-      overflow: scroll;
    }
 
    &__added-item {
-      background: var(--black-s);
-      border-radius: 16px;
+      background: var(--black-p);
+      border-radius: 22px;
+      display: flex;
+      justify-content: space-between;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      &-top {
+         display: flex;
+         flex-direction: column;
+         padding-left: 4px;
+      }
+      &-time {
+         opacity: 0.8;
+         color: var(--white-s);
+      }
+      &-date {
+         color: var(--white-p);
+      }
+   }
+   /* containere & spacing */
+   &__box {
       padding: 16px;
    }
+   &__info {
+      margin-bottom: 12px;
+   }
+   &__loading {
+      padding: 16px;
+      opacity: 0.8;
+   }
+   &__header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+   }
+   &__muted-note {
+      margin-left: 8px;
+      opacity: 0.8;
+   }
+   &__ghost-btn {
+      color: var(--white-s);
+   }
+   &__confirm {
+      gap: 10px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      width: 100%;
+      .btn {
+         border: none;
+         border-radius: 10px;
+         padding: 11.5px 12px;
+         cursor: pointer;
+         transition: all var(--elastic-f), background var(--classic-f);
+         background: #f6808000;
+         color: var(--white-p);
+         width: 100%;
+         &:hover {
+            border-radius: 20px;
+         }
+         &:active {
+            scale: 0.95;
+         }
+      }
+      .btn-danger {
+         color: #410000;
+         background: #f68080;
+      }
+      .btn-secondary {
+         color: var(--white-s);
+         background: var(--black-s);
+      }
+   }
 }
+
+/* butoane simple reutilizabile */
+
+@media only screen and (max-width: $mobile) {
+   .saddprogramari {
+      &__selector {
+         grid-template-columns: 1fr;
+         &.row {
+            grid-template-columns: 2fr 3fr;
+            align-items: center;
+         }
+      }
+      &__times-list {
+         grid-template-columns: 1fr 1fr 1fr;
+      }
+      &__time-btn:last-child {
+         grid-column: auto;
+      }
+      .instructors-popup__radio-wrapper {
+      }
+   }
+}
+
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
 
 .react-datepicker {
    // container principal
@@ -378,4 +525,3 @@
       }
    }
 }
-

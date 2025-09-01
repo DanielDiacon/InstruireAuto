@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from "react";
 import { ReactSVG } from "react-svg";
 import { useDispatch, useSelector } from "react-redux";
 import addIcon from "../../assets/svg/add-s.svg";
+import saveIcon from "../../assets/svg/save2.svg";
 import searchIcon from "../../assets/svg/search.svg";
 import { UserContext } from "../../UserContext";
 import {
@@ -467,13 +468,56 @@ function InstructorsGroupManager() {
                                     Automat
                                  </label>
                               </div>
-
-                              <button
-                                 onClick={() => handleSaveInline(group.id)}
-                                 className="instructorsgroup__button"
-                              >
-                                 Salvează
-                              </button>
+                              <div className="instructorsgroup__actions">
+                                 <ReactSVG
+                                    onClick={() => handleSaveInline(group.id)}
+                                    className="instructorsgroup__button"
+                                    src={saveIcon}
+                                 />
+                                 <ReactSVG
+                                    onClick={() => toggleEdit(group)}
+                                    className="instructorsgroup__button rotate45"
+                                    src={addIcon}
+                                 />
+                                 <div className="instructorsgroup__item-delete groups__item-delete">
+                                    <button
+                                       onClick={() =>
+                                          setConfirmDeleteId(group.id)
+                                       }
+                                       className={`delete-btn ${
+                                          confirmDeleteId === group.id
+                                             ? "hidden"
+                                             : ""
+                                       }`}
+                                    >
+                                       Șterge
+                                    </button>
+                                    <div
+                                       className={`delete-confirmation ${
+                                          confirmDeleteId === group.id
+                                             ? ""
+                                             : "hidden"
+                                       }`}
+                                    >
+                                       <button
+                                          onClick={() =>
+                                             handleDeleteGroup(group.id)
+                                          }
+                                          className="delete-confirm"
+                                       >
+                                          Da
+                                       </button>
+                                       <button
+                                          onClick={() =>
+                                             setConfirmDeleteId(null)
+                                          }
+                                          className="cancel-confirm"
+                                       >
+                                          Nu
+                                       </button>
+                                    </div>
+                                 </div>
+                              </div>
                            </div>
                         ) : (
                            <ul className="instructorsgroup__list">
@@ -499,39 +543,11 @@ function InstructorsGroupManager() {
                               })}
                            </ul>
                         )}
-                        <div className="instructorsgroup__actions">
+                        {groupEdit.isEditing || (
                            <button onClick={() => toggleEdit(group)}>
-                              {groupEdit.isEditing ? "Anulează" : "Editează"}
+                              Editează
                            </button>
-                           <div className="instructorsgroup__item-delete groups__item-delete">
-                              <button
-                                 onClick={() => setConfirmDeleteId(group.id)}
-                                 className={`delete-btn ${
-                                    confirmDeleteId === group.id ? "hidden" : ""
-                                 }`}
-                              >
-                                 Șterge
-                              </button>
-                              <div
-                                 className={`delete-confirmation ${
-                                    confirmDeleteId === group.id ? "" : "hidden"
-                                 }`}
-                              >
-                                 <button
-                                    onClick={() => handleDeleteGroup(group.id)}
-                                    className="delete-confirm"
-                                 >
-                                    Da
-                                 </button>
-                                 <button
-                                    onClick={() => setConfirmDeleteId(null)}
-                                    className="cancel-confirm"
-                                 >
-                                    Nu
-                                 </button>
-                              </div>
-                           </div>
-                        </div>
+                        )}
                      </div>
                   );
                })}
@@ -542,3 +558,41 @@ function InstructorsGroupManager() {
 }
 
 export default InstructorsGroupManager;
+
+/**
+
+Andrei Burcă - XIX 740
+Kistrin Karam - BKB 787
+Oleg Stratan - WYW 789
+Roman Țîmbălari - WIU 355
+Constantin Ceban - WDW 797
+Cristian Lupei - VFP 597
+Radu Sîrbu - VWV 876
+Vlad Tureac - WIW 875
+Rodideal Cristian - BKB 841
+Michael Moruz Robert - SLL 230
+Alexandru Turcan - SLL 230
+Ghirișan Constantin - IZA 462
+Valentin Vasilașco - OOS 665
+Ilie Sula - AVC 513
+Oleg Stahurschi - QMX 036
+Alexei Vizitiu - HWH 873
+Alexandru Bistrea - WBW 084
+Sofciuc Dorin - TVD 575
+Andrei Zagrenco - SLL 204
+Novac Vlad - LML 797
+Andrei Zapescu - LML 797
+Alexandru Fronea - XIX 036
+Alexandru Smirnov - BTB 795
+Eduard Cicanci - WYW 620
+Bistrea Eugen - TFF 068 / WYW 620 (examen)
+Ion Tîrziu - BVA 018
+Turcan Dinu - BVA 018
+Roman Sevastianov - WIW 035
+Zgardan Victor - WIW 035
+Cebotari Alexandru - OZD 544
+Maxim Mușînschi - BXB 876
+Marin Vetrilă - GDG 822
+Vadim Stagiaru - GDG 822
+
+ */

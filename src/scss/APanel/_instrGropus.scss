@@ -1,55 +1,3 @@
-.ddd {
-   &__back-btn {
-      grid-column: 1/-1;
-   }
-   &__empty {
-      text-align: center;
-      padding: 20px;
-      color: var(--white-p);
-      height: 100%;
-      grid-column: 1/-1;
-   }
-
-   &__form {
-      border-radius: 22px;
-      background: var(--black-p);
-      display: flex;
-      flex-direction: column;
-      padding: 6px;
-      justify-content: space-between;
-      gap: 3px;
-      input {
-         border-radius: 16px;
-         padding: 10px 16px 11px 16px;
-         font-size: 14px;
-         background: var(--black-s);
-         color: var(--white-p);
-         width: 100%;
-      }
-      p {
-         padding: 0 6px;
-         color: var(--white-t);
-         opacity: 0.6;
-         height: 0;
-      }
-      button {
-         background: var(--black-s);
-         border-radius: 16px;
-         align-self: flex-end;
-         padding: auto;
-         padding: 12px 20px;
-         &:hover {
-            background: var(--green-d);
-            padding: 12px 24px;
-            color: var(--green-l);
-         }
-         &:active {
-            padding: 12px 24px;
-         }
-      }
-   }
-}
-/* Container general */
 .instructorsgroup {
    border-radius: 35px;
    padding: 0 12px;
@@ -60,6 +8,7 @@
    display: flex;
    flex-direction: column;
    height: 100%;
+
    &__grid-wrapper {
       z-index: 2;
       position: relative;
@@ -166,8 +115,6 @@
          border-radius: 32px;
       }
    }
-   &__icon {
-   }
    &__grid-wrapper {
    }
    &__grid {
@@ -241,15 +188,55 @@
       display: flex;
       gap: 6px;
    }
-   &__create-form {
+   &__edit,
+   &__create {
+      &-form {
+         border-radius: 22px;
+         background: var(--black-p);
+         display: flex;
+         flex-direction: column;
+         padding: 6px;
+         justify-content: space-between;
+         gap: 6px;
+         input {
+            border-radius: 16px;
+            padding: 10px 16px 11px 16px;
+            font-size: 14px;
+            background: var(--black-s);
+            color: var(--white-p);
+            width: 100%;
+         }
+         button {
+            background: var(--black-s);
+            border-radius: 16px;
+            align-self: flex-end;
+            padding: auto;
+            padding: 12px 20px;
+            &:hover {
+               background: var(--green-d);
+               padding: 12px 24px;
+               color: var(--green-l);
+            }
+            &:active {
+               padding: 12px 24px;
+            }
+         }
+      }
+      &-grid {
+         display: flex;
+         flex-direction: column;
+         gap: 6px;
+      }
+      &-row {
+         display: flex;
+         gap: 6px;
+      }
    }
-   &__create-grid {
-   }
-   &__create-row {
-   }
-   &__edit-form {
-   }
-   &__edit-row {
+   &__edit {
+      &-form {
+      }
+      &-row {
+      }
    }
    &__input {
    }
@@ -259,4 +246,81 @@
    }
    &__list {
    }
+}
+
+.instructorsgroup {
+}
+.instructorsgroup__header {
+}
+.open {
+}
+.groups__right {
+}
+.groups__search {
+}
+.groups__input {
+}
+.groups__icon {
+}
+.react-icon {
+}
+.rotate45 {
+}
+.instructorsgroup__icon {
+}
+.instructorsgroup__grid-wrapper {
+}
+.instructorsgroup__grid {
+}
+.instructorsgroup__item {
+}
+.instructorsgroup__create-form {
+}
+.instructorsgroup__input {
+}
+.instructors-popup__radio-wrapper {
+}
+.addprog {
+}
+.active-botanica {
+}
+.active-ciocana {
+}
+.instructorsgroup__create-grid {
+}
+.instructorsgroup__create-row {
+}
+.instructorsgroup__select {
+}
+.instructorsgroup__button {
+}
+.active {
+}
+.instructorsgroup__item-header {
+}
+.instructorsgroup__edit-form {
+}
+.instructorsgroup__edit-row {
+}
+.instrgroup {
+}
+.instructorsgroup__list {
+}
+.instructorsgroup__actions {
+}
+.instructorsgroup__item-delete {
+}
+.groups__item-delete {
+}
+.delete-btn {
+}
+.hidden {
+}
+.delete-confirmation {
+}
+.delete-confirm {
+}
+.cancel-confirm {
+}
+.highlight {
 }

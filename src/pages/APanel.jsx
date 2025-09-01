@@ -11,6 +11,7 @@ import Header from "../components/Header/Header";
 import "react-clock/dist/Clock.css";
 import Popup from "../components/Utils/Popup";
 import { openPopup } from "../components/Utils/popupStore";
+import addIcon from "../assets/svg/mdi--calendar-plus-outline.svg";
 
 import { getAllReservations } from "../api/reservationsService";
 import { getUsers } from "../api/usersService";
@@ -40,6 +41,13 @@ const localizer = dateFnsLocalizer({
 });
 
 function APanel() {
+   const links = [
+      //{ link: "/student/portfolio", text: "Profil", icon: accIcon },
+      { popup: "sAddProg", text: "Programare", icon: addIcon },
+      //{ link: "/student", text: "Acasă", icon: homeIcon },
+      //{ link: "/student", text: "Testare", icon: testIcon },
+      //{ link: "/student", text: "Examen", icon: examIcon },
+   ];
    const dispatch = useDispatch();
 
    const [events, setEvents] = useState([]);
@@ -158,7 +166,7 @@ function APanel() {
    const handleViewChange = (view) => setCurrentView(view);
    return (
       <>
-         <Header>
+         <Header links={links}>
             <Popup />
          </Header>
          <main className="main">

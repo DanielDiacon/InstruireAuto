@@ -4,6 +4,7 @@ import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import addIcon from "../../assets/svg/add.svg";
 import arrowIcon from "../../assets/svg/arrow.svg";
+import trashIcon from "../../assets/svg/trash.svg";
 import { ReactSVG } from "react-svg";
 import { createReservations } from "../../api/reservationsService";
 import { UserContext } from "../../UserContext";
@@ -12,23 +13,36 @@ import {
    fetchUserReservations,
    fetchBusy,
 } from "../../store/reservationsSlice";
+import AlertPills from "../Utils/AlertPills";
 
+/* ————— Utilitare ————— */
 const oreDisponibile = [
-   { eticheta: "07:00 - 08:30", oraStart: "07:00" },
-   { eticheta: "08:30 - 10:00", oraStart: "08:30" },
-   { eticheta: "10:00 - 11:30", oraStart: "10:00" },
-   { eticheta: "11:30 - 13:00", oraStart: "11:30" },
-   { eticheta: "13:30 - 15:00", oraStart: "13:30" },
-   { eticheta: "15:00 - 16:30", oraStart: "15:00" },
-   { eticheta: "16:30 - 18:00", oraStart: "16:30" },
-   { eticheta: "18:00 - 19:30", oraStart: "18:00" },
-   { eticheta: "19:30 - 21:00", oraStart: "19:30" },
+   { eticheta: "07:00", oraStart: "07:00" },
+   { eticheta: "08:30", oraStart: "08:30" },
+   { eticheta: "10:00", oraStart: "10:00" },
+   { eticheta: "11:30", oraStart: "11:30" },
+   { eticheta: "13:30", oraStart: "13:30" },
+   { eticheta: "15:00", oraStart: "15:00" },
+   { eticheta: "16:30", oraStart: "16:30" },
+   { eticheta: "18:00", oraStart: "18:00" },
 ];
+const capRO = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-// helpers
+const formatDateRO = (iso) => {
+   const d = new Date(iso);
+   const zi = d.getDate();
+   const luna = capRO(d.toLocaleDateString("ro-RO", { month: "short" }));
+   const an = d.getFullYear();
+   return `${zi} ${luna} ${an}`;
+};
+const formatTimeRO = (iso) =>
+   new Date(iso).toLocaleTimeString("ro-RO", {
+      hour: "2-digit",
+      minute: "2-digit",
+   });
+
 const asStr = (v) => (v == null ? "" : String(v));
 const asStrLower = (v) => asStr(v).trim().toLowerCase();
-
 const cap = (s) => (!s ? s : s.charAt(0).toUpperCase() + s.slice(1));
 const localDateStr = (d) =>
    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
@@ -75,6 +89,7 @@ const getStartFromReservation = (r) =>
    r?.date ??
    r?.begin ??
    null;
+
 /** ancoră din istoricul userului (sector, cutie, tip + id entitate) */
 const deriveAnchor = (rez) => {
    if (!rez?.length) return null;
@@ -99,7 +114,7 @@ const deriveAnchor = (rez) => {
    return { tip, entityId, sector, gearbox };
 };
 
-// ——— normalizare răspuns /busy-reservation ———
+/** normalizează răspunsul /busy-reservation */
 function normalizeBusy(raw) {
    const out = [];
    const pushVariant = (entityType, entityId, reservations) => {
@@ -117,7 +132,7 @@ function normalizeBusy(raw) {
          if (st) busyISO.push(new Date(st).toISOString());
       }
       out.push({
-         entityType, // "group" | "instructor" | null
+         entityType,
          entityId: entityId != null ? String(entityId) : null,
          busyISO,
       });
@@ -149,32 +164,41 @@ function normalizeBusy(raw) {
    return out;
 }
 
-// grilă completă (UTC ISO “Z”)
+/** grilă completă (UTC ISO “Z”), pornind de mâine — azi este blocat */
 function buildFullGridISO(daysWindow = 120) {
-   const daysArr = nextNDays(daysWindow);
+   const startFrom = addDays(new Date(), 1);
+   const daysArr = nextNDays(daysWindow, startFrom);
    const out = [];
-   for (const day of daysArr) {
-      for (const t of oreDisponibile) {
+   for (const day of daysArr)
+      for (const t of oreDisponibile)
          out.push(new Date(`${day}T${t.oraStart}:00.000Z`).toISOString());
-      }
-   }
    return out;
 }
 
+/* ————— Componentă ————— */
 export default function SAddProg({ onClose }) {
-   // ——— Etapa 1: opțiuni ———
-   const [numarLectii, setNumarLectii] = useState(15); // 15 | 30
-   const [cutie, setCutie] = useState("manual"); // manual | automat
-   const [sector, setSector] = useState("Botanica"); // Botanica | Ciocana
-   const [tip, setTip] = useState("group"); // group | single
-   const WINDOW_DAYS = 120;
+   /* ALERT PILLS */
+   const [messages, setMessages] = useState([]);
+   const [debugArmed, setDebugArmed] = useState(false); // ⟵ devine true abia la „Continuă”
+   const notify = (type, text, { force = false } = {}) => {
+      if (!force && !debugArmed) return;
+      setMessages((prev) => [
+         ...prev,
+         { id: `${Date.now()}-${Math.random()}`, type, text },
+      ]);
+   };
+   const dismissLast = () => setMessages((prev) => prev.slice(0, -1));
 
-   // ancoră din istoricul userului
-   const [anchor, setAnchor] = useState(null); // {tip, entityId, sector, gearbox}
-   // blocare totală când ai deja 30
+   /* Etapa 1: opțiuni */
+   const [numarLectii, setNumarLectii] = useState(15);
+   const [cutie, setCutie] = useState("manual");
+   const [sector, setSector] = useState("Botanica");
+   const [tip, setTip] = useState("group");
+   const WINDOW_DAYS = 120;
+   const [anchor, setAnchor] = useState(null);
    const [hardLock30, setHardLock30] = useState(false);
 
-   // ——— Etapa 2 ———
+   /* Etapa 2 */
    const [stage, setStage] = useState("setup"); // setup | pick
    const [assignedGroupId, setAssignedGroupId] = useState(null);
    const [assignedInstructorId, setAssignedInstructorId] = useState(null);
@@ -182,10 +206,12 @@ export default function SAddProg({ onClose }) {
    const [selectedDates, setSelectedDates] = useState([]); // ISO[]
    const [loading, setLoading] = useState(false);
    const [initLoading, setInitLoading] = useState(true);
+   const [showList, setShowList] = useState(false);
+   const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
+   const makeKey = (iso, idx) => `${iso}__${idx}`;
 
    const [data, setData] = useState(null);
    const [oraSelectata, setOraSelectata] = useState(null);
-
    const [lectiiExistente, setLectiiExistente] = useState(0);
 
    const { user } = useContext(UserContext);
@@ -194,7 +220,46 @@ export default function SAddProg({ onClose }) {
       (s) => s.reservations
    );
 
-   // INIT: aduc rezervările fresh, derivez ancora, blochez dacă >=30 și auto-skip dacă e cazul
+   const freeByDay = useMemo(() => {
+      const map = new Map();
+      for (const iso of freeSlotsForAssigned) {
+         const key = localDateStr(new Date(iso));
+         map.set(key, (map.get(key) || 0) + 1);
+      }
+      return map;
+   }, [freeSlotsForAssigned]);
+
+   const dayLocal = data ? localDateStr(data) : null;
+
+   const freeTimesForDay = useMemo(() => {
+      if (!data) return new Set();
+      const set = new Set();
+      for (const iso of freeSlotsForAssigned) {
+         const d = new Date(iso);
+         if (localDateStr(d) === dayLocal) {
+            const hh = String(d.getUTCHours()).padStart(2, "0");
+            const mm = String(d.getUTCMinutes()).padStart(2, "0");
+            set.add(`${hh}:${mm}`);
+         }
+      }
+      return set;
+   }, [data, freeSlotsForAssigned, dayLocal]);
+
+   const selectedTimesForDay = useMemo(() => {
+      if (!data) return new Set();
+      const set = new Set();
+      for (const iso of selectedDates) {
+         const d = new Date(iso);
+         if (localDateStr(d) === dayLocal) {
+            const hh = String(d.getUTCHours()).padStart(2, "0");
+            const mm = String(d.getUTCMinutes()).padStart(2, "0");
+            set.add(`${hh}:${mm}`);
+         }
+      }
+      return set;
+   }, [data, selectedDates, dayLocal]);
+
+   /* La montare: doar încărcăm istoricul pentru ancoră. NU pornim căutarea! */
    useEffect(() => {
       let alive = true;
       (async () => {
@@ -210,7 +275,7 @@ export default function SAddProg({ onClose }) {
                if (count >= 30) {
                   setHardLock30(true);
                   setInitLoading(false);
-                  return; // blocat — nu mai facem nimic
+                  return;
                }
 
                if (existing?.length) {
@@ -219,7 +284,7 @@ export default function SAddProg({ onClose }) {
                   setCutie(a.gearbox);
                   setSector(a.sector);
                   setTip(a.tip);
-                  await continuaEtapa2(a);
+                  // NU mai chemăm continuaEtapa2 aici. Așteptăm „Continuă”.
                }
             }
          } finally {
@@ -231,7 +296,6 @@ export default function SAddProg({ onClose }) {
       };
    }, [user?.id, dispatch]);
 
-   // resetare etapă 2 când se schimbă opțiunile (dacă NU e blocat de ancoră)
    useEffect(() => {
       if (anchor) return;
       if (sector === "Ciocana") setTip("single");
@@ -242,10 +306,14 @@ export default function SAddProg({ onClose }) {
       setSelectedDates([]);
       setData(null);
       setOraSelectata(null);
+      setShowList(false);
    }, [sector, cutie, tip, anchor]);
 
-   const isLocked = !!anchor;
+   useEffect(() => {
+      if (!showList) setConfirmDeleteKey(null);
+   }, [showList]);
 
+   const isLocked = !!anchor;
    const reachedMax30 = useMemo(
       () => lectiiExistente + selectedDates.length >= 30,
       [lectiiExistente, selectedDates.length]
@@ -255,7 +323,6 @@ export default function SAddProg({ onClose }) {
       [numarLectii, selectedDates.length]
    );
 
-   // ——— zile deja ocupate de utilizator (existing + selecții curente) ———
    const bookedDaySet = useMemo(() => {
       const set = new Set();
       for (const iso of selectedDates) set.add(localDateStr(new Date(iso)));
@@ -272,7 +339,6 @@ export default function SAddProg({ onClose }) {
       ("nativeEvent" in x ||
          "preventDefault" in x ||
          "isDefaultPrevented" in x);
-
    const isValidAnchor = (a) =>
       a &&
       typeof a === "object" &&
@@ -281,15 +347,19 @@ export default function SAddProg({ onClose }) {
       a.gearbox &&
       a.entityId != null;
 
+   /* Pornește căutarea DOAR când utilizatorul apasă „Continuă” */
+   const handleClickContinue = async () => {
+      setDebugArmed(true); // de aici încolo afișăm debug/info din fetch
+      await continuaEtapa2();
+   };
+
    const continuaEtapa2 = async (maybeAnchor = undefined) => {
       if (hardLock30 || lectiiExistente >= 30) {
-         alert("Ai deja 30 de lecții programate. Nu mai poți adăuga.");
+         notify("warn", "Ai deja 30 de lecții programate. Nu mai poți adăuga.");
          return;
       }
-
       setLoading(true);
       try {
-         // dacă vine SyntheticEvent, îl ignorăm
          const candidate = isProbablyEvent(maybeAnchor)
             ? undefined
             : maybeAnchor;
@@ -297,54 +367,39 @@ export default function SAddProg({ onClose }) {
          const useAnchor = isValidAnchor(lock);
 
          if (!numarLectii) {
-            alert("Alege pachetul (15 sau 30).");
+            notify("warn", "Alege pachetul (15 sau 30).");
             return;
          }
 
-         // dacă nu avem ancoră validă, folosim valorile din toggle-uri (state)
          const qGearbox = useAnchor ? lock.gearbox : cutie;
          const qSector = useAnchor ? lock.sector : sector;
          const qType = useAnchor ? lock.tip : tip;
 
          const query = {
-            days: asStr(numarLectii), // "15" | "30"
-            gearbox: asStrLower(qGearbox), // "manual" | "automat"
-            sector: asStrLower(qSector), // "botanica" | "ciocana"
-            type: asStrLower(qType), // "group" | "single"
+            days: asStr(numarLectii),
+            gearbox: asStrLower(qGearbox),
+            sector: asStrLower(qSector),
+            type: asStrLower(qType),
          };
 
-         const res = await dispatch(fetchBusy(query)).unwrap(); // (doar o singură dată)
+         notify("info", "Caut disponibilitatea...");
+         const res = await dispatch(fetchBusy(query)).unwrap();
          const variants = normalizeBusy(res.data);
-
          if (!variants.length) {
-            console.error(
-               "[SAddProg] /busy-reservation a întors zero variante:",
-               res?.data
-            );
-            alert(
-               "Nu am primit date de ocupații. Reîncearcă sau contactează administratorul."
-            );
+            notify("error", "Nu am primit date de ocupații.");
             return;
          }
 
-         // filtrează după tipul cerut (din toggle sau ancoră validă)
          let list = variants.filter((v) =>
             qType === "group"
                ? v.entityType === "group"
                : v.entityType === "instructor"
          );
-
          if (!list.length) {
-            console.error(
-               "[SAddProg] Tipul dorit nu există în răspunsul busy:",
-               qType,
-               variants
-            );
-            alert("Nu am putut găsi tipul dorit în ocupații.");
+            notify("error", "Nu am putut găsi tipul dorit în ocupații.");
             return;
          }
 
-         // dacă avem ancoră validă, restrângem doar la ea
          if (useAnchor) {
             const anchorType = lock.tip === "group" ? "group" : "instructor";
             const onlyAnchor = list.filter(
@@ -353,11 +408,10 @@ export default function SAddProg({ onClose }) {
                   String(v.entityId) === String(lock.entityId)
             );
             if (!onlyAnchor.length) {
-               console.error(
-                  "[SAddProg] Varianta ancorată nu a fost returnată de backend.",
-                  { anchor: lock, list }
+               notify(
+                  "error",
+                  "Nu am găsit grupa/instructorul tău în ocupații."
                );
-               alert("Nu am găsit grupa/instructorul tău în ocupații.");
                return;
             }
             list = onlyAnchor;
@@ -372,35 +426,32 @@ export default function SAddProg({ onClose }) {
 
          scored.sort((a, b) => b.free.length - a.free.length);
          const best = scored[0];
-
          if (!best?.free?.length) {
-            console.error(
-               "[SAddProg] Nicio variantă cu sloturi libere.",
-               scored
-            );
-            alert("Nu există sloturi libere în perioada vizată.");
+            notify("warn", "Nu există sloturi libere în perioada vizată.");
             return;
          }
 
          if (qType === "group") {
             setAssignedGroupId(String(best.entityId));
             setAssignedInstructorId(null);
+            notify("success", `S-a selectat grupa #${best.entityId}.`);
          } else {
             setAssignedInstructorId(String(best.entityId));
             setAssignedGroupId(null);
+            notify("success", `S-a selectat instructorul #${best.entityId}.`);
          }
 
          setFreeSlotsForAssigned(best.free);
          setStage("pick");
+         setShowList(false);
       } catch (err) {
-         console.error("[SAddProg] Eroare la fetchBusy / procesare:", err);
-         alert("Nu am putut încărca ocupațiile.");
+         notify("error", "Nu am putut încărca ocupațiile.");
+         if (err?.message) notify("debug", `Detalii: ${err.message}`);
       } finally {
          setLoading(false);
       }
    };
 
-   // —— Etapa 2: selecție sloturi —— //
    const freeSet = useMemo(
       () => new Set(freeSlotsForAssigned),
       [freeSlotsForAssigned]
@@ -408,45 +459,71 @@ export default function SAddProg({ onClose }) {
 
    const adaugaProgramare = () => {
       if (hardLock30 || lectiiExistente >= 30) {
-         alert("Ai deja 30 de lecții programate. Nu mai poți adăuga.");
+         notify("warn", "Ai deja 30 de lecții programate.", { force: true });
          return;
       }
       if (!data || !oraSelectata) return;
 
-      const dayLocal = localDateStr(data);
-      if (bookedDaySet.has(dayLocal)) {
-         alert("Ai deja o programare în această zi. Alege altă dată.");
+      const todayLocal = localDateStr(new Date());
+      const dayLocalStr = localDateStr(data);
+
+      if (dayLocalStr === todayLocal) {
+         notify(
+            "warn",
+            "Nu poți programa pentru AZI. Alege o dată începând de mâine.",
+            { force: true }
+         );
          return;
       }
-
+      if (bookedDaySet.has(dayLocalStr)) {
+         notify("warn", "Ai deja o programare în această zi.", { force: true });
+         return;
+      }
       if (reachedMax30) {
-         alert("Ai atins limita maximă de 30 lecții!");
+         notify("warn", "Ai atins limita maximă de 30 lecții!", {
+            force: true,
+         });
          return;
       }
       if (reachedPackLimit) {
-         alert(`Ai atins limita pachetului (${numarLectii}).`);
+         notify("warn", `Ai atins limita pachetului (${numarLectii}).`, {
+            force: true,
+         });
          return;
       }
 
       const iso = toUtcIsoFromLocal(data, oraSelectata.oraStart);
       if (!freeSet.has(iso)) {
-         alert("Slot indisponibil.");
+         notify("error", "Slot indisponibil.", { force: true });
          return;
       }
       if (selectedDates.includes(iso)) return;
 
       setSelectedDates((prev) => [...prev, iso]);
+      notify(
+         "success",
+         `Adăugat: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`,
+         { force: true }
+      );
       setData(null);
       setOraSelectata(null);
    };
 
-   const stergeProgramare = (iso) =>
-      setSelectedDates((prev) => prev.filter((p) => p !== iso));
+   const stergeProgramare = (iso) => {
+      setSelectedDates((prev) => {
+         const next = prev.filter((p) => p !== iso);
+         if (next.length === 0 && showList) setShowList(false);
+         return next;
+      });
+      setConfirmDeleteKey(null);
+      notify("info", `Șters: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`, {
+         force: true,
+      });
+   };
 
    const trimiteProgramari = async () => {
       setLoading(true);
       try {
-         // re-verific din backend, live
          let latest = [];
          if (user?.id) {
             latest = await dispatch(fetchUserReservations(user.id))
@@ -456,55 +533,81 @@ export default function SAddProg({ onClose }) {
          const existingCount = Array.isArray(latest)
             ? latest.length
             : lectiiExistente;
-
-         // hard lock
          if (existingCount >= 30) {
             setHardLock30(true);
-            alert("Ai deja 30 de lecții programate. Nu mai poți adăuga.");
+            notify("warn", "Ai deja 30 de lecții programate.", { force: true });
             return;
          }
 
-         // câte mai poți adăuga până la 30, indiferent de pachet
+         if (selectedDates.length === 0) {
+            notify("warn", "Selectează cel puțin o lecție.", { force: true });
+            return;
+         }
          const poateAdauga = 30 - existingCount;
          if (selectedDates.length > poateAdauga) {
-            alert(`Poți adăuga cel mult ${poateAdauga} lecții acum.`);
+            notify("warn", `Poți adăuga cel mult ${poateAdauga} lecții acum.`, {
+               force: true,
+            });
             return;
          }
 
-         // ✅ modificare: la prima programare NU mai cerem exact 15/30,
-         // ci doar ≥1 și ≤ pachetul ales (limita de pachet e deja aplicată la "Adaugă")
-         if (selectedDates.length === 0) {
-            alert("Selectează cel puțin o lecție înainte de trimitere.");
-            return;
+         const type =
+            (isLocked ? anchor?.tip : tip) === "group" ? "group" : "instructor";
+         let chosenId = null;
+         if (type === "group") {
+            chosenId = isLocked ? anchor?.entityId : assignedGroupId;
+            if (!chosenId) {
+               notify("error", "Nu am un 'instructorsGroupId' selectat.", {
+                  force: true,
+               });
+               return;
+            }
+         } else {
+            chosenId = isLocked ? anchor?.entityId : assignedInstructorId;
+            if (!chosenId) {
+               notify("error", "Nu am un 'instructorId' selectat.", {
+                  force: true,
+               });
+               return;
+            }
          }
+
+         const topLevel = {};
+         if (type === "group") topLevel.instructorsGroupId = Number(chosenId);
+         else topLevel.instructorId = Number(chosenId);
+
+         const uiSector = isLocked ? anchor?.sector : sector;
+         const uiGearbox = isLocked ? anchor?.gearbox : cutie;
+         const normalizedGearbox =
+            (uiGearbox || "").toLowerCase() === "automat"
+               ? "Automat"
+               : "Manual";
 
          const payload = {
-            reservations: selectedDates.map((isoDate) => {
-               const base = {
-                  startTime: asStr(isoDate),
-                  sector: asStr(isLocked ? anchor.sector : sector),
-                  gearbox: asStr(cap(isLocked ? anchor.gearbox : cutie)),
-                  privateMessage: "Notă goală",
-                  color: "--default",
-               };
-               return (isLocked ? anchor.tip : tip) === "group"
-                  ? { ...base, instructorsGroupId: asStr(assignedGroupId) }
-                  : { ...base, instructorId: asStr(assignedInstructorId) };
-            }),
+            ...topLevel,
+            reservations: selectedDates.map((isoDate) => ({
+               startTime: String(isoDate),
+               sector: String(uiSector || "Botanica"),
+               gearbox: normalizedGearbox,
+               privateMessage: "",
+               color: "#FF5733",
+            })),
          };
 
+         notify("info", "Trimit programările...", { force: true });
          await createReservations(payload);
 
-         // ✅ închide popup-ul și fă hard refresh la pagină
+         notify("success", `Trimis ${selectedDates.length} programări.`, {
+            force: true,
+         });
          onClose?.();
          setTimeout(() => {
             if (typeof window !== "undefined") window.location.reload();
          }, 50);
-
-         return; // oprim aici ca să nu mai facem setState pe un component care se închide
       } catch (e) {
-         console.error(e);
-         alert("A apărut o eroare la trimitere.");
+         notify("error", "A apărut o eroare la trimitere.", { force: true });
+         if (e?.message)
+            notify("debug", `Detalii: ${e.message}`, { force: true });
       } finally {
          setLoading(false);
       }
@@ -514,26 +617,36 @@ export default function SAddProg({ onClose }) {
       () => addDays(new Date(), WINDOW_DAYS - 1),
       [WINDOW_DAYS]
    );
+   const onKeyActivate = (fn) => (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+         e.preventDefault();
+         fn();
+      }
+   };
 
-   // —— ecran de încărcare inițial / auto-skip ——
    const showLoadingScreen =
       initLoading ||
       (isLocked && stage === "setup" && (loading || busyLoading));
 
+   const handleBack = () => {
+      if (stage === "pick" && showList) setShowList(false);
+      else if (stage === "pick") setStage("setup");
+      else onClose?.();
+   };
+
    return (
-      <div className="popup-panel__inner">
+      <>
+         {/* ALERT PILLS */}
+         <AlertPills messages={messages} onDismiss={dismissLast} />
+
          <div className="popup-panel__header">
             <h3 className="popup-panel__title">Adaugă programare</h3>
          </div>
 
          <div className="popup-panel__content">
-            {/* HARD LOCK 30 — blochează tot UI-ul */}
             {hardLock30 ? (
-               <div style={{ padding: 16 }}>
-                  <div
-                     className="saddprogramari__info"
-                     style={{ marginBottom: 12 }}
-                  >
+               <div className="saddprogramari__box">
+                  <div className="saddprogramari__info">
                      <b>Ai deja 30 de lecții programate.</b> Nu mai poți adăuga
                      alte programări.
                   </div>
@@ -546,30 +659,11 @@ export default function SAddProg({ onClose }) {
                   </button>
                </div>
             ) : showLoadingScreen ? (
-               <div style={{ padding: 16, opacity: 0.8 }}>
+               <div className="saddprogramari__loading">
                   Se încarcă disponibilitatea…
                </div>
             ) : stage === "setup" ? (
                <>
-                  {isLocked && (
-                     <div
-                        className="saddprogramari__info"
-                        style={{ marginBottom: 12 }}
-                     >
-                        Setările sunt blocate după primele programări:{" "}
-                        <b>
-                           {anchor.sector},{" "}
-                           {anchor.gearbox === "automat" ? "Automat" : "Manual"}
-                           ,{" "}
-                           {anchor.tip === "group"
-                              ? `Grupa #${anchor.entityId}`
-                              : `Instructor #${anchor.entityId}`}
-                        </b>
-                        . Se poate trece direct la alegerea sloturilor.
-                     </div>
-                  )}
-
-                  {/* Pachet */}
                   <div className="saddprogramari__selector row">
                      <h3 className="saddprogramari__title">
                         Selectează pachetul:
@@ -690,7 +784,7 @@ export default function SAddProg({ onClose }) {
                            tip === "group"
                               ? "active-botanica"
                               : "active-ciocana"
-                        } ${sector === "Botanica" ? "" : "inacative"}`}
+                        } ${sector === "Botanica" ? "" : "inactive"}`}
                      >
                         <label>
                            <input
@@ -701,7 +795,7 @@ export default function SAddProg({ onClose }) {
                               onChange={(e) => setTip(e.target.value)}
                               disabled={isLocked || sector === "Ciocana"}
                            />
-                           Mai mulți (grupă)
+                           Mai mulți
                         </label>
                         <label>
                            <input
@@ -712,15 +806,16 @@ export default function SAddProg({ onClose }) {
                               onChange={(e) => setTip(e.target.value)}
                               disabled={isLocked}
                            />
-                           Unul (instructor)
+                           Unul
                         </label>
                      </div>
                   </div>
 
                   <button
-                     onClick={() => continuaEtapa2()}
+                     onClick={handleClickContinue}
                      disabled={busyLoading || loading}
                      className="saddprogramari__add-btn arrow"
+                     type="button"
                   >
                      <span>{loading ? "Se pregătește..." : "Continuă"}</span>
                      <ReactSVG
@@ -730,184 +825,278 @@ export default function SAddProg({ onClose }) {
                   </button>
                </>
             ) : (
-               // stage === "pick"
+               // ====== STAGE: PICK ======
                <>
-                  <div className="saddprogramari__selector row">
-                     <h3 className="saddprogramari__title">
-                        Asignare automată:
-                     </h3>
-                     {(isLocked ? anchor.tip : tip) === "group" ? (
-                        <div>
-                           Grupa aleasă: <b>#{assignedGroupId}</b>
-                        </div>
-                     ) : (
-                        <div>
-                           Instructor ales: <b>#{assignedInstructorId}</b>
-                        </div>
-                     )}
-                     <div style={{ fontSize: 12, opacity: 0.7 }}>
-                        {freeSlotsForAssigned.length} sloturi libere găsite în
-                        următoarele {WINDOW_DAYS} zile.
-                     </div>
-                  </div>
+                  {!showList ? (
+                     <>
+                        <div className="saddprogramari__selector">
+                           <div className="saddprogramari__calendar">
+                              <h3 className="saddprogramari__title">
+                                 Selectează data și ora:
+                              </h3>
+                              <DatePicker
+                                 selected={data}
+                                 onChange={(date) => {
+                                    setData(date);
+                                    setOraSelectata(null);
+                                 }}
+                                 inline
+                                 minDate={addDays(new Date(), 1)} // NU permite azi
+                                 maxDate={maxSelectableDate}
+                                 dayClassName={(date) => {
+                                    const day = localDateStr(date);
+                                    if (bookedDaySet.has(day))
+                                       return "saddprogramari__day--inactive";
+                                    return freeByDay.has(day)
+                                       ? ""
+                                       : "saddprogramari__day--inactive";
+                                 }}
+                              />
+                           </div>
 
-                  <div className="saddprogramari__selector">
-                     <div className="saddprogramari__calendar">
-                        <h3 className="saddprogramari__title">
-                           Selectează data și ora:
-                        </h3>
-                        <DatePicker
-                           selected={data}
-                           onChange={(date) => {
-                              setData(date);
-                              setOraSelectata(null);
-                           }}
-                           inline
-                           minDate={new Date()}
-                           maxDate={maxSelectableDate}
-                           dayClassName={(date) => {
-                              const dayLocal = localDateStr(date);
-                              if (bookedDaySet.has(dayLocal))
-                                 return "saddprogramari__day--inactive";
-                              const areFree = freeSlotsForAssigned.some(
-                                 (iso) =>
-                                    localDateStr(new Date(iso)) === dayLocal
-                              );
-                              return areFree
-                                 ? ""
-                                 : "saddprogramari__day--inactive";
-                           }}
-                        />
-                     </div>
-
-                     <div className="saddprogramari__times">
-                        <h3 className="saddprogramari__title">
-                           Selectează ora:
-                        </h3>
-                        <div className="saddprogramari__times-list">
-                           {!data && (
-                              <div className="saddprogramari__disclaimer">
-                                 Te rog să selectezi mai întâi o zi!
-                              </div>
-                           )}
-                           {oreDisponibile.map((ora) => {
-                              const dayLocal = data ? localDateStr(data) : null;
-                              const dayLimit = dayLocal
-                                 ? bookedDaySet.has(dayLocal)
-                                 : false;
-
-                              const d = data
-                                 ? toUtcIsoFromLocal(data, ora.oraStart)
-                                 : null;
-                              const isFree = d ? freeSet.has(d) : false;
-                              const esteDejaSelectata =
-                                 d && selectedDates.includes(d);
-                              const isSelected =
-                                 oraSelectata?.eticheta === ora.eticheta;
-
-                              return (
-                                 <button
-                                    key={ora.eticheta}
-                                    onClick={() => setOraSelectata(ora)}
-                                    disabled={
+                           <div className="saddprogramari__times">
+                              <h3 className="saddprogramari__title">
+                                 Selectează:
+                              </h3>
+                              <div className="saddprogramari__times-list">
+                                 {!data && (
+                                    <div className="saddprogramari__disclaimer">
+                                       Te rog să selectezi mai întâi o zi!
+                                    </div>
+                                 )}
+                                 {oreDisponibile.map((ora) => {
+                                    const disabledDay = data
+                                       ? bookedDaySet.has(dayLocal)
+                                       : false;
+                                    const isFree = data
+                                       ? freeTimesForDay.has(ora.oraStart)
+                                       : false;
+                                    const alreadyPicked = data
+                                       ? selectedTimesForDay.has(ora.oraStart)
+                                       : false;
+                                    const isSelected =
+                                       oraSelectata?.eticheta === ora.eticheta;
+                                    const disabled =
                                        !data ||
-                                       dayLimit ||
+                                       disabledDay ||
                                        !isFree ||
-                                       esteDejaSelectata
-                                    }
-                                    className={`saddprogramari__time-btn ${
-                                       isSelected
-                                          ? "saddprogramari__time-btn--selected"
-                                          : ""
-                                    } ${
-                                       dayLimit || !isFree || esteDejaSelectata
-                                          ? "saddprogramari__time-btn--disabled"
-                                          : ""
-                                    }`}
-                                    title={
-                                       dayLimit
-                                          ? "Ai deja o programare în această zi"
-                                          : esteDejaSelectata
-                                          ? "Deja adăugat"
-                                          : !isFree
-                                          ? "Ocupat / indisponibil"
-                                          : ""
-                                    }
-                                 >
-                                    {ora.eticheta}
-                                 </button>
-                              );
-                           })}
-                        </div>
-                     </div>
+                                       alreadyPicked;
 
+                                    return (
+                                       <button
+                                          key={ora.eticheta}
+                                          onClick={() => setOraSelectata(ora)}
+                                          disabled={disabled}
+                                          className={`saddprogramari__time-btn ${
+                                             isSelected
+                                                ? "saddprogramari__time-btn--selected"
+                                                : ""
+                                          } ${
+                                             disabled
+                                                ? "saddprogramari__time-btn--disabled"
+                                                : ""
+                                          }`}
+                                          title={
+                                             disabledDay
+                                                ? "Ai deja o programare în această zi"
+                                                : alreadyPicked
+                                                ? "Deja adăugat"
+                                                : !isFree
+                                                ? "Ocupat / indisponibil"
+                                                : ""
+                                          }
+                                       >
+                                          {ora.eticheta}
+                                       </button>
+                                    );
+                                 })}
+                              </div>
+                           </div>
+
+                           <div className="saddprogramari__add-btns">
+                              <button
+                                 onClick={adaugaProgramare}
+                                 disabled={
+                                    !data ||
+                                    !oraSelectata ||
+                                    selectedDates.length >= numarLectii
+                                 }
+                                 className="saddprogramari__add-btn"
+                                 type="button"
+                              >
+                                 <ReactSVG
+                                    src={addIcon}
+                                    className="saddprogramari__add-btn-icon"
+                                 />
+                                 <span>Adaugă</span>
+                              </button>
+
+                              <button
+                                 type="button"
+                                 className="saddprogramari__add-btn list"
+                                 onClick={() => setShowList(true)}
+                                 disabled={selectedDates.length === 0}
+                                 title="Vezi lista"
+                              >
+                                 <span>
+                                    Vezi lista ({selectedDates.length})
+                                 </span>
+                              </button>
+                           </div>
+                        </div>
+                     </>
+                  ) : (
+                     <>
+                        <div className="saddprogramari__selector">
+                           <div className="saddprogramari__header-row">
+                              <h3 className="saddprogramari__title saddprogramari__title--mt-12">
+                                 Lecții selectate: {selectedDates.length} /{" "}
+                                 {numarLectii}
+                                 <span className="saddprogramari__muted-note">
+                                    (rămase:{" "}
+                                    {Math.max(
+                                       0,
+                                       numarLectii - selectedDates.length
+                                    )}
+                                    )
+                                 </span>
+                              </h3>
+                              <button
+                                 type="button"
+                                 className="saddprogramari__ghost-btn"
+                                 onClick={() => setShowList(false)}
+                                 title="Înapoi la selecție"
+                              >
+                                 Înapoi la selecție
+                              </button>
+                           </div>
+
+                           <div className="saddprogramari__added">
+                              {selectedDates.length === 0 ? (
+                                 <div className="saddprogramari__disclaimer">
+                                    Nu ai selectat încă nicio lecție.
+                                 </div>
+                              ) : (
+                                 <ul className="saddprogramari__added-list">
+                                    {selectedDates.map((iso, i) => {
+                                       const key = makeKey(iso, i);
+                                       const isConfirming =
+                                          confirmDeleteKey === key;
+
+                                       return (
+                                          <li
+                                             key={i}
+                                             className={
+                                                "saddprogramari__added-item" +
+                                                (isConfirming
+                                                   ? " saddprogramari__added-item--confirm"
+                                                   : "")
+                                             }
+                                          >
+                                             {isConfirming ? (
+                                                <div className="saddprogramari__confirm">
+                                                   <button
+                                                      type="button"
+                                                      className="btn btn-danger"
+                                                      onClick={() =>
+                                                         stergeProgramare(iso)
+                                                      }
+                                                   >
+                                                      Șterge
+                                                   </button>
+                                                   <button
+                                                      type="button"
+                                                      className="btn btn-secondary"
+                                                      onClick={() =>
+                                                         setConfirmDeleteKey(
+                                                            null
+                                                         )
+                                                      }
+                                                   >
+                                                      Renunță
+                                                   </button>
+                                                </div>
+                                             ) : (
+                                                <>
+                                                   <div className="saddprogramari__added-item-top">
+                                                      <time
+                                                         className="saddprogramari__added-item-date"
+                                                         dateTime={iso}
+                                                      >
+                                                         {formatDateRO(iso)}
+                                                      </time>
+                                                      <span className="saddprogramari__added-item-time">
+                                                         {formatTimeRO(iso)}
+                                                      </span>
+                                                   </div>
+
+                                                   <ReactSVG
+                                                      onClick={() =>
+                                                         setConfirmDeleteKey(
+                                                            key
+                                                         )
+                                                      }
+                                                      onKeyDown={onKeyActivate(
+                                                         () =>
+                                                            setConfirmDeleteKey(
+                                                               key
+                                                            )
+                                                      )}
+                                                      role="button"
+                                                      tabIndex={0}
+                                                      focusable="true"
+                                                      aria-label="Șterge programarea"
+                                                      type="button"
+                                                      src={trashIcon}
+                                                      className="saddprogramari__add-btn-icon delete"
+                                                   />
+                                                </>
+                                             )}
+                                          </li>
+                                       );
+                                    })}
+                                 </ul>
+                              )}
+                           </div>
+                        </div>
+                     </>
+                  )}
+
+                  {/* acțiuni comune etapei 2 */}
+                  <div className="saddprogramari__add-btns">
                      <button
-                        onClick={adaugaProgramare}
-                        disabled={
-                           !data ||
-                           !oraSelectata ||
-                           selectedDates.length >= numarLectii
-                        }
-                        className="saddprogramari__add-btn"
+                        onClick={handleBack}
+                        className="saddprogramari__add-btn arrow0"
+                        type="button"
                      >
                         <ReactSVG
-                           src={addIcon}
+                           src={arrowIcon}
                            className="saddprogramari__add-btn-icon"
                         />
-                        <span>Adaugă</span>
+                        <span>Înapoi</span>
                      </button>
-                  </div>
-
-                  <div className="saddprogramari__added">
-                     <h3 className="saddprogramari__title">
-                        Lecții selectate: {selectedDates.length} / {numarLectii}
-                        <span style={{ marginLeft: 8, opacity: 0.8 }}>
-                           (rămase:{" "}
-                           {Math.max(0, numarLectii - selectedDates.length)})
+                     <button
+                        onClick={trimiteProgramari}
+                        disabled={
+                           selectedDates.length !== numarLectii || loading
+                        }
+                        className="saddprogramari__add-btn arrow"
+                        type="button"
+                     >
+                        <span>
+                           {loading
+                              ? "Se trimit..."
+                              : `Trimite ${selectedDates.length} programări`}
                         </span>
-                     </h3>
-                     <ul className="saddprogramari__added-list">
-                        {selectedDates.map((d, i) => (
-                           <li key={i} className="saddprogramari__added-item">
-                              {new Date(d).toLocaleString()}
-                              <button
-                                 className="saddprogramari__delete-btn"
-                                 onClick={() => stergeProgramare(d)}
-                              >
-                                 DEL
-                              </button>
-                           </li>
-                        ))}
-                     </ul>
-
-                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button
-                           onClick={() => setStage("setup")}
-                           className="saddprogramari__add-btn"
-                           type="button"
-                        >
-                           « Înapoi la setări
-                        </button>
-                        <button
-                           onClick={trimiteProgramari}
-                           disabled={selectedDates.length === 0 || loading}
-                           className="saddprogramari__add-btn arrow"
-                        >
-                           <span>
-                              {loading
-                                 ? "Se trimit..."
-                                 : `Trimite ${selectedDates.length} programări`}
-                           </span>
-                           <ReactSVG
-                              src={arrowIcon}
-                              className="saddprogramari__add-btn-icon"
-                           />
-                        </button>
-                     </div>
+                        <ReactSVG
+                           src={arrowIcon}
+                           className="saddprogramari__add-btn-icon"
+                        />
+                     </button>
                   </div>
                </>
             )}
          </div>
-      </div>
+      </>
    );
 }

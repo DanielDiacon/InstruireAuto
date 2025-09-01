@@ -1,7 +1,6 @@
-
 .popup-panel {
    position: fixed;
-   top: 6px;
+   bottom: 6px;
    left: 6px;
    width: 100%;
    min-width: 500px;
@@ -10,7 +9,7 @@
    padding: 25px 25px 0 25px;
    display: flex;
    flex-direction: column;
-   height: calc(100vh - 12px);
+   height: calc(100svh - 12px);
    border-radius: 35px;
    opacity: 0;
    transform: translateX(-100%);
@@ -24,7 +23,7 @@
       width: 100vw;
       height: 100vh;
       background-color: rgba(0, 0, 0, 0.3);
-      z-index: 9999;
+      z-index: -1;
       backdrop-filter: blur(10px);
       opacity: 0;
       transition: opacity 0.4s ease;
@@ -47,10 +46,13 @@
       z-index: 0;
    }
    &__inner {
-      z-index: 10;
-      //background: #138356;
+      z-index: 10000;
       flex: 1;
-      //overflow: hidden;
+      overflow: auto;
+      &::-webkit-scrollbar {
+         display: none !important;
+      }
+      width: 100%;
    }
 
    &__header {
@@ -78,9 +80,10 @@
       border-radius: 25px;
       padding: 14px 20px;
       transition: var(--classic-s);
-      z-index: 21;
       width: auto;
       cursor: pointer;
+      z-index: 999999;
+      pointer-events: all;
       svg {
          rotate: 45deg;
       }
@@ -97,19 +100,6 @@
          border-radius: 32px;
       }
    }
-   //&__content {
-   //   ul {
-   //      display: grid;
-   //      gap: 0 20px;
-   //      grid-template-columns: 1fr 1fr;
-   //   }
-   //   li {
-   //      padding: 20px;
-   //      background: var(--black-s);
-   //      border-radius: 20px;
-   //      color: var(--white-p);
-   //   }
-   //}
 }
 
 /* Când e activ */
@@ -121,4 +111,27 @@ body.popup-open .popup-panel {
 body.popup-open .popup-panel__overlay {
    opacity: 1;
    pointer-events: auto;
+}
+@media only screen and (max-width: $tablet) {
+   .popup-panel {
+      min-width: 500px;
+      width: calc(50% - 12px);
+      pointer-events: all;
+   }
+}
+@media only screen and (max-width: $mobile) {
+   .popup-panel {
+      min-width: auto;
+      padding: 20px 20px 0 20px;
+      width: calc(100% - 12px);
+      pointer-events: all;
+      align-items: center;
+      justify-content: center;
+      &__title {
+         font-size: 24px;
+      }
+      &__header {
+         margin-bottom: 20px;
+      }
+   }
 }

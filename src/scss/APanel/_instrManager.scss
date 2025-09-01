@@ -1,0 +1,104 @@
+.instructori {
+   background: var(--black-s);
+   border-radius: 35px;
+   display: flex;
+   flex-direction: column;
+   justify-content: space-between;
+   position: relative;
+   overflow: hidden;
+   padding: 12px;
+   &::after {
+      content: "";
+      position: absolute;
+      bottom: -180%;
+      left: 50%; // ← în loc de right
+      transform: translateX(-50%);
+      width: 300%;
+      height: 300%;
+      background: radial-gradient(
+         circle,
+         transparent,
+         transparent,
+         rgba(243, 252, 121, 0.2),
+         transparent,
+         transparent,
+         transparent,
+         transparent
+      );
+
+      filter: blur(10px);
+      pointer-events: none;
+      z-index: 0;
+   }
+   &__info {
+      padding: 12px;
+   }
+   p {
+      color: var(--white-s);
+   }
+   h3 {
+      font-size: 48px;
+      line-height: 0.8;
+      color: var(--accent-l);
+      font-family: "Clash Display";
+      font-weight: 500;
+      z-index: 2;
+      span {
+         font-family: lexend;
+         font-size: 14px;
+      }
+   }
+
+   &__icon {
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+      }
+      &.big {
+         margin: -4px;
+         div {
+            height: 20px;
+         }
+         width: 20px;
+         height: 20px;
+      }
+   }
+   &__btns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      //flex-grow: 1;
+      //display: flex;
+      gap: 6px;
+      position: relative;
+      z-index: 2;
+      & > div {
+         gap: 6px;
+         flex-direction: column;
+         display: flex;
+      }
+   }
+   button {
+      background: var(--black-p);
+      color: var(--white-s);
+      border-radius: 21px;
+      padding: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: var(--classic-s);
+
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         color: var(--accent-l);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 21px;
+      }
+   }
+}

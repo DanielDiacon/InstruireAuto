@@ -5,7 +5,10 @@ import { Calendar, momentLocalizer } from "react-big-calendar";
 import moment from "moment";
 import "moment/locale/ro";
 import "react-big-calendar/lib/css/react-big-calendar.css";
-
+import {
+   fetchInstructorsGroups,
+   updateGroup,
+} from "../../store/instructorsGroupSlice";
 import ACustomToolbar from "./ACustomToolbar";
 import CustomDayView from "./CustomDayView";
 
@@ -61,7 +64,7 @@ function ACalendarView({
       // deschizi pagina/sidepanel elev
    }, []);
 
-   // Wrapper pt. Day view
+   // Wrapper pt. Day view — o singură definiție
    const DayViewWithHandlers = useMemo(() => {
       const Comp = function DayViewWrapper(rbcProps) {
          return (
@@ -79,6 +82,19 @@ function ACalendarView({
                onChangeColor={handleChangeColor}
                onDelete={handleDelete}
                onViewStudent={handleViewStudent}
+               // swap order grupe (NU schimbă nume, NU rupe funcționalul)
+               onSwapGroupOrder={async ({ updates }) => {
+                  try {
+                     return await Promise.all(
+                        updates.map((u) =>
+                           dispatch(updateGroup({ id: u.id, order: u.order }))
+                        )
+                     );
+                  } catch (e) {
+                     console.error("Eroare la schimbarea ordinii grupelor", e);
+                     throw e; // lasă eroarea să ajungă în catch-ul din CustomDayView (rollback)
+                  }
+               }}
             />
          );
       };
@@ -87,7 +103,13 @@ function ACalendarView({
       Comp.navigate = CustomDayView.navigate;
       if (CustomDayView.range) Comp.range = CustomDayView.range;
       return Comp;
-   }, [handleEdit, handleChangeColor, handleDelete, handleViewStudent]);
+   }, [
+      handleEdit,
+      handleChangeColor,
+      handleDelete,
+      handleViewStudent,
+      dispatch,
+   ]);
 
    return (
       <div className="calendar">

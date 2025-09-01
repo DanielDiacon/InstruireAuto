@@ -1,5 +1,5 @@
 .calendar {
-   padding: 24px 24px 0 24px;
+   padding: 24px 24px;
 
    > div {
       margin-top: 0 !important;
@@ -7,25 +7,21 @@
    }
 }
 
+/* ---- react-big-calendar ---- */
 .rbc-calendar {
    background: var(--black-s) !important;
    padding: 0 !important;
    border-radius: 35px !important;
    overflow: hidden;
-
-   // Calendar container principal
-   & {
-      background: white;
-      border-radius: 12px;
-      padding: 1rem;
-   }
 }
 
 .rbc-toolbar {
-   padding: 12px 12px 0 12px;
+   padding: 12px 12px 0;
 
    &-label {
-      //background: pink;
+      padding: 8px !important;
+      text-wrap: nowrap !important;
+      text-transform: capitalize;
       color: var(--white-p) !important;
    }
 }
@@ -54,7 +50,6 @@
       transition: var(--classic-s);
       box-shadow: none !important;
       font-weight: 500;
-      //margin: 0 !important;
 
       &:hover {
          transition: all var(--elastic-s), background var(--classic-s);
@@ -62,14 +57,12 @@
          border-radius: 16px !important;
          padding: 14px 22px !important;
       }
-
       &:active {
          transition: all var(--elastic-s), background var(--classic-s);
          transform: scale(0.95);
          padding: 14px 20px !important;
          border-radius: 32px !important;
       }
-
       &.rbc-active {
          background: var(--accent-l) !important;
          color: var(--accent-d) !important;
@@ -77,67 +70,64 @@
    }
 }
 
+/* ---- Month view ---- */
 .rbc-month-view {
    gap: 6px !important;
    border: 0 !important;
-   padding: 12px 17px 20px 17px;
+   padding: 12px 17px 20px;
 
-   // Structura lunară (celulele zilelor)
-   & {
-      .rbc-month-row {
-         min-height: 70px !important;
+   .rbc-month-row {
+      min-height: 70px !important;
+      border: 0 !important;
+      display: flex;
+
+      .rbc-day-bg {
+         //border: 1px solid var(--bd);
          border: 0 !important;
-         display: flex;
+      }
 
-         .rbc-day-bg {
-            border: 1px solid #eee;
+      .rbc-event {
+         padding: 0 9px 2px 8px;
+         margin: 0;
+         background: transparent;
+      }
+
+      .rbc-event-content {
+         background-color: var(--accent-t);
+         color: var(--white-p);
+         border-radius: 6px;
+         padding: 1px 5px;
+         pointer-events: all;
+         font-size: 12px;
+         transition: var(--classic-f);
+
+         &:hover {
+            background-color: var(--accent-l) !important;
+            color: var(--accent-d);
+            scale: 1.03;
          }
+      }
 
-         .rbc-event {
-            padding: 0 9px 2px 8px;
-            margin: 0;
-            background: transparent;
-         }
+      .rbc-row-segment {
+         margin: 0;
+         padding: 0;
+         position: relative;
+      }
 
-         .rbc-event-content {
-            background-color: var(--accent-t);
-            color: var(--white-p);
-            border-radius: 6px;
-            padding: 1px 5px;
-            pointer-events: none;
-            pointer-events: all;
-            font-size: 12px;
-            transition: var(--classic-f);
-            &:hover {
-               background-color: var(--accent-l);
-               color: var(--accent-d);
-               scale: 1.03;
-            }
-         }
+      .rbc-show-more {
+         font-size: 10px;
+         color: #fff;
+         background: #929292d7;
+         border-radius: 16px;
+         padding: 2px 5px;
+         font-weight: 400;
+         position: relative;
+         bottom: -1px;
+         left: 8px;
+         cursor: pointer;
 
-         .rbc-row-segment {
-            margin: 0;
-            padding: 0;
-            position: relative;
-         }
-
-         .rbc-show-more {
-            font-size: 10px;
-            color: #fff;
-            background: #929292d7;
-            border-radius: 16px;
-            padding: 2px 5px;
-            font-weight: 400;
-            //margin: 0 6px;
-            //position: absolute;
-            position: relative;
-            bottom: -1px;
-            left: 8px;
-            cursor: pointer;
-
-            &:hover {
-               text-decoration: underline;
-            }
+         &:hover {
+            text-decoration: underline;
          }
       }
    }
@@ -145,35 +135,32 @@
 
 .rbc-row {
    gap: 6px !important;
-} // Rând generic
-
+}
 .rbc-row-bg {
-   //background: blue;
    gap: 0 !important;
 }
 
 .rbc-row-content {
    pointer-events: none;
-   //background: red;
 
    .rbc-row {
-      gap: 0 !important; // 222222222222222222222222222222222222222222
+      gap: 0 !important;
    }
 }
 
 .rbc-header {
    border: 0 !important;
-   padding: 0 !important;
-   color: var(--white-s);
-   font-weight: 400 !important;
    padding: 2px !important;
    margin-bottom: 3px;
+   color: var(--white-s);
+   font-weight: 400 !important;
    border-radius: 12px;
    background: transparent !important;
    text-align: center;
+   text-transform: capitalize !important;
 
    &.rbc-today {
-      background: var(--accent-s) !important;
+      background: var(--accent-l) !important;
       border-radius: 12px;
       color: var(--accent-d);
    }
@@ -185,17 +172,16 @@
    border-radius: 12px;
    margin: 0 3px;
    transition: var(--classic-s);
-   //background: var(--black-p);
    background: var(--black-p);
 
    &.rbc-off-range-bg {
       background: var(--bd);
    }
    &:hover {
-      //background: var(--bd);
       background: var(--black-p);
       cursor: pointer;
    }
+
    &.rbc-today {
       background: var(--accent-l);
       &:hover {
@@ -211,30 +197,22 @@
    &.rbc-now {
       color: var(--accent-d) !important;
    }
-
    &.rbc-current {
       color: var(--white-p);
    }
 }
-
 .rbc-date-cell.rbc-off-range {
    color: var(--white-t);
 }
 
-.rbc-button-link {
-   //background: #fb00ff !important;
-}
-
-// Săptămâna -------------------- //
+/* ---- Week/Time view ---- */
 .rbc-time-view {
    border: 0 !important;
-   padding: 12px 12px 0px 12px;
+   padding: 12px 12px 0;
 
    .rbc-time-header {
-      //background: blue !important;
       gap: 6px !important;
    }
-
    .rbc-allday-cell {
       display: none;
    }
@@ -247,7 +225,8 @@
    .rbc-events-container {
       background: var(--black-p);
       border: 0 !important;
-      margin: 0 !important; //marginea din dreapta -
+      margin: 0 !important;
+      width: auto;
    }
 
    .rbc-event {
@@ -261,6 +240,7 @@
       border: 4px solid var(--black-p) !important;
       gap: 2px;
       transition: var(--classic-f) !important;
+
       &.rbc-selected {
          background-color: var(--accent-t) !important;
       }
@@ -280,40 +260,26 @@
       line-height: 1;
       width: 100%;
       text-wrap: wrap;
+      text-overflow: ellipsis !important;
       opacity: 0.8;
    }
 
    .rbc-event-content {
+      text-overflow: ellipsis !important;
       font-size: 10px;
    }
 }
 
-.rbc-time-header-gutter {
-   //background: #000 !important;
-}
-
-.rbc-overflowing {
-   //background: green !important;
-}
-
 .rbc-label {
-   //background: pink !important;
    color: var(--white-s);
-}
-
-.rbc-row-content {
-   //background: #000 !important;
-   //display: grid;
-   //grid-template-rows: auto 1fr 1fr;
-   //width: 100%;
 }
 
 .rbc-time-content {
    gap: 6px !important;
    border: 0 !important;
    max-height: 400px;
- 
-    &::-webkit-scrollbar-track {
+
+   &::-webkit-scrollbar-track {
       background: var(--black-s);
    }
    &::-webkit-scrollbar-thumb {
@@ -321,32 +287,21 @@
    }
 }
 
-.rbc-time-gutter {
-   //gap: 6px !important;
-}
-
 .rbc-time-column {
-   //padding: 10px;
-   //background: #000;
    gap: 3px;
    margin-bottom: 12px;
 }
 
-.rbc-timeslot-group {
-   border: 0 !important;
-}
-
+.rbc-timeslot-group,
 .rbc-time-slot {
    border: 0 !important;
 }
 
 .rbc-day-slot.rbc-now.rbc-today {
-   background: var(--bd);
    background: #d5d16100;
 }
 
 .rbc-day-slot.rbc-time-column {
-   border: 1px solid var(--bd) !important;
    border: 0 !important;
    overflow: hidden;
    border-radius: 10px;
@@ -361,4 +316,97 @@
 
 .rbc-events-container {
    border: 0 !important;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: $mobile) {
+   .calendar {
+      padding: 0;
+      &.page {
+         //min-height: 100svh !important;
+      }
+   }
+   .rbc-calendar {
+      border-radius: 0px !important;
+      background: var(--black-p) !important;
+   }
+   .rbc-toolbar {
+      display: flex !important;
+      flex-wrap: wrap !important;
+      flex-direction: row !important;
+      background: var(--black-s) !important;
+      align-items: flex-start !important;
+      justify-content: flex-start !important;
+      border: 16px solid var(--black-p);
+      border-radius: 50px 50px 30px 30px;
+      padding: 12px;
+      gap: 8px;
+      margin-bottom: -16px !important;
+      &-label {
+         color: var(--white-p) !important;
+         flex: 0;
+      }
+   }
+   .rbc-btn-group {
+      align-self: flex-start !important;
+      button {
+         //background: var(--black-s) !important;
+      }
+   }
+   .rbc-header {
+      white-space: pre-line !important;
+   }
+   /* ---- Month view ---- */
+   .rbc-month-view {
+      padding: 6px !important;
+      .rbc-month-row {
+         min-height: 60px !important;
+         .rbc-day-bg {
+            border: 0 !important;
+            background: var(--black-s);
+            &.rbc-off-range-bg {
+               background: transparent;
+               border: 1px solid var(--bd) !important;
+            }
+            &.rbc-today {
+               background: var(--accent-l);
+               &:hover {
+                  opacity: 0.8;
+               }
+            }
+         }
+      }
+   }
+   .rbc-time-view {
+      padding: 6px;
+      .rbc-time-content {
+         min-height: 612px;
+      }
+      .rbc-events-container {
+         background: var(--black-s);
+      }
+
+      .rbc-event {
+         border: 4px solid var(--black-s) !important;
+      }
+      .rbc-event-label {
+         text-overflow: ellipsis !important;
+         padding: 0 !important;
+      }
+      .rbc-event-content {
+         text-overflow: ellipsis !important;
+         white-space: nowrap !important;
+         overflow: hidden !important;
+      }
+   }
+   .rbc-time-gutter.rbc-time-column {
+      //width: 30px;
+   }
+   .rbc-time-column {
+      font-size: 10px;
+   }
+
+   .rbc-events-container {
+      width: auto;
+   }
 }
