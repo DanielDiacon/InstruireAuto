@@ -40,6 +40,7 @@ export async function signin(payload) {
       document.cookie = `access_token=${data.access_token}; path=/; max-age=${
          60 * 60 * 24 * 7
       }`;
+      console.log(data.access_token);
    }
 
    return data;

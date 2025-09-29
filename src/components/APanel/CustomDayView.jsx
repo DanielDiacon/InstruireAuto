@@ -5,25 +5,37 @@ import React, {
    useState,
    useCallback,
    useRef,
+   useDeferredValue,
+   useLayoutEffect,
 } from "react";
+
 import { useDispatch, useSelector, shallowEqual } from "react-redux";
 import { fetchInstructorsGroups } from "../../store/instructorsGroupSlice";
+import { fetchCars } from "../../store/carsSlice";
 import { fetchAllReservations } from "../../store/reservationsSlice";
 import { fetchStudents } from "../../store/studentsSlice";
 import { openPopup } from "../Utils/popupStore";
-import { ReactSVG } from "react-svg";
-import addIcon from "../../assets/svg/add.svg";
-import arrowIcon from "../../assets/svg/arrow.svg";
 
-/* ====== NAV STATE GLOBAL (pt. Next/Prev cu search activ) ====== */
+import { ReactSVG } from "react-svg";
+import refreshIcon from "../../assets/svg/grommet-icons--power-reset.svg";
+import editIcon from "../../assets/svg/material-symbols--edit-outline-sharp.svg";
+import arrowIcon from "../../assets/svg/material-symbols--edit-off-outline-sharp.svg";
+
+import useInertialPan from "./Calendar/useInertialPan";
+import usePinchZoom from "./Calendar/usePinchZoom";
+import useCalendarAutoRefresh from "./Calendar/useCalendarAutoRefresh";
+import DayWindow from "./Calendar/DayWindow";
+import { fetchUsers } from "../../store/usersSlice";
+
+/* ====== NAV STATE GLOBAL ====== */
 let __DV_NAV_STATE__ = {
    matchDays: [],
    queryKey: "",
-   suspendAutoJump: false, // blochează auto-jump după navigare manuală
-   suspendScrollSnap: false, // blochează scroll-into-view după interacțiuni manuale
+   suspendAutoJump: false,
+   suspendScrollSnap: false,
    snappedForKey: "",
+   centerOnDateNextTick: false,
 };
-// expune și pe window ca să fie vizibil din ACalendarView
 if (typeof window !== "undefined") {
    window.__DV_NAV_STATE__ = window.__DV_NAV_STATE__ || __DV_NAV_STATE__;
    __DV_NAV_STATE__ = window.__DV_NAV_STATE__;
@@ -34,17 +46,9 @@ function startOfDayTs(d) {
    const x = new Date(d);
    return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 }
-const minutesBetween = (d1, d2) => Math.round((d2 - d1) / 60000);
+const DAY_MS = 24 * 60 * 60 * 1000;
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-const isSameDay = (d1, d2) => {
-   const a = new Date(d1),
-      b = new Date(d2);
-   return (
-      a.getFullYear() === b.getFullYear() &&
-      a.getMonth() === b.getMonth() &&
-      a.getDate() === b.getDate()
-   );
-};
+
 const genId = () => {
    try {
       if (
@@ -55,20 +59,13 @@ const genId = () => {
    } catch {}
    return `ev_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 };
-const uniqBy = (arr, keyFn) => {
-   const seen = new Set();
-   return (arr || []).filter((x) => {
-      const k = keyFn(x);
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-   });
-};
+
 const hhmm = (d) => {
    const H = String(new Date(d).getHours()).padStart(2, "0");
    const M = String(new Date(d).getMinutes()).padStart(2, "0");
    return `${H}:${M}`;
 };
+
 const escapeRegExp = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const norm = (s = "") =>
    s
@@ -80,135 +77,393 @@ const digitsOnly = (s = "") => s.toString().replace(/\D+/g, "");
 const normPlate = (s = "") => s.toString().replace(/[\s-]/g, "").toUpperCase();
 const hasAlphaNum = (s = "") => /[a-z0-9]/i.test(s);
 
-// === Highlight helpers (multi-token)
-const getGroupOrder = (g) => {
-   const v = Number(g?.order ?? g?.sortOrder ?? Infinity);
-   return Number.isFinite(v) ? v : Infinity; // cele fără order merg la final
-};
 function buildHighlightRegex(parts, flags = "gi") {
    const list = Array.from(new Set(parts.filter(Boolean).map(escapeRegExp)));
    if (!list.length) return null;
    return new RegExp(`(${list.join("|")})`, flags);
 }
-function highlightWithRegex(text, rx) {
-   if (!text || !rx) return text;
-   const parts = String(text).split(rx);
-   return parts.map((part, i) =>
-      rx.exec(part) ? (
-         <i key={i} className="highlight">
-            {part}
-         </i>
-      ) : (
-         part
-      )
-   );
+
+// grupează în rânduri de N și, opțional, completează ultimul rând la N
+function toRowsOfN(list, n, pad = true) {
+   const rows = [];
+   for (let i = 0; i < list.length; i += n) {
+      const chunk = list.slice(i, i + n);
+      if (pad) {
+         while (chunk.length < n) {
+            chunk.push({
+               inst: { id: `__pad_${i}_${chunk.length}`, name: "" },
+               events: [],
+            });
+         }
+      }
+      rows.push(chunk);
+   }
+   return rows;
 }
-function highlightTokens(text, tokens) {
-   if (!tokens || !tokens.length) return text;
-   const searchParts = [];
-   tokens.forEach((t) => {
-      if (t.norm) searchParts.push(t.raw);
-      if (t.digits) searchParts.push(t.digits);
-      if (t.plate) searchParts.push(t.plate);
-      if (t.hhmmPrefix) searchParts.push(t.hhmmPrefix);
-   });
-   const rx = buildHighlightRegex(searchParts);
-   return highlightWithRegex(text, rx);
+
+/* ====== localStorage cache pt. order ====== */
+// FORCE TOKENS: dacă order e JSON ({"all":{x,y},"days":{YYYYMMDD:{x,y}}})
+// îl convertim în "allx{X}y{Y}|YYYYMMDDx{X}y{Y}|..."
+function coerceOrderToTokens(orderStr) {
+   if (!orderStr) return "";
+   try {
+      const obj = JSON.parse(orderStr);
+      if (!obj || typeof obj !== "object") return orderStr; // deja tokens
+      const tokens = [];
+      if (obj.all && obj.all.x && obj.all.y) {
+         tokens.push(`allx${obj.all.x}y${obj.all.y}`);
+      }
+      if (obj.days && typeof obj.days === "object") {
+         Object.entries(obj.days).forEach(([k, v]) => {
+            if (v && v.x && v.y) tokens.push(`${k}x${v.x}y${v.y}`);
+         });
+      }
+      return tokens.join("|");
+   } catch {
+      return orderStr; // nu e JSON, lăsăm așa (tokens)
+   }
 }
-function highlightTimeString(timeStr, tokens) {
-   if (!tokens?.length) return timeStr;
-   const timePieces = tokens
-      .filter((t) => t.kind === "time")
-      .map((t) => t.hhmm || t.hhmmPrefix)
-      .filter(Boolean);
-   const rx = buildHighlightRegex(timePieces);
-   return highlightWithRegex(timeStr, rx);
-}
+
+const ORDER_LS_KEY = "dv_order_cache";
+const loadOrderCache = () => {
+   if (typeof window === "undefined") return {};
+   try {
+      return JSON.parse(localStorage.getItem(ORDER_LS_KEY) || "{}") || {};
+   } catch {
+      return {};
+   }
+};
+const saveOrderCache = (obj) => {
+   if (typeof window === "undefined") return;
+   try {
+      localStorage.setItem(ORDER_LS_KEY, JSON.stringify(obj || {}));
+   } catch {}
+};
 
 export default function CustomDayView(props = {}) {
+   const { onViewStudent } = props;
    const date = props.date ? new Date(props.date) : new Date();
-   const { onViewStudent, onChangeColor, onJumpToDate } = props;
-   const dispatch = useDispatch();
-   const [pendingOrder, setPendingOrder] = useState({}); // { [groupId]: number }
 
-   // READY FLAGS
-   const [indexReady, setIndexReady] = useState(false);
-   const hasPrefetchedAllRef = useRef(false);
+   const scrollRef = useRef(null);
+
+   // RANGE COMPLET
+   const [rangeStartTs, setRangeStartTs] = useState(startOfDayTs(date));
+   const [rangeDays, setRangeDays] = useState(1);
+   const [editMode, setEditMode] = useState(false);
+
+   // order overrides
+   const [orderOverrides, setOrderOverrides] = useState(() => loadOrderCache());
+
+   useEffect(() => {
+      saveOrderCache(orderOverrides);
+      dayCacheRef.current.clear();
+   }, [orderOverrides]);
+
+   const visibleDays = useMemo(
+      () =>
+         Array.from(
+            { length: rangeDays },
+            (_, i) => new Date(rangeStartTs + i * DAY_MS)
+         ),
+      [rangeStartTs, rangeDays]
+   );
+
+   useEffect(() => {
+      const ts = startOfDayTs(date);
+      if (ts < rangeStartTs || ts > rangeStartTs + (rangeDays - 1) * DAY_MS) {
+         setRangeStartTs(ts);
+      }
+   }, [date, rangeStartTs, rangeDays]);
+
+   const dispatch = useDispatch();
+   const LESSON_MINUTES = 90;
 
    // Layout
    const layout = props.layout || {};
-   const SLOT_H = layout.slotHeight ?? "40px"; // 30min
-   const HOURS_COL_W = layout.hoursColWidth ?? "160px";
-   const COL_W = layout.colWidth ?? "120px"; // lățime col instructor
-   const GROUP_GAP = layout.groupGap ?? "12px";
-   const CONTAINER_H = layout.containerHeight; // ex. "80vh" sau "700px"
+   const EVENT_H = layout.eventHeight ?? "48px";
+   const SLOT_H = layout.slotHeight ?? "40px";
+   const HOURS_COL_W = layout.hoursColWidth ?? "60px";
+   const COL_W = layout.colWidth ?? "60px";
+   const ROW_GAP = 32;
+   const DAY_GAP = 32;
+   const GROUP_GAP = layout.groupGap ?? "32px";
+   const CONTAINER_H = layout.containerHeight;
 
-   // zoom
+   // === ZOOM (instant) ============================================
    const [zoom, setZoom] = useState(1);
-   const Z_MIN = 0.6,
-      Z_MAX = 2.5,
-      Z_STEP = 0.1;
-   const incZoom = () =>
-      setZoom((z) => clamp(Math.round((z + Z_STEP) * 10) / 10, Z_MIN, Z_MAX));
-   const decZoom = () =>
-      setZoom((z) => clamp(Math.round((z - Z_STEP) * 10) / 10, Z_MIN, Z_MAX));
-   const resetZoom = () => setZoom(1);
+   const Z_MIN = 0.3,
+      Z_MAX = 3.0;
+
+   const setZoomClamped = useCallback((val) => {
+      const z = Math.max(Z_MIN, Math.min(Z_MAX, val));
+      setZoom(z);
+      return z;
+   }, []);
+
+   const getZoom = useCallback(() => zoom, [zoom]);
+
+   // butoane ±: zoom instant & ancorare la cursor/centru
+   const zoomAtPoint = useCallback(
+      (newZ, clientX) => {
+         const el = scrollRef.current;
+         if (!el) {
+            setZoomClamped(newZ);
+            return;
+         }
+         const oldZ = zoom;
+         const z = setZoomClamped(newZ);
+         const s = z / oldZ;
+
+         const rect = el.getBoundingClientRect();
+         const x = (clientX ?? rect.left + el.clientWidth / 2) - rect.left; // coordonate locale
+         el.scrollLeft = (el.scrollLeft + x) * s - x;
+      },
+      [zoom, setZoomClamped]
+   );
+
+   const incZoom = useCallback(
+      (e) => {
+         const mult = 1.3; // mai agresiv
+         zoomAtPoint(zoom * mult, e?.clientX);
+      },
+      [zoom, zoomAtPoint]
+   );
+
+   const decZoom = useCallback(
+      (e) => {
+         const mult = 1.3;
+         zoomAtPoint(zoom / mult, e?.clientX);
+      },
+      [zoom, zoomAtPoint]
+   );
+
+   const resetZoom = useCallback(
+      (e) => {
+         zoomAtPoint(1, e?.clientX);
+      },
+      [zoomAtPoint]
+   );
+
+   // zoom ancorat pe poziția mouse-ului (pentru wheel/pinch)
+   const zoomAt = useCallback(
+      (factor, clientX) => {
+         const el = scrollRef.current;
+         if (!el) return;
+         const oldZ = getZoom();
+         const newZ = setZoomClamped(oldZ * factor);
+         const s = newZ / oldZ;
+
+         const x = clientX - el.getBoundingClientRect().left;
+         el.scrollLeft = (el.scrollLeft + x) * s - x;
+      },
+      [getZoom, setZoomClamped]
+   );
+
+   // Ctrl/⌘/Alt + rotiță: zoom instant & mai rapid
+   useEffect(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+
+      const wheelHandler = (e) => {
+         // pinch pe touchpad sau Ctrl/Meta/Alt => zoom pe calendar
+         if (e.ctrlKey || e.metaKey || e.altKey) {
+            e.preventDefault(); // IMPORTANT: oprește zoomul paginii
+            e.stopPropagation();
+
+            // mai hotărât: ~1.35x per "notch" (ajustează baza dacă vrei)
+            const factor = Math.pow(1.0035, -e.deltaY);
+            const clientX =
+               e.clientX ??
+               el.getBoundingClientRect().left + el.clientWidth / 2;
+
+            zoomAt(factor, clientX);
+            return;
+         }
+         // altfel e scroll normal -> îl lăsăm
+      };
+
+      el.addEventListener("wheel", wheelHandler, { passive: false });
+      return () => el.removeEventListener("wheel", wheelHandler);
+   }, [zoomAt]);
 
    const [sectorFilter, setSectorFilter] = useState("Botanica");
    const sectorFilterNorm = sectorFilter.toLowerCase();
    const eventMatchesSector = useCallback(
-      (ev) => (ev?.sector || "").toLowerCase() === sectorFilterNorm,
+      (ev) => {
+         const s = (ev?.sector || "").toString().trim().toLowerCase();
+         if (!s) return true;
+         return s === sectorFilterNorm;
+      },
       [sectorFilterNorm]
    );
 
-   const layoutVars = {
-      "--zoom": zoom,
-      "--slot-h": `calc(${SLOT_H} * var(--zoom))`,
-      "--hours-col-w": HOURS_COL_W,
-      "--group-gap": GROUP_GAP,
+   // === ORDER ENCODING (compact iN + compat x/y) ==================
+   const ORDER_SEP = "|";
+   const COLS = 3; // ține în sync cu maxColsPerGroup
+
+   const dateKey = (d) => {
+      const x = new Date(d);
+      return `${x.getFullYear()}${String(x.getMonth() + 1).padStart(
+         2,
+         "0"
+      )}${String(x.getDate()).padStart(2, "0")}`;
    };
 
-   // timp
-   const startHour = 7;
-   const endHour = 21;
-   const slotMinutes = 30;
-   const maxColsPerGroup = 3;
-   const timeMarks = [
-      "07:00",
-      "08:30",
-      "10:00",
-      "11:30",
-      "13:30",
-      "15:00",
-      "16:30",
-      "18:00",
-      "19:30",
-   ];
-   const HIDDEN_INTERVALS = useMemo(
-      () => [{ start: "13:00", end: "13:30" }],
-      []
-   );
+   const month3 = {
+      jan: "01",
+      feb: "02",
+      mar: "03",
+      apr: "04",
+      may: "05",
+      mai: "05",
+      jun: "06",
+      iun: "06",
+      jul: "07",
+      iul: "07",
+      aug: "08",
+      sep: "09",
+      oct: "10",
+      nov: "11",
+      noi: "11",
+      dec: "12",
+   };
 
+   const splitTokens = (str) =>
+      String(str || "")
+         .split(ORDER_SEP)
+         .map((t) => t.trim())
+         .filter(Boolean);
+
+   const xyToIdx = (x, y) => (y - 1) * COLS + x; // x=1..3, y>=1
+   const idxToXY = (i) => {
+      const n = Math.max(1, Number(i) || 1);
+      const y = Math.floor((n - 1) / COLS) + 1;
+      const x = ((n - 1) % COLS) + 1;
+      return { x, y };
+   };
+
+   function parseOrderToken(tok) {
+      const s = String(tok || "").trim();
+      if (!s) return null;
+
+      // === Zi cu index iN: YYYYMMDDiN
+      let m = /^(\d{4})(\d{2})(\d{2})i(\d+)$/i.exec(s);
+      if (m)
+         return { kind: "day", key: `${m[1]}${m[2]}${m[3]}`, i: Number(m[4]) };
+
+      // Zi cu index iN: DDmmmYYYYiN (03feb2025i7)
+      m = /^(\d{1,2})([a-z]{3})(\d{4})i(\d+)$/i.exec(s);
+      if (m) {
+         const dd = String(m[1]).padStart(2, "0");
+         const mm = month3[m[2].toLowerCase()] || "01";
+         return { kind: "day", key: `${m[3]}${mm}${dd}`, i: Number(m[4]) };
+      }
+
+      // ALL implicit cu index: alliN
+      m = /^(all|def)i(\d+)$/i.exec(s);
+      if (m) return { kind: "all", key: "ALL", i: Number(m[2]) };
+
+      // ====== Compatibilitate veche (x/y) ======
+
+      // Zi cu x/y: YYYYMMDDxXyY
+      m = /^(\d{4})(\d{2})(\d{2})x(\d+)y(\d+)$/i.exec(s);
+      if (m) {
+         const x = Number(m[4]),
+            y = Number(m[5]);
+         return { kind: "day", key: `${m[1]}${m[2]}${m[3]}`, i: xyToIdx(x, y) };
+      }
+
+      // Zi cu x/y: DDmmmYYYYxXyY
+      m = /^(\d{1,2})([a-z]{3})(\d{4})x(\d+)y(\d+)$/i.exec(s);
+      if (m) {
+         const dd = String(m[1]).padStart(2, "0");
+         const mm = month3[m[2].toLowerCase()] || "01";
+         const x = Number(m[4]),
+            y = Number(m[5]);
+         return { kind: "day", key: `${m[3]}${mm}${dd}`, i: xyToIdx(x, y) };
+      }
+
+      // ALL cu x/y: allxXyY
+      m = /^(all|def)x(\d+)y(\d+)$/i.exec(s);
+      if (m) {
+         const x = Number(m[2]),
+            y = Number(m[3]);
+         return { kind: "all", key: "ALL", i: xyToIdx(x, y) };
+      }
+
+      return null;
+   }
+
+   function getPosFromOrder(orderStr, d) {
+      const key = dateKey(d);
+      let allIdx = null;
+      for (const tok of splitTokens(orderStr)) {
+         const p = parseOrderToken(tok);
+         if (!p) continue;
+         if (p.kind === "day" && p.key === key) return idxToXY(p.i);
+         if (p.kind === "all") allIdx = p.i;
+      }
+      return allIdx != null ? idxToXY(allIdx) : null;
+   }
+
+   function upsertPosInOrder(orderStr, d, x, y) {
+      const key = dateKey(d);
+      const nextTok = `${key}i${xyToIdx(x, y)}`;
+      const out = [];
+      let replaced = false;
+
+      for (const tok of splitTokens(orderStr)) {
+         const p = parseOrderToken(tok);
+         if (p && p.kind === "day" && p.key === key) {
+            if (!replaced) {
+               out.push(nextTok);
+               replaced = true;
+            }
+         } else {
+            out.push(tok);
+         }
+      }
+      if (!replaced) out.push(nextTok);
+      return out.join(ORDER_SEP);
+   }
+
+   function ensureAllToken(orderStr, x, y) {
+      const nextTok = `alli${xyToIdx(x, y)}`;
+      const out = [];
+      let hadAll = false;
+
+      for (const tok of splitTokens(orderStr)) {
+         const p = parseOrderToken(tok);
+         if (p && p.kind === "all") {
+            if (!hadAll) {
+               out.push(nextTok);
+               hadAll = true;
+            }
+         } else {
+            out.push(tok);
+         }
+      }
+      if (!hadAll) out.push(nextTok);
+      return out.join(ORDER_SEP);
+   }
+
+   // === DATA ======================================================
+   const hasPrefetchedAllRef = useRef(false);
    useEffect(() => {
       if (hasPrefetchedAllRef.current) return;
       hasPrefetchedAllRef.current = true;
-
-      let active = true;
       (async () => {
          try {
             await Promise.all([
                dispatch(fetchInstructorsGroups()),
                dispatch(fetchStudents()),
                dispatch(fetchAllReservations({ scope: "all", pageSize: 5000 })),
+               dispatch(fetchCars()),
+               dispatch(fetchUsers()),
             ]);
          } finally {
-            if (active) setIndexReady(true);
          }
       })();
-
-      return () => {
-         active = false;
-      };
    }, [dispatch]);
 
    const instructorsGroups = useSelector(
@@ -233,30 +488,35 @@ export default function CustomDayView(props = {}) {
          (instructorsGroups?.length ?? 0) > 0,
       [reservations?.length, students?.length, instructorsGroups?.length]
    );
-   useEffect(() => {
-      if (indexReady) return;
-      const hasAny =
-         (reservations?.length ?? 0) > 0 ||
-         (students?.length ?? 0) > 0 ||
-         (instructorsGroups?.length ?? 0) > 0;
-      if (hasAny) setIndexReady(true);
-   }, [
-      indexReady,
-      reservations?.length,
-      students?.length,
-      instructorsGroups?.length,
-   ]);
 
    const dayStart = useMemo(() => {
       const s = new Date(date);
-      s.setHours(startHour, 0, 0, 0);
+      s.setHours(7, 0, 0, 0);
       return s;
-   }, [date, startHour]);
+   }, [date]);
    const dayEnd = useMemo(() => {
       const e = new Date(date);
-      e.setHours(endHour, 0, 0, 0);
+      e.setHours(21, 0, 0, 0);
       return e;
-   }, [date, endHour]);
+   }, [date]);
+
+   const maxColsPerGroup = 3;
+   const timeMarks = [
+      "07:00",
+      "08:30",
+      "10:00",
+      "11:30",
+      "13:30",
+      "15:00",
+      "16:30",
+      "18:00",
+      "19:30",
+   ];
+
+   const HIDDEN_INTERVALS = useMemo(
+      () => [{ start: "13:00", end: "13:30" }],
+      []
+   );
    const mkTime = useCallback(
       (str) => {
          const [h, m] = str.split(":").map(Number);
@@ -266,6 +526,46 @@ export default function CustomDayView(props = {}) {
       },
       [dayStart]
    );
+
+   const mkStandardSlotsForDay = useCallback(
+      (baseDayDate) => {
+         const base = new Date(baseDayDate);
+         base.setHours(0, 0, 0, 0);
+         const mkLocal = (str) => {
+            const [h, m] = str.split(":").map(Number);
+            const d = new Date(base);
+            d.setHours(h, m, 0, 0);
+            return d;
+         };
+         const hiddenLocal = HIDDEN_INTERVALS.map(({ start, end }) => ({
+            start: mkLocal(start),
+            end: mkLocal(end),
+         }));
+         const dayStartLocal = new Date(base);
+         dayStartLocal.setHours(7, 0, 0, 0);
+         const dayEndLocal = new Date(base);
+         dayEndLocal.setHours(21, 0, 0, 0);
+         const overlaps = (aStart, aEnd, bStart, bEnd) =>
+            Math.max(aStart.getTime(), bStart.getTime()) <
+            Math.min(aEnd.getTime(), bEnd.getTime());
+         return timeMarks
+            .map((t) => {
+               const start = mkLocal(t);
+               const end = new Date(start.getTime() + LESSON_MINUTES * 60000);
+               return { start, end };
+            })
+            .filter(
+               ({ start, end }) =>
+                  start >= dayStartLocal &&
+                  end <= dayEndLocal &&
+                  !hiddenLocal.some((hi) =>
+                     overlaps(start, end, hi.start, hi.end)
+                  )
+            );
+      },
+      [timeMarks, HIDDEN_INTERVALS, LESSON_MINUTES]
+   );
+
    const hiddenAbs = useMemo(
       () =>
          HIDDEN_INTERVALS.map(({ start, end }) => ({
@@ -275,31 +575,6 @@ export default function CustomDayView(props = {}) {
       [HIDDEN_INTERVALS, mkTime]
    );
 
-   // --- Gaps helpers: blocuri vizibile (zi fără HIDDEN) + golurile din coloană ---
-   const buildVisibleBlocks = useCallback(() => {
-      const blocks = [];
-      let cur = dayStart;
-      const sortedHidden = hiddenAbs.slice().sort((a, b) => a.start - b.start);
-      for (const hi of sortedHidden) {
-         if (hi.start > cur) blocks.push({ start: cur, end: hi.start });
-         if (hi.end > cur) cur = hi.end;
-      }
-      if (cur < dayEnd) blocks.push({ start: cur, end: dayEnd });
-      return blocks;
-   }, [dayStart, dayEnd, hiddenAbs]);
-   const LESSON_MINUTES = 90;
-   const getOrder = useCallback(
-      (g) => {
-         const id = String(g?.id);
-         if (pendingOrder[id] != null) return pendingOrder[id];
-         const v = Number(g?.order ?? g?.sortOrder);
-         return Number.isFinite(v) ? v : Infinity;
-      },
-      [pendingOrder]
-   );
-
-   // Sloturi standard ale zilei, derivate din timeMarks.
-   // HOISTED: folosită peste tot fără TDZ
    function overlapMinutes(aStart, aEnd, bStart, bEnd) {
       const start = Math.max(aStart.getTime(), bStart.getTime());
       const end = Math.min(aEnd.getTime(), bEnd.getTime());
@@ -312,169 +587,14 @@ export default function CustomDayView(props = {}) {
          const end = new Date(start.getTime() + LESSON_MINUTES * 60000);
          return { start, end };
       });
-
       return slots.filter(({ start, end }) => {
          if (start < dayStart || end > dayEnd) return false;
-         // fără coliziuni cu HIDDEN_INTERVALS (ex. 13:00-13:30)
-         for (const hi of hiddenAbs) {
+         for (const hi of hiddenAbs)
             if (overlapMinutes(start, end, hi.start, hi.end) > 0) return false;
-         }
          return true;
       });
    }, [timeMarks, mkTime, LESSON_MINUTES, dayStart, dayEnd, hiddenAbs]);
-   // returnează sloturile standard rămase libere (fără evenimente care le ating)
-   const makeVirtualLessonSlots = useCallback(
-      (allInstEvents = []) => {
-         const std = mkStandardSlots();
-         if (!std.length) return [];
-         return std.filter((slot) => {
-            return !(allInstEvents || []).some((ev) => {
-               return (
-                  overlapMinutes(ev.start, ev.end, slot.start, slot.end) > 0
-               );
-            });
-         });
-      },
-      [mkStandardSlots]
-   );
-   // ===== VIRTUAL EMPTY SLOTS (90 min, culoare --normal, nu se poate schimba) =====
-   // ===== VIRTUAL EMPTY SLOTS (doar start + color) =====
-   // ===== VIRTUAL EMPTY SLOTS (90 min, culoare --normal, doar ora) =====
-   const buildEmptySlotsForAllInstructors = useCallback(
-      (eventsForDay = []) => {
-         // evenimentele existente pe instructor
-         const byInst = new Map();
-         eventsForDay.forEach((ev) => {
-            const i = String(ev.instructorId ?? "__unknown");
-            if (i === "__empty" || i === "__unknown") return; // nu facem sloturi pe coloana placeholder
-            if (!byInst.has(i)) byInst.set(i, []);
-            byInst.get(i).push(ev);
-         });
 
-         // toți instructorii vizibili (din grupe) + cei care apar doar în rezervări
-         const allInstIds = new Set([
-            ...(instructorsGroups || []).flatMap((g) =>
-               (g.instructors || [])
-                  .map((i) => String(i.id))
-                  .filter((id) => id !== "__empty" && id !== "__unknown")
-            ),
-            ...Array.from(byInst.keys()),
-         ]);
-
-         const empty = [];
-         for (const instId of allInstIds) {
-            const base = byInst.get(instId) || [];
-            const free = makeVirtualLessonSlots(base); // folosește timeMarks + HIDDEN
-
-            // meta de grupă/sector pentru instructor
-            const grpId = findGroupForInstructor(instId) ?? "__ungrouped";
-            const gObj = (instructorsGroups || []).find(
-               (g) => String(g.id) === String(grpId)
-            );
-            const groupName = gObj?.name || (gObj ? `Grupa ${gObj.id}` : "");
-            const sector = (
-               gObj?.sector ||
-               gObj?.location ||
-               gObj?.area ||
-               gObj?.zone ||
-               ""
-            ).toString();
-
-            free.forEach((slot) => {
-               empty.push({
-                  id: `empty_${instId}_${slot.start.getTime()}`,
-                  title: "Liber",
-                  start: slot.start,
-                  end: slot.end,
-                  instructorId: String(instId),
-                  groupId: grpId,
-                  groupName,
-                  sector,
-
-                  // DOAR ca marcatori (nu afișăm)
-                  studentId: null,
-                  studentFirst: "",
-                  studentLast: "",
-                  studentPhone: null,
-                  privateMessage: "",
-
-                  // culoare blocată + tip virtual
-                  color: "--normal",
-                  isVirtual: true,
-                  lockColor: true,
-               });
-            });
-         }
-         return empty;
-      },
-      [instructorsGroups, makeVirtualLessonSlots]
-   );
-
-   const totalHiddenMins = useMemo(
-      () =>
-         hiddenAbs.reduce(
-            (acc, hi) =>
-               acc + overlapMinutes(dayStart, dayEnd, hi.start, hi.end),
-            0
-         ),
-      [hiddenAbs, dayStart, dayEnd]
-   );
-   const visibleTotalMinutes = useMemo(
-      () => Math.max(0, minutesBetween(dayStart, dayEnd) - totalHiddenMins),
-      [dayStart, dayEnd, totalHiddenMins]
-   );
-   const toVisibleMinutes = useCallback(
-      (dt) => {
-         const clamped = new Date(
-            clamp(new Date(dt).getTime(), dayStart.getTime(), dayEnd.getTime())
-         );
-         let mins = minutesBetween(dayStart, clamped);
-         for (const hi of hiddenAbs)
-            mins -= overlapMinutes(dayStart, clamped, hi.start, hi.end);
-         return clamp(mins, 0, visibleTotalMinutes);
-      },
-      [dayStart, dayEnd, hiddenAbs, visibleTotalMinutes]
-   );
-   const toTopSlots = useCallback(
-      (d) => toVisibleMinutes(d) / slotMinutes,
-      [toVisibleMinutes, slotMinutes]
-   );
-   const isWithinHidden = useCallback(
-      (d) =>
-         hiddenAbs.some(
-            (hi) => new Date(d) >= hi.start && new Date(d) < hi.end
-         ),
-      [hiddenAbs]
-   );
-   const visibleSlotCount = useMemo(
-      () => Math.ceil(visibleTotalMinutes / slotMinutes),
-      [visibleTotalMinutes, slotMinutes]
-   );
-
-   const findGroupForInstructor = (instructorId) => {
-      if (!instructorId) return null;
-      const g = (instructorsGroups || []).find((grp) =>
-         (grp.instructors || []).some(
-            (i) => String(i.id) === String(instructorId)
-         )
-      );
-      return g ? String(g.id) : null;
-   };
-
-   const studentDict = useMemo(() => {
-      const map = new Map();
-      (students || []).forEach((u) => {
-         map.set(String(u.id), {
-            id: String(u.id),
-            firstName: u.firstName ?? u.prenume ?? "",
-            lastName: u.lastName ?? u.nume ?? "",
-            phone: u.phone ?? u.phoneNumber ?? u.mobile ?? u.telefon ?? null,
-         });
-      });
-      return map;
-   }, [students]);
-
-   // instructor meta
    const instructorPlates = useMemo(() => {
       const m = new Map();
       (cars || []).forEach((c) => {
@@ -515,6 +635,7 @@ export default function CustomDayView(props = {}) {
             i.gearbox ??
             i.transmission ??
             null;
+
          dict.set(id, {
             name,
             nameNorm: norm(name),
@@ -523,34 +644,233 @@ export default function CustomDayView(props = {}) {
             plateNorm: normPlate(plate),
             plateDigits: digitsOnly(plate),
             gearbox: gearbox ? String(gearbox).toLowerCase() : null,
+            orderRaw: i.order ?? "",
          });
       });
       return dict;
    }, [instructors, instructorPlates]);
 
-   // Facts pentru match unitar pe eveniment
-   const makeFacts = (ev) => {
-      const inst = instructorMeta.get(String(ev.instructorId)) || {};
-      const studentFull = `${ev.studentFirst || ""} ${
-         ev.studentLast || ""
-      }`.trim();
-      return {
-         studentName: norm(studentFull),
-         instName: inst.nameNorm || "",
-         phones: [
-            digitsOnly(ev.studentPhone || ""),
-            inst.phoneDigits || "",
-         ].filter(Boolean),
-         time: hhmm(ev.start),
-         plateNorm: inst.plateNorm || "",
-         plateDigits: inst.plateDigits || "",
-         groupName: norm(ev.groupName || ""),
-         note: norm(ev.privateMessage || ""),
-      };
+   const getOrderStringForInst = useCallback(
+      (instId) => {
+         const id = String(instId);
+         return orderOverrides[id] ?? instructorMeta.get(id)?.orderRaw ?? "";
+      },
+      [orderOverrides, instructorMeta]
+   );
+
+   // INITIAL ALL
+   useEffect(() => {
+      if (!instructors?.length) return;
+
+      const ids = instructors
+         .map((i) => String(i.id))
+         .sort((a, b) => {
+            const na = Number(a),
+               nb = Number(b);
+            if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+            return String(a).localeCompare(String(b), undefined, {
+               numeric: true,
+            });
+         });
+
+      const add = {};
+      const calls = [];
+
+      ids.forEach((iid, idx) => {
+         const current = getOrderStringForInst(iid);
+         if ((current || "").trim()) return;
+
+         const x = (idx % maxColsPerGroup) + 1;
+         const y = Math.floor(idx / maxColsPerGroup) + 1;
+         const withAll = ensureAllJSON("", x, y);
+         add[iid] = withAll;
+         calls.push([iid, withAll]);
+      });
+
+      if (Object.keys(add).length) {
+         setOrderOverrides((prev) => ({ ...prev, ...add }));
+         calls.forEach(([iid, val]) =>
+            props.onChangeInstructorOrder?.(iid, val)
+         );
+      }
+   }, [instructors, getOrderStringForInst, props.onChangeInstructorOrder]);
+
+   const setInstructorOrderForDate = useCallback(
+      (instId, dayDate, x, y) => {
+         const id = String(instId);
+         const current = getOrderStringForInst(id);
+         const updated = upsertPosGeneric(current, dayDate, x, y);
+
+         console.log("[ORDER local → tokens]", { instructorId: id, updated });
+
+         setOrderOverrides((prev) => {
+            const next = { ...prev, [id]: updated };
+            saveOrderCache(next);
+            return next;
+         });
+
+         props.onChangeInstructorOrder?.(id, updated);
+      },
+      [getOrderStringForInst, props]
+   );
+
+   const computeOrderedInstIdsForDay = useCallback(
+      (allInstIds, dayDate, cols = 3) => {
+         const ids = Array.from(allInstIds);
+         const byId = (a, b) => {
+            const na = Number(a),
+               nb = Number(b);
+            if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+            return String(a).localeCompare(String(b), undefined, {
+               numeric: true,
+            });
+         };
+         ids.sort(byId);
+
+         let maxY = 1;
+         for (const iid of ids) {
+            const pos = getPosGeneric(getOrderStringForInst(iid), dayDate) || {
+               x: (ids.indexOf(iid) % cols) + 1,
+               y: Math.floor(ids.indexOf(iid) / cols) + 1,
+            };
+            if (pos && pos.x >= 1 && pos.y >= 1) maxY = Math.max(maxY, pos.y);
+         }
+
+         const rows = Math.max(Math.ceil(ids.length / cols) || 1, maxY);
+         const totalSlots = rows * cols;
+         const slots = new Array(totalSlots).fill(null);
+
+         const placed = new Set();
+         for (const iid of ids) {
+            const pos = getPosGeneric(getOrderStringForInst(iid), dayDate);
+            if (!pos) continue;
+            const x = clamp(pos.x, 1, cols);
+            const y = clamp(pos.y, 1, rows);
+            const idx = (y - 1) * cols + (x - 1);
+            if (slots[idx] == null) {
+               slots[idx] = iid;
+               placed.add(iid);
+            }
+         }
+
+         for (const iid of ids) {
+            if (placed.has(iid)) continue;
+            const idx = slots.findIndex((v) => v == null);
+            if (idx === -1) break;
+            slots[idx] = iid;
+            placed.add(iid);
+         }
+
+         const orderedIds = slots.filter(Boolean);
+         return { orderedIds, rows };
+      },
+      [getOrderStringForInst]
+   );
+
+   const nudgeInstructor = useCallback(
+      (instId, dayDate, dx, dy, fallbackX, fallbackY, rowsCount, cols = 3) => {
+         const orderStr = getOrderStringForInst(instId);
+         const cur = getPosGeneric(orderStr, dayDate) || {
+            x: fallbackX,
+            y: fallbackY,
+         };
+
+         const tx = clamp(cur.x + dx, 1, cols);
+         const ty = clamp(cur.y + dy, 1, rowsCount);
+         if (tx === cur.x && ty === cur.y) return;
+
+         const allInstIds = new Set(
+            (instructors || []).map((i) => String(i.id))
+         );
+         const { orderedIds } = computeOrderedInstIdsForDay(
+            allInstIds,
+            dayDate,
+            cols
+         );
+         const targetIdx = (ty - 1) * cols + (tx - 1);
+         const occupantId = orderedIds[targetIdx] || null;
+
+         setInstructorOrderForDate(instId, dayDate, tx, ty);
+
+         if (occupantId && String(occupantId) !== String(instId)) {
+            setInstructorOrderForDate(occupantId, dayDate, cur.x, cur.y);
+         }
+      },
+      [
+         instructors,
+         computeOrderedInstIdsForDay,
+         getOrderStringForInst,
+         setInstructorOrderForDate,
+      ]
+   );
+
+   const visibleSlotCount = useMemo(
+      () => mkStandardSlots().length,
+      [mkStandardSlots]
+   );
+
+   const findGroupForInstructor = (instructorId) => {
+      if (!instructorId) return null;
+      const g = (instructorsGroups || []).find((grp) =>
+         (grp.instructors || []).some(
+            (i) => String(i.id) === String(instructorId)
+         )
+      );
+      return g ? String(g.id) : null;
    };
 
-   // === SEARCH ===
+   const studentDict = useMemo(() => {
+      const map = new Map();
+      (students || []).forEach((u) => {
+         map.set(String(u.id), {
+            id: String(u.id),
+            firstName: u.firstName ?? u.prenume ?? "",
+            lastName: u.lastName ?? u.nume ?? "",
+            phone: u.phone ?? u.phoneNumber ?? u.mobile ?? u.telefon ?? null,
+         });
+      });
+      return map;
+   }, [students]);
+
+   const handleCreateFromEmpty = (ev) => {
+      const instId = String(ev.instructorId ?? "");
+      const meta = instructorMeta.get(instId) || {};
+
+      const grpId =
+         ev.groupId && ev.groupId !== "__ungrouped"
+            ? String(ev.groupId)
+            : findGroupForInstructor(instId);
+
+      const gObj =
+         (instructorsGroups || []).find(
+            (g) => String(g.id) === String(grpId)
+         ) || null;
+
+      const sectorVal =
+         ev.sector || gObj?.sector || gObj?.location || "Botanica";
+
+      const gbLabel = (meta.gearbox || "").toLowerCase().includes("auto")
+         ? "Automat"
+         : "Manual";
+
+      openPopup("addProg", {
+         start: ev.start,
+         end: ev.end,
+         instructorId: instId === "__unknown" ? null : instId,
+         sector: sectorVal,
+         gearbox: meta.gearbox || null,
+
+         initialStartTime: new Date(ev.start).toISOString(),
+         initialInstructorId: instId === "__unknown" ? null : instId,
+         initialSector: sectorVal,
+         initialGearbox: gbLabel,
+      });
+   };
+
+   // === SEARCH ====================================================
    const [query, setQuery] = useState("");
+   const deferredQuery = useDeferredValue(query);
+
    const parseToken = (raw) => {
       const t = String(raw || "").trim();
       if (!t) return null;
@@ -595,9 +915,10 @@ export default function CustomDayView(props = {}) {
    };
 
    const rawTokens = useMemo(
-      () => (query || "").split(/\s+/).filter(Boolean),
-      [query]
+      () => (deferredQuery || "").split(/\s+/).filter(Boolean),
+      [deferredQuery]
    );
+
    const tokens = useMemo(() => {
       return rawTokens
          .map(parseToken)
@@ -608,32 +929,47 @@ export default function CustomDayView(props = {}) {
             return true;
          });
    }, [rawTokens]);
+
    const anyTokens = tokens.length > 0;
 
-   const instructorHitsTokens = useCallback(
-      (instId) => {
-         if (!anyTokens) return false;
-         const meta = instructorMeta.get(String(instId));
-         if (!meta) return false;
-         return tokens.some((t) => {
-            if (t.kind === "inst") return meta.nameNorm.includes(t.norm);
-            if (t.kind === "plate")
-               return (meta.plateNorm || "").includes(t.plate);
-            if (t.kind === "digits")
-               return (
-                  (meta.phoneDigits || "").includes(t.digits) ||
-                  (meta.plateDigits || "").includes(t.digits)
-               );
-            if (t.kind === "text")
-               return (
-                  meta.nameNorm.includes(t.norm) ||
-                  (meta.plateNorm || "").includes(t.norm)
-               );
-            return false;
-         });
-      },
-      [anyTokens, tokens, instructorMeta]
-   );
+   const tokensRegex = useMemo(() => {
+      if (!tokens?.length) return null;
+      const parts = [];
+      tokens.forEach((t) => {
+         if (t.norm) parts.push(t.raw);
+         if (t.digits) parts.push(t.digits);
+         if (t.plate) parts.push(t.plate);
+         if (t.hhmmPrefix) parts.push(t.hhmmPrefix);
+      });
+      return buildHighlightRegex(parts);
+   }, [tokens]);
+
+   function highlightTokens(text) {
+      if (!tokensRegex) return text;
+      const s = String(text || "");
+      const html = s.replace(tokensRegex, '<i class="highlight">$1</i>');
+      return <span dangerouslySetInnerHTML={{ __html: html }} />;
+   }
+
+   const makeFacts = (ev) => {
+      const inst = instructorMeta.get(String(ev.instructorId)) || {};
+      const studentFull = `${ev.studentFirst || ""} ${
+         ev.studentLast || ""
+      }`.trim();
+      return {
+         studentName: norm(studentFull),
+         instName: inst.nameNorm || "",
+         phones: [
+            digitsOnly(ev.studentPhone || ""),
+            inst.phoneDigits || "",
+         ].filter(Boolean),
+         time: hhmm(ev.start),
+         plateNorm: inst.plateNorm || "",
+         plateDigits: inst.plateDigits || "",
+         groupName: norm(ev.groupName || ""),
+         note: norm(ev.privateMessage || ""),
+      };
+   };
 
    const tokenHitsFacts = (facts, t) => {
       switch (t.kind) {
@@ -676,7 +1012,7 @@ export default function CustomDayView(props = {}) {
       [anyTokens, tokens, instructorMeta]
    );
 
-   // rezervări -> evenimente (pentru ziua curentă)
+   // rezervări -> evenimente
    const mappedEvents = useMemo(() => {
       const result = (reservations || []).map((r) => {
          const startRaw =
@@ -755,9 +1091,9 @@ export default function CustomDayView(props = {}) {
             : null;
          const gearboxLabel = gearboxNorm
             ? gearboxNorm.includes("auto")
-               ? "Automată"
+               ? "A"
                : gearboxNorm.includes("man")
-               ? "Manuală"
+               ? "M"
                : String(gearboxRaw)
             : null;
 
@@ -803,333 +1139,127 @@ export default function CustomDayView(props = {}) {
             raw: r,
          };
       });
-      return result.filter((ev) => isSameDay(ev.start, date));
+      return result;
    }, [reservations, date, studentDict, instructorsGroups, instructorMeta]);
-   const mappedEventsWithGroup = useMemo(() => {
-      const empties = buildEmptySlotsForAllInstructors(mappedEvents);
-      return [...mappedEvents, ...empties];
-   }, [mappedEvents, buildEmptySlotsForAllInstructors]);
 
-   const baseGroups = useMemo(() => {
-      return (instructorsGroups || [])
-         .slice()
-         .sort(
-            (a, b) =>
-               getOrder(a) - getOrder(b) ||
-               new Date(a.createdAt) - new Date(b.createdAt)
-         )
-         .map((g) => {
-            const raw = Array.isArray(g.instructors) ? g.instructors : [];
-            const clean = uniqBy(raw, (i) => String(i.id))
-               .slice(0, maxColsPerGroup)
-               .map((i) => ({
-                  id: String(i.id),
-                  name:
-                     `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim() ||
-                     `Instr ${i.id}`,
-               }));
-            const list = clean.length
-               ? clean
-               : [{ id: "__empty", name: "— liber —" }];
-            return {
-               id: String(g.id),
-               name: g.name || `Grupa ${g.id}`,
-               sector: (
-                  g.sector ||
-                  g.location ||
-                  g.area ||
-                  g.zone ||
-                  ""
-               ).toString(),
-               instructors: list,
-            };
-         });
-   }, [instructorsGroups]);
+   // RANGE din toate rezervările
+   useEffect(() => {
+      const todayTs = startOfDayTs(new Date());
 
-   const mappedGroups = useMemo(() => {
-      // instructorii care au vreo grupă „oficială”
-      const groupedInstrIds = new Set(
-         (instructorsGroups || []).flatMap((g) =>
-            (Array.isArray(g.instructors) ? g.instructors : []).map((i) =>
-               String(i.id)
-            )
-         )
-      );
-
-      // instructori care AU evenimente fără grupă DAR nu apar în nicio grupă
-      const ungroupedEvents = mappedEventsWithGroup.filter(
-         (ev) => ev.groupId === "__ungrouped"
-      );
-      const uniqUngroupedInstrIds = Array.from(
-         new Set(ungroupedEvents.map((ev) => String(ev.instructorId)))
-      )
-         .filter((id) => !groupedInstrIds.has(id)) // ← doar cei fără grupă reală
-         .slice(0, maxColsPerGroup);
-
-      const instrDict = Object.fromEntries(
-         (instructors || []).map((i) => [
-            String(i.id),
-            `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim() ||
-               `Instr ${i.id}`,
-         ])
-      );
-
-      const specialInstr = uniqUngroupedInstrIds.length
-         ? uniqUngroupedInstrIds.map((id) => ({
-              id,
-              name: instrDict[id] || "Necunoscut",
-           }))
-         : [{ id: "__unknown", name: "Necunoscut" }];
-
-      const baseGroups = (instructorsGroups || [])
-         .slice()
-         .sort(
-            (a, b) =>
-               getOrder(a) - getOrder(b) ||
-               new Date(a.createdAt) - new Date(b.createdAt)
-         )
-         .map((g) => {
-            const raw = Array.isArray(g.instructors) ? g.instructors : [];
-            const clean = uniqBy(raw, (i) => String(i.id))
-               .slice(0, maxColsPerGroup)
-               .map((i) => ({
-                  id: String(i.id),
-                  name:
-                     `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim() ||
-                     `Instr ${i.id}`,
-               }));
-            return {
-               id: String(g.id),
-               name: g.name || `Grupa ${g.id}`,
-               sector: (
-                  g.sector ||
-                  g.location ||
-                  g.area ||
-                  g.zone ||
-                  ""
-               ).toString(),
-               instructors: clean.length
-                  ? clean
-                  : [{ id: "__empty", name: "— liber —" }],
-            };
-         });
-
-      return [
-         ...baseGroups,
-         { id: "__ungrouped", name: "Fără grupă", instructors: specialInstr },
-      ];
-   }, [instructorsGroups, mappedEventsWithGroup, instructors]);
-
-   const eventsByInstructor = useMemo(() => {
-      const map = new Map();
-      mappedEventsWithGroup.forEach((ev) => {
-         const iId = String(ev.instructorId ?? "__unknown");
-         if (!map.has(iId)) map.set(iId, []);
-         map.get(iId).push(ev);
-      });
-      return map;
-   }, [mappedEventsWithGroup]);
-
-   const groupMatchesSector = useCallback(
-      (g) => {
-         if (anyTokens) return true;
-         const gs = (g?.sector || "").toLowerCase();
-         if (gs) return gs === sectorFilterNorm;
-         // dacă grupa nu are sector, verificăm evenimentele instructorilor ei
-         for (const inst of g.instructors || []) {
-            const arr = eventsByInstructor.get(String(inst.id)) || [];
-            if (arr.some(eventMatchesSector)) return true;
-         }
-         return false;
-      },
-      [anyTokens, eventsByInstructor, eventMatchesSector, sectorFilterNorm]
-   );
-
-   const uiGroupsAll = useMemo(() => {
-      const groups = [];
-      const sectorGroups = mappedGroups.filter(groupMatchesSector);
-
-      for (const g of sectorGroups) {
-         const gi = [];
-         const groupNameNorm = norm(g.name);
-
-         for (const inst of g.instructors || []) {
-            // Toate evenimentele instructorului
-            const allInstEvents = eventsByInstructor.get(String(inst.id)) || [];
-
-            // arată TOATE evenimentele acestui instructor, indiferent de groupId
-            const relForGroup = allInstEvents;
-
-            const sectorEvents = anyTokens
-               ? relForGroup
-               : relForGroup.filter(eventMatchesSector);
-            const matchedEvents = anyTokens
-               ? sectorEvents.filter(eventMatchesAllTokens)
-               : sectorEvents;
-
-            const instSelected = instructorHitsTokens(inst.id);
-
-            if (!anyTokens) {
-               gi.push({ inst, events: sectorEvents });
-            } else if (matchedEvents.length) {
-               gi.push({ inst, events: matchedEvents });
-            } else if (instSelected && sectorEvents.length) {
-               gi.push({ inst, events: sectorEvents });
-            } else if (
-               tokens.some(
-                  (t) =>
-                     t.kind === "group" ||
-                     (t.kind === "text" && groupNameNorm.includes(t.norm))
-               )
-            ) {
-               if (sectorEvents.length) gi.push({ inst, events: sectorEvents });
-            }
-         }
-
-         if (gi.length)
-            groups.push({ id: g.id, name: g.name, instructors: gi });
+      if (!mappedEvents || mappedEvents.length === 0) {
+         const PAD = 14;
+         setRangeStartTs(todayTs - PAD * DAY_MS);
+         setRangeDays(1 + PAD * 2);
+         __DV_NAV_STATE__.centerOnDateNextTick = true;
+         return;
       }
 
-      return groups;
+      let minTs = Infinity;
+      let maxTs = -Infinity;
+      for (const ev of mappedEvents) {
+         const s = startOfDayTs(ev.start);
+         const e = startOfDayTs(ev.end || ev.start);
+         if (s < minTs) minTs = s;
+         if (e > maxTs) maxTs = e;
+      }
+      const PAD = 1;
+      minTs = minTs - PAD * DAY_MS;
+      maxTs = maxTs + PAD * DAY_MS;
+
+      const days = Math.max(1, Math.floor((maxTs - minTs) / DAY_MS) + 1);
+      setRangeStartTs(minTs);
+      setRangeDays(days);
+      __DV_NAV_STATE__.centerOnDateNextTick = true;
+   }, [mappedEvents]);
+
+   const eventsByDay = useMemo(() => {
+      const map = new Map();
+      for (const ev of mappedEvents || []) {
+         const ts = startOfDayTs(ev.start);
+         if (!map.has(ts)) map.set(ts, []);
+         map.get(ts).push(ev);
+      }
+      for (const [_, list] of map) list.sort((a, b) => a.start - b.start);
+      return map;
+   }, [mappedEvents]);
+
+   const dayCacheRef = useRef(new Map());
+   const buildUiDay = useCallback(
+      (day) => {
+         const ts = startOfDayTs(day);
+         const cacheKey = `${ts}|${__DV_NAV_STATE__.queryKey}|${sectorFilter}`;
+         const cache = dayCacheRef.current;
+         if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+         const dayEventsRaw = eventsByDay.get(ts) || [];
+         const filtered = dayEventsRaw.filter((ev) => {
+            const sectorOk = anyTokens ? true : eventMatchesSector(ev);
+            const queryOk = eventMatchesAllTokens(ev);
+            return sectorOk && queryOk;
+         });
+
+         const allInstIds = new Set([
+            ...(instructors || []).map((i) => String(i.id)),
+            ...filtered.map((ev) => String(ev.instructorId ?? "__unknown")),
+         ]);
+
+         const { orderedIds, rows } = computeOrderedInstIdsForDay(
+            allInstIds,
+            day,
+            maxColsPerGroup
+         );
+
+         const instructorsForDay = orderedIds.map((iid) => {
+            const name = instructorMeta.get(iid)?.name || "Necunoscut";
+            const events = filtered
+               .filter((e) => String(e.instructorId ?? "__unknown") === iid)
+               .sort((a, b) => a.start - b.start);
+            return { inst: { id: iid, name }, events };
+         });
+
+         const built = {
+            id: `day_${ts}`,
+            date: day,
+            name: day.toLocaleDateString("ro-RO", {
+               weekday: "long",
+               day: "2-digit",
+               month: "long",
+               year: "numeric",
+            }),
+            instructors: instructorsForDay,
+            rowsCount: rows,
+         };
+
+         cache.set(cacheKey, built);
+         return built;
+      },
+      [
+         eventsByDay,
+         anyTokens,
+         eventMatchesSector,
+         eventMatchesAllTokens,
+         instructorMeta,
+         instructors,
+         computeOrderedInstIdsForDay,
+         maxColsPerGroup,
+         sectorFilter,
+      ]
+   );
+   useEffect(() => {
+      dayCacheRef.current.clear();
    }, [
-      mappedGroups,
-      eventsByInstructor,
-      eventMatchesSector,
-      eventMatchesAllTokens,
-      anyTokens,
-      tokens,
-      groupMatchesSector,
-      instructorHitsTokens,
+      eventsByDay,
+      __DV_NAV_STATE__.queryKey,
+      sectorFilter,
+      instructorMeta,
+      instructors,
    ]);
 
-   const uiGroups = useMemo(() => uiGroupsAll, [uiGroupsAll]);
-
-   /* ====== TOATE evenimentele (toate zilele) pentru skip zile ====== */
-   const allEvents = useMemo(() => {
-      return (reservations || []).map((r) => {
-         const startRaw =
-            r.startTime ??
-            r.start ??
-            r.startedAt ??
-            r.start_at ??
-            r.startDate ??
-            r.start_date ??
-            null;
-         const endRaw =
-            r.endTime ?? r.end ?? r.end_at ?? r.endDate ?? r.end_date ?? null;
-         const start = startRaw ? new Date(startRaw) : new Date();
-         const durationMin =
-            r.durationMinutes ??
-            r.slotMinutes ??
-            r.lengthMinutes ??
-            r.duration ??
-            90;
-         const end = endRaw
-            ? new Date(endRaw)
-            : new Date(start.getTime() + durationMin * 60000);
-
-         const instructorIdRaw =
-            r.instructorId ??
-            r.instructor_id ??
-            r.instructor ??
-            r.instructorIdFk ??
-            null;
-         const groupIdRaw =
-            r.instructorsGroupId ??
-            r.instructors_group_id ??
-            r.groupId ??
-            r.group_id ??
-            null;
-
-         const studentIdRaw =
-            r.studentId ??
-            r.userId ??
-            r.clientId ??
-            r.customerId ??
-            r.user_id ??
-            null;
-         const studentId = studentIdRaw != null ? String(studentIdRaw) : null;
-         const fromStore = studentId ? studentDict.get(studentId) : null;
-
-         const fallbackName = r.clientName ?? r.client ?? r.customerName ?? "";
-         const fallbackPhone =
-            r.clientPhone ?? r.phone ?? r.phoneNumber ?? null;
-         const first =
-            fromStore?.firstName ?? (fallbackName.split(" ")[0] || "");
-         const last =
-            fromStore?.lastName ??
-            (fallbackName.split(" ").slice(1).join(" ") || "");
-         const phone = fromStore?.phone ?? fallbackPhone ?? null;
-
-         const instMeta = instructorMeta.get(
-            String(instructorIdRaw ?? "__unknown")
-         );
-         const instPlateNorm = normPlate(instMeta?.plateRaw ?? "");
-
-         const gObj = (instructorsGroups || []).find(
-            (g) => String(g.id) === String(groupIdRaw)
-         );
-         const groupName = gObj?.name || (gObj ? `Grupa ${gObj.id}` : "");
-
-         const isConfirmed = Boolean(
-            r.isConfirmed ??
-               r.confirmed ??
-               r.is_confirmed ??
-               (typeof r.status === "string" &&
-                  r.status.toLowerCase().includes("confirm")) ??
-               false
-         );
-
-         return {
-            id: r.id ?? genId(),
-            start,
-            end,
-            instructorId: String(instructorIdRaw ?? "__unknown"),
-            groupId: groupIdRaw != null ? String(groupIdRaw) : "__ungrouped",
-            groupName,
-            sector: (r.sector || "").toString(),
-            studentId,
-            studentFirst: fromStore?.firstName ?? first,
-            studentLast: fromStore?.lastName ?? last,
-            studentPhone: phone,
-            privateMessage: r.privateMessage ?? r.note ?? r.comment ?? "",
-            instructorPlateNorm: instPlateNorm,
-            isConfirmed,
-         };
-      });
-   }, [reservations, studentDict, instructorMeta, instructorsGroups]);
-
-   const todayMatchesCount = useMemo(() => {
-      let c = 0;
-      for (const g of uiGroups)
-         for (const gi of g.instructors || []) c += gi.events.length;
-      return c;
-   }, [uiGroups]);
-
-   /* ====== UTILITARE pentru zile cu potriviri ====== */
-   const buildMatchDays = useCallback(() => {
-      if (!anyTokens) return [];
-      const days = new Set();
-      for (const ev of allEvents) {
-         if (!anyTokens && !eventMatchesSector(ev)) continue;
-         if (!eventMatchesAllTokens(ev)) continue;
-         const d = new Date(
-            ev.start.getFullYear(),
-            ev.start.getMonth(),
-            ev.start.getDate()
-         );
-         days.add(d.getTime());
-      }
-      return Array.from(days).sort((a, b) => a - b);
-   }, [anyTokens, allEvents, eventMatchesAllTokens, eventMatchesSector]);
-
-   /* ====== LIVE AUTO-JUMP în timpul scrierii ====== */
+   // NAV state pentru search
    const anchorTsRef = useRef(null);
    const prevAnyTokensRef = useRef(false);
    const lastSectorRef = useRef(sectorFilter);
-   const programmaticScrollRef = useRef(false);
 
-   // când începi să tastezi → ancora = ziua vizibilă; când golești → reset
    useEffect(() => {
       const wasAny = prevAnyTokensRef.current;
       if (anyTokens && !wasAny) {
@@ -1140,7 +1270,6 @@ export default function CustomDayView(props = {}) {
       prevAnyTokensRef.current = anyTokens;
    }, [anyTokens, date]);
 
-   // dacă schimbi sectorul în timpul căutării, re-ancorează la ziua afișată
    useEffect(() => {
       if (lastSectorRef.current !== sectorFilter) {
          lastSectorRef.current = sectorFilter;
@@ -1148,340 +1277,334 @@ export default function CustomDayView(props = {}) {
       }
    }, [sectorFilter, anyTokens, date]);
 
-   // un singur auto-jump relativ la ancoră (și DOAR dacă nu e suspendat)
-   useEffect(() => {
-      if (!indexReady || !anyTokens) return;
-      if (__DV_NAV_STATE__.suspendAutoJump) return;
-      if (autoJumpTimerRef.current) clearTimeout(autoJumpTimerRef.current);
-      autoJumpTimerRef.current = setTimeout(() => {
-         // dacă între timp userul a început să tragă, nu mai sări nicăieri
-         if (__DV_NAV_STATE__.suspendAutoJump) return;
-         const list = buildMatchDays();
-         if (!list.length) return;
-         const anchorTs = anchorTsRef.current ?? startOfDayTs(new Date());
-         const nextTs = list.find((ts) => ts >= anchorTs) ?? null;
-         let prevTs = null;
-         for (let i = list.length - 1; i >= 0; i--) {
-            if (list[i] < anchorTs) {
-               prevTs = list[i];
-               break;
-            }
-         }
-         const targetTs = nextTs ?? prevTs;
-         if (targetTs == null) return;
-         if (typeof onJumpToDate === "function") {
-            onJumpToDate(new Date(targetTs));
-            releaseDrag(); // rămâne, e safe dacă nu e în drag (că oricum l-am oprit pe pointerDown)
-         }
-      }, 120);
-
-      return () => {
-         if (autoJumpTimerRef.current) clearTimeout(autoJumpTimerRef.current);
-         autoJumpTimerRef.current = null;
-      };
-   }, [tokens, sectorFilter, indexReady, buildMatchDays, onJumpToDate]); // ← fără `date`
-
-   // ====== Actualizează NAV-STATE pentru navigate() static ======
-   // ✅ un singur scroll-into-view per (căutare + zi), doar dacă n-ai derulat manual
-   useEffect(() => {
-      const qKey = __DV_NAV_STATE__.queryKey;
-      if (!qKey) return;
-
-      const snapKey = `${qKey}|${startOfDayTs(date)}`;
-      if (__DV_NAV_STATE__.suspendScrollSnap) return;
-      if (__DV_NAV_STATE__.snappedForKey === snapKey) return;
-
-      const root = scrollRef.current;
-      const el = root?.querySelector(".highlight");
-      if (!el?.scrollIntoView) return;
-
-      // dacă s-a început un drag între timp, nu face snap
-      if (dragRef.current.down || __DV_NAV_STATE__.suspendScrollSnap) return;
-
-      programmaticScrollRef.current = true;
-      releaseDrag();
-      el.scrollIntoView({
-         block: "center",
-         inline: "center",
-         behavior: "smooth",
-      });
-      __DV_NAV_STATE__.snappedForKey = snapKey;
-
-      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
-      snapTimerRef.current = setTimeout(() => {
-         programmaticScrollRef.current = false;
-      }, 400);
-
-      return () => {
-         if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
-         snapTimerRef.current = null;
-      };
-   }, [date, uiGroups]);
-
-   // rulează doar când se schimbă ziua (căutarea e urmărită prin NAV-STATE)
-   const styleVarsForEvent = (ev) => {
-      const minsStart = toVisibleMinutes(ev.start);
-      const minsEnd = toVisibleMinutes(ev.end);
-      const startSlots = Math.floor(minsStart / slotMinutes + 1e-6);
-      const endSlots = Math.ceil(minsEnd / slotMinutes - 1e-6);
-      const span = Math.max(endSlots - startSlots, 1);
-      return { "--ev-slots": startSlots, "--ev-span": span };
-   };
-
-   const [colorOverlayFor, setColorOverlayFor] = useState(null);
-   const releaseDrag = useCallback(() => {
-      const el = scrollRef.current;
-      const st = dragRef.current;
-      if (!el) return;
-      st.down = false;
-      st.dragging = false;
-      if (st.pointerId != null) {
-         try {
-            el.releasePointerCapture?.(st.pointerId);
-         } catch {}
-         st.pointerId = null;
+   const buildMatchDays = useCallback(() => {
+      if (!anyTokens) return [];
+      const days = new Set();
+      for (const r of reservations || []) {
+         const startRaw =
+            r.startTime ??
+            r.start ??
+            r.startedAt ??
+            r.start_at ??
+            r.startDate ??
+            r.start_date ??
+            null;
+         const start = startRaw ? new Date(startRaw) : null;
+         if (!start) continue;
+         const ev = (mappedEvents || []).find((x) => x.raw === r) || null;
+         if (!ev) continue;
+         if (!eventMatchesAllTokens(ev)) continue;
+         const d = new Date(
+            start.getFullYear(),
+            start.getMonth(),
+            start.getDate()
+         );
+         days.add(d.getTime());
       }
-      el.classList.remove("is-dragging");
-      el.classList.remove("is-panning"); // 👈 adaugă asta
-   }, []);
+      return Array.from(days).sort((a, b) => a - b);
+   }, [anyTokens, reservations, mappedEvents, eventMatchesAllTokens]);
 
-   // scroll to first highlight
-   const scrollRef = useRef(null);
-
-   // ✅ actualizează NAV-STATE când se schimbă căutarea sau sectorul
    useEffect(() => {
       const qKey = anyTokens
          ? tokens.map((t) => `${t.kind}:${t.raw}`).join("#") +
            `|${sectorFilter}`
          : "";
-
       const prevKey = __DV_NAV_STATE__.queryKey;
       __DV_NAV_STATE__.queryKey = qKey;
       __DV_NAV_STATE__.matchDays = anyTokens ? buildMatchDays() : [];
-
       if (qKey !== prevKey) {
-         // pornește “curat”: permitem un singur auto-jump și un singur snap
          __DV_NAV_STATE__.suspendAutoJump = false;
          __DV_NAV_STATE__.suspendScrollSnap = false;
          __DV_NAV_STATE__.snappedForKey = "";
       }
    }, [anyTokens, tokens, sectorFilter, buildMatchDays]);
 
-   const handleOpenStudentPopup = (student) => {
-      openPopup("studentDetails", { student });
-      onViewStudent?.({ studentId: student?.id });
-   };
-
-   // === Swap order pentru grupe (UI + callback) ===
-   const [swapAnim, setSwapAnim] = useState({}); // { [groupId]: 'left' | 'right' }
-
-   const getGroupById = useCallback(
-      (gid) =>
-         (instructorsGroups || []).find((g) => String(g.id) === String(gid)),
-      [instructorsGroups]
-   );
-
-   const visibleGroupIds = useMemo(() => {
-      // doar grupe reale, filtrate după sector + căutare, în ordinea afișată
-      return (uiGroups || [])
-         .filter((g) => g.id !== "__ungrouped")
-         .map((g) => g.id);
-   }, [uiGroups]);
-
-   const swapGroup = useCallback(
-      (groupId, dir /* 'left' | 'right' */) => {
-         const idx = visibleGroupIds.indexOf(groupId);
-         if (idx === -1) return;
-
-         const neighborIdx = dir === "left" ? idx - 1 : idx + 1;
-         if (neighborIdx < 0 || neighborIdx >= visibleGroupIds.length) return;
-
-         const otherId = visibleGroupIds[neighborIdx];
-
-         // pornește animația pe ambele
-         setSwapAnim({
-            [groupId]: dir,
-            [otherId]: dir === "left" ? "right" : "left",
-         });
-
-         // după ~260ms: oprește animația și emite callback pentru persist
-         setTimeout(() => {
-            setSwapAnim({});
-
-            const a = getGroupById(groupId);
-            const b = getGroupById(otherId);
-            if (!a || !b) return;
-
-            // 1) ia ordinele curente (cu fallback dacă lipsesc)
-            // 1) ia ordinele curente (cu fallback dacă lipsesc)
-            let aOrder = getOrder(a);
-            let bOrder = getOrder(b);
-            if (!Number.isFinite(aOrder) || !Number.isFinite(bOrder)) {
-               // fallback: index vizual ca ordine temporară
-               const indexAsOrder = Object.fromEntries(
-                  visibleGroupIds.map((id, idx) => [id, idx])
-               );
-               aOrder = indexAsOrder[groupId];
-               bOrder = indexAsOrder[otherId];
-            }
-            // 2) setează OPTIMIST ordinea local (fără flicker)
-            setPendingOrder((prev) => ({
-               ...prev,
-               [groupId]: bOrder,
-               [otherId]: aOrder,
-            }));
-            if (typeof props.onSwapGroupOrder === "function") {
-              const p = props.onSwapGroupOrder({
-                  updates: [
-                     { id: String(groupId), order: bOrder },
-                     { id: String(otherId), order: aOrder },
-                  ],
-               });
-               // 3) curăță override-ul DOAR după ce backend-ul a confirmat
-     Promise.resolve(p)
-       .then(() => {
-         setPendingOrder((prev) => {
-           const next = { ...prev };
-           delete next[groupId];
-           delete next[otherId];
-           return next;
-         });
-       })
-       .catch(() => {
-         // rollback optimist la eroare
-         setPendingOrder((prev) => {
-           const next = { ...prev };
-           delete next[groupId];
-           delete next[otherId];
-           return next;
-         });
-       });
-            } else {
-               if (typeof window !== "undefined") {
-                  console.warn(
-                     "[CustomDayView] onSwapGroupOrder nu e definit – rulează doar animația."
-                  );
-               }
-            }
-         }, 300);
-      },
-      [visibleGroupIds, getGroupById, props]
-   );
-
-   // ---------- Drag to pan (X+Y) ----------
-   const onUserScroll = useCallback(() => {
-      if (!programmaticScrollRef.current) {
-         __DV_NAV_STATE__.suspendScrollSnap = true; // user a derulat → oprim snap-ul
-      }
-   }, []);
-   const dragRef = useRef({
-      down: false,
-      dragging: false,
-      startX: 0,
-      startY: 0,
-      scrollLeft: 0,
-      scrollTop: 0,
-      pointerId: null,
-   });
-   const DRAG_THRESHOLD = 7;
    const isInteractiveTarget = (el) =>
-      !!el?.closest?.(
-         'button, a, input, textarea, select, [role="button"], [contenteditable=""], [contenteditable="true"]'
+      !!el.closest?.(
+         `.dv-move-pad,
+  .dv-move-pad button,
+  .dv-slot button,
+  input, textarea, select, button, a`
       );
-   // sus, la alte useRef-uri:
-   const autoJumpTimerRef = useRef(null);
-   const snapTimerRef = useRef(null);
 
-   // ...
-
-   const onPointerDown = (e) => {
-      const el = scrollRef.current;
-      if (!el) return;
-      if (e.button !== undefined && e.button !== 0) return;
-      if (isInteractiveTarget(e.target)) return;
-
-      // ⛔ oprește tot ce ține de căutare care „se mișcă singur”
-      __DV_NAV_STATE__.suspendScrollSnap = true;
-      __DV_NAV_STATE__.suspendAutoJump = true;
-      if (autoJumpTimerRef.current) {
-         clearTimeout(autoJumpTimerRef.current);
-         autoJumpTimerRef.current = null;
-      }
-      if (snapTimerRef.current) {
-         clearTimeout(snapTimerRef.current);
-         snapTimerRef.current = null;
-      }
-
-      dragRef.current.down = true;
-      dragRef.current.dragging = false;
-      dragRef.current.pointerId = e.pointerId;
-      dragRef.current.startX = e.clientX;
-      dragRef.current.startY = e.clientY;
-      dragRef.current.scrollLeft = el.scrollLeft;
-      dragRef.current.scrollTop = el.scrollTop;
-
+   function parseOrderStore(orderStr) {
       try {
-         el.setPointerCapture?.(e.pointerId);
+         const obj = JSON.parse(orderStr);
+         if (obj && (obj.days || obj.all)) return { kind: "json", obj };
       } catch {}
-      el.classList.add("is-panning");
-      e.preventDefault();
-   };
-
-   const onPointerMove = (e) => {
-      const el = scrollRef.current;
-      const st = dragRef.current;
-      if (!el || !st.down) return;
-
-      const dx = e.clientX - st.startX;
-      const dy = e.clientY - st.startY;
-
-      if (!st.dragging) {
-         if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD)
-            return;
-         st.dragging = true;
-         el.classList.add("is-dragging");
+      return { kind: "tokens", str: orderStr || "" };
+   }
+   function getPosFromJSON(obj, d) {
+      const k = dateKey(d);
+      return (obj.days && obj.days[k]) || obj.all || null;
+   }
+   function getPosGeneric(orderStr, d) {
+      const parsed = parseOrderStore(orderStr);
+      if (parsed.kind === "json") return getPosFromJSON(parsed.obj, d);
+      return getPosFromOrder(orderStr, d);
+   }
+   function getDayOnlyPos(orderStr, d) {
+      const k = dateKey(d);
+      const parsed = parseOrderStore(orderStr);
+      if (parsed.kind === "json") {
+         return (parsed.obj?.days && parsed.obj.days[k]) || null;
       }
+      let out = null;
+      const ORDER_SEP = "|";
+      const splitTokens = (str) =>
+         String(str || "")
+            .split(ORDER_SEP)
+            .map((t) => t.trim())
+            .filter(Boolean);
+      for (const tok of splitTokens(orderStr)) {
+         const m = /^(\d{4})(\d{2})(\d{2})x(\d+)y(\d+)$/.exec(tok);
+         if (m && `${m[1]}${m[2]}${m[3]}` === k) {
+            out = { x: Number(m[4]), y: Number(m[5]) };
+            break;
+         }
+      }
+      return out;
+   }
+   function upsertPosInJSON(obj, d, x, y) {
+      const k = dateKey(d);
+      const base = obj || {};
+      const next = {
+         all: base.all || { x: 1, y: 1 },
+         days: { ...(base.days || {}), [k]: { x, y } },
+      };
+      return JSON.stringify(next);
+   }
+   function ensureAllJSON(orderStr, x, y) {
+      const parsed = parseOrderStore(orderStr);
+      if (parsed.kind === "json") {
+         const o = parsed.obj || {};
+         if (o.all && o.all.x && o.all.y) return JSON.stringify(o);
+         return JSON.stringify({ ...o, all: { x, y } });
+      }
+      return ensureAllToken(coerceOrderToTokens(orderStr), x, y);
+   }
+   function upsertPosGeneric(orderStr, d, x, y) {
+      const parsed = parseOrderStore(orderStr);
+      if (parsed.kind === "json") return upsertPosInJSON(parsed.obj, d, x, y);
+      const tokens = coerceOrderToTokens(orderStr);
+      return upsertPosInOrder(tokens, d, x, y);
+   }
+   // după upsertPosGeneric(...)
+   const getAllPositionsForDay = useCallback(
+      (dayDate, cols = 3) => {
+         // obținem ordinea vizuală pentru zi
+         const allInstIds = new Set(
+            (instructors || []).map((i) => String(i.id))
+         );
+         const { orderedIds, rows } = computeOrderedInstIdsForDay(
+            allInstIds,
+            dayDate,
+            cols
+         );
 
-      e.preventDefault();
-      el.scrollLeft = st.scrollLeft - dx;
-      el.scrollTop = st.scrollTop - dy;
+         // mapăm fiecare instructor la poziția lui (x,y)
+         const posMap = new Map();
+         orderedIds.forEach((iid, idx) => {
+            const specific = getPosGeneric(getOrderStringForInst(iid), dayDate);
+            if (specific) {
+               posMap.set(iid, specific);
+            } else {
+               const x = (idx % cols) + 1;
+               const y = Math.floor(idx / cols) + 1;
+               posMap.set(iid, { x, y });
+            }
+         });
+
+         return { posMap, rows };
+      },
+      [
+         instructors,
+         computeOrderedInstIdsForDay,
+         getPosGeneric,
+         getOrderStringForInst,
+      ]
+   );
+
+   const swapColumnsForDay = useCallback(
+      (dayDate, fromX, toX, cols = 3) => {
+         if (fromX === toX) return;
+         const { posMap } = getAllPositionsForDay(dayDate, cols);
+
+         posMap.forEach((pos, iid) => {
+            if (pos.x === fromX) {
+               setInstructorOrderForDate(iid, dayDate, toX, pos.y);
+            } else if (pos.x === toX) {
+               setInstructorOrderForDate(iid, dayDate, fromX, pos.y);
+            }
+         });
+      },
+      [getAllPositionsForDay, setInstructorOrderForDate]
+   );
+
+   // ===== Pan (inertial) + Pinch (scale) =========================
+   const suspendFlagsRef = useRef(__DV_NAV_STATE__);
+   useInertialPan(scrollRef, {
+      suspendFlagsRef,
+      shouldIgnore: isInteractiveTarget,
+   });
+
+   // Vars CSS de bază (fără *zoom; scalăm vizual cu transform)
+   const layoutVars = {
+      "--event-h": EVENT_H,
+      "--hours-col-w": HOURS_COL_W,
+      "--group-gap": GROUP_GAP,
+      "--day-header-h": `44px`,
+      "--row-header-h": `auto`,
+      "--font-scale": 1,
    };
-   const endDrag = () => {
+
+   const px = (v) => parseFloat(String(v || 0));
+
+   // Base metrics (fără zoom)
+   const baseMetrics = useMemo(() => {
+      const baseColw = px(COL_W);
+      const baseSlot = px(SLOT_H);
+      const baseDayWidth = maxColsPerGroup * baseColw;
+      const baseRowHeight = 48 + visibleSlotCount * baseSlot;
+      return {
+         colw: baseColw,
+         slot: baseSlot,
+         dayWidth: baseDayWidth,
+         rowHeight: baseRowHeight,
+      };
+   }, [COL_W, SLOT_H, maxColsPerGroup, visibleSlotCount]);
+
+   const contentW = useMemo(
+      () => visibleDays.length * (baseMetrics.dayWidth + DAY_GAP),
+      [visibleDays.length, baseMetrics.dayWidth]
+   );
+
+   // activăm pinch pe touch (folosește scale)
+   usePinchZoom({
+      scrollRef,
+      getZoom,
+      setZoomClamped,
+      getContentWidthPx: () => contentW * zoom,
+   });
+
+   // centrează pe zi (folosind lățimea *scalată*)
+   const centerDayHorizontally = useCallback(
+      (targetDate) => {
+         const el = scrollRef.current;
+         if (!el) return;
+
+         const ts = startOfDayTs(targetDate);
+         const idx = clamp(
+            Math.round((ts - rangeStartTs) / DAY_MS),
+            0,
+            Math.max(0, rangeDays - 1)
+         );
+
+         const dayWScaled = (baseMetrics.dayWidth + DAY_GAP) * zoom;
+         const left = idx * dayWScaled + dayWScaled / 2 - el.clientWidth / 2;
+         el.scrollLeft = clamp(left, 0, el.scrollWidth - el.clientWidth);
+      },
+      [rangeStartTs, rangeDays, baseMetrics.dayWidth, zoom]
+   );
+
+   useEffect(() => {
+      if (!visibleDays.length) return;
+      if (!__DV_NAV_STATE__.centerOnDateNextTick) return;
+
+      const id = requestAnimationFrame(() => {
+         centerDayHorizontally(date);
+         __DV_NAV_STATE__.centerOnDateNextTick = false;
+         const el = scrollRef.current;
+         if (el) el.dispatchEvent(new Event("scroll"));
+      });
+      return () => cancelAnimationFrame(id);
+   }, [date, visibleDays.length, centerDayHorizontally]);
+
+   // Window strip
+   const DAY_W_BASE = baseMetrics.dayWidth + DAY_GAP;
+   const DAY_W_SCALED = DAY_W_BASE * zoom;
+   const VIRTUALIZE = props.virtualize ?? false;
+   const WINDOW = VIRTUALIZE ? 9 : visibleDays.length;
+   const HALF = Math.floor(WINDOW / 2);
+
+   const [winStart, setWinStart] = useState(0);
+   const prevScrollRef = useRef(0);
+   const rAFRef = useRef(null);
+
+   const { revalidate, onScrollIdle } = useCalendarAutoRefresh({
+      rangeStartTs,
+      rangeDays,
+      winStart,
+      WINDOW,
+      deps: [sectorFilter, tokensRegex, zoom],
+      refreshMs: 45000,
+      scrollIdleMs: 500,
+      backendSupportsWindow: true,
+   });
+
+   const handleScroll = useCallback(() => {
+      if (!VIRTUALIZE) return;
       const el = scrollRef.current;
-      const st = dragRef.current;
+      if (!el || !visibleDays.length) return;
+
+      prevScrollRef.current = el.scrollLeft;
+      if (rAFRef.current) return;
+
+      rAFRef.current = requestAnimationFrame(() => {
+         rAFRef.current = null;
+         const roughIdx = Math.floor(el.scrollLeft / DAY_W_SCALED);
+         const nextStart = clamp(
+            roughIdx - HALF,
+            0,
+            Math.max(0, visibleDays.length - WINDOW)
+         );
+         setWinStart((s) => (s === nextStart ? s : nextStart));
+         onScrollIdle();
+      });
+   }, [
+      VIRTUALIZE,
+      visibleDays.length,
+      DAY_W_SCALED,
+      HALF,
+      WINDOW,
+      onScrollIdle,
+   ]);
+
+   useEffect(
+      () => () => {
+         if (rAFRef.current) cancelAnimationFrame(rAFRef.current);
+      },
+      []
+   );
+   useLayoutEffect(() => {
+      if (!VIRTUALIZE) return;
+      const el = scrollRef.current;
       if (!el) return;
-      st.down = false;
-      st.dragging = false;
-      if (st.pointerId != null) {
-         try {
-            el.releasePointerCapture?.(st.pointerId);
-         } catch {}
-         st.pointerId = null;
-      }
-      el.classList.remove("is-dragging");
-      el.classList.remove("is-panning"); // 👈 reactivate selectarea textului
-   };
-   const onClickCapture = (e) => {
-      if (dragRef.current.dragging) {
-         e.preventDefault();
-         e.stopPropagation();
-      }
-   };
-   const onWheelZoom = (e) => {
-      const withModifier = e.ctrlKey || e.metaKey || e.altKey;
-      if (!withModifier) {
-         __DV_NAV_STATE__.suspendScrollSnap = true; // scroll normal
-         return;
-      }
-      e.preventDefault();
-      const delta = Math.sign(e.deltaY);
-      if (delta > 0) decZoom();
-      else incZoom();
-   };
+      el.scrollLeft = prevScrollRef.current;
+   }, [VIRTUALIZE, winStart]);
 
-   // ---------- RENDER ----------
+   // handlers open/create
+   const openReservationOnDbl = useCallback(
+      (reservationId) => {
+         if (editMode) return;
+         openPopup("reservationEdit", { reservationId });
+      },
+      [editMode]
+   );
+
+   const createFromEmptyOnDbl = useCallback(
+      (ev) => {
+         if (editMode) return;
+         handleCreateFromEmpty(ev);
+      },
+      [editMode]
+   );
+
    return (
-      <div className="dayview" style={{ ...layoutVars, height: CONTAINER_H }}>
+      <div
+         className={`dayview${editMode ? " edit-mode" : ""}`}
+         style={{ ...layoutVars, height: CONTAINER_H }}
+      >
          <div className="dayview__header">
             <div className="dayview__header-left">
                <div
@@ -1514,6 +1637,7 @@ export default function CustomDayView(props = {}) {
                   </label>
                </div>
             </div>
+
             <div className="dayview__toolbar">
                <input
                   className="dv-search__input"
@@ -1526,26 +1650,39 @@ export default function CustomDayView(props = {}) {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                />
+
                <button
                   className="dv-btn"
-                  onClick={decZoom}
-                  title="Zoom out (Ctrl + scroll jos)"
+                  onClick={(e) => decZoom(e)}
+                  title="Zoom out (Ctrl/⌘ + scroll jos)"
                >
                   −
                </button>
-               <button
-                  className="dv-btn dv-btn--ghost"
-                  onClick={resetZoom}
-                  title="Reset zoom"
-               >
-                  {Math.round(zoom * 100)}%
-               </button>
+               {/* <button className="dv-btn dv-btn--ghost" onClick={(e)=>resetZoom(e)} title="Reset zoom">
+            {Math.round(zoom * 100)}%
+          </button> */}
                <button
                   className="dv-btn"
-                  onClick={incZoom}
-                  title="Zoom in (Ctrl + scroll sus)"
+                  onClick={(e) => incZoom(e)}
+                  title="Zoom in (Ctrl/⌘ + scroll sus)"
                >
                   +
+               </button>
+               <button
+                  className={`dv-btn ${editMode ? "dv-btn--active" : ""}`}
+                  onClick={() => setEditMode((v) => !v)}
+                  title="Editează pozițiile instructorilor"
+               >
+                  <ReactSVG
+                     className={`groups__icon react-icon`}
+                     src={editIcon}
+                  />
+               </button>
+               <button className="dv-btn reset" onClick={revalidate}>
+                  <ReactSVG
+                     className={`groups__icon react-icon`}
+                     src={refreshIcon}
+                  />
                </button>
             </div>
          </div>
@@ -1553,370 +1690,57 @@ export default function CustomDayView(props = {}) {
          <div
             className="dayview__row dv-pan"
             ref={scrollRef}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
-            onWheel={onWheelZoom}
-            onScroll={onUserScroll}
-            onClickCapture={onClickCapture}
+            style={{ touchAction: "pan-x" }}
+            onScroll={handleScroll}
             onDragStart={(e) => e.preventDefault()}
          >
-            {uiGroups.map((group) => {
-               const cols = Math.max(
-                  1,
-                  Math.min(maxColsPerGroup, (group.instructors || []).length)
-               );
-               return (
-                  <section
-                     key={group.id}
-                     className={
-                        "dayview__group-wrap" +
-                        (swapAnim[group.id]
-                           ? ` dv-swap-anim dv-swap-anim--${swapAnim[group.id]}`
-                           : "")
-                     }
-                     style={{
-                        "--cols": cols,
-                        "--colw": `calc(${COL_W} * var(--zoom))`,
-                     }}
-                     aria-label={group.name}
-                  >
-                     <header className="dayview__group-header">
-                        <div
-                           className="dv-swap-controls"
-                           role="group"
-                           aria-label="Schimbă poziția grupei"
-                        >
-                           <button
-                              type="button"
-                              className="dv-swap-btn dv-swap-btn--left"
-                              title="Mută grupa la stânga"
-                              aria-label="Mută grupa la stânga"
-                              onClick={() => swapGroup(group.id, "left")}
-                              disabled={visibleGroupIds.indexOf(group.id) <= 0}
-                           >
-                              <ReactSVG
-                                 src={arrowIcon}
-                                 className="dv-swap-icon react-icon"
-                              />
-                           </button>
-                           <button
-                              type="button"
-                              className="dv-swap-btn dv-swap-btn--right"
-                              title="Mută grupa la dreapta"
-                              aria-label="Mută grupa la dreapta"
-                              onClick={() => swapGroup(group.id, "right")}
-                              disabled={
-                                 visibleGroupIds.indexOf(group.id) ===
-                                 visibleGroupIds.length - 1
-                              }
-                           >
-                              <ReactSVG
-                                 src={arrowIcon}
-                                 className="dv-swap-icon react-icon rotate180"
-                              />
-                           </button>
-                        </div>
-
-                        {/* (opțional) poți afișa sectorul sau alt meta aici dacă vrei) */}
-                        <div className="dayview__group-instructors">
-                           {group.instructors.map(({ inst }) => (
-                              <div
-                                 key={inst.id}
-                                 className="dayview__instructor-head"
-                              >
-                                 <div className="dv-inst-name">
-                                    {highlightTokens(inst.name, tokens)}
-                                 </div>
-                                 <div className="dv-inst-plate">
-                                    {highlightTokens(
-                                       instructorMeta.get(String(inst.id))
-                                          ?.plateRaw ?? "",
-                                       tokens
-                                    )}
-                                 </div>
-                              </div>
-                           ))}
-                        </div>
-                     </header>
-
-                     <div className="dayview__group-content">
-                        <aside
-                           className="dayview__hours"
-                           style={{ "--visible-slots": visibleSlotCount }}
-                        >
-                           {timeMarks.map((t) => {
-                              const dt = mkTime(t);
-                              if (isWithinHidden(dt)) return null;
-                              return (
-                                 <div
-                                    key={t}
-                                    className="dayview__hour-mark"
-                                    style={{ "--mark-slots": toTopSlots(dt) }}
-                                 >
-                                    {highlightTimeString(t, tokens)}
-                                 </div>
-                              );
-                           })}
-                        </aside>
-
-                        <div className="dayview__columns">
-                           {group.instructors.map(({ inst, events }) => (
-                              <div
-                                 key={inst.id}
-                                 className="dayview__event-col"
-                                 style={{ "--visible-slots": visibleSlotCount }}
-                              >
-                                 {/* === grid lines per slot (ca în versiunea veche) === */}
-                                 {Array.from({ length: visibleSlotCount }).map(
-                                    (_, i) => (
-                                       <div
-                                          key={`slot-${i}`}
-                                          className="dayview__slot-line"
-                                       />
-                                    )
-                                 )}
-
-                                 {timeMarks.map((t) => {
-                                    const dt = mkTime(t);
-                                    if (isWithinHidden(dt)) return null;
-                                    return (
-                                       <div
-                                          key={`line-${t}`}
-                                          className="dayview__mark-line"
-                                          style={{
-                                             "--mark-slots": toTopSlots(dt),
-                                          }}
-                                       />
-                                    );
-                                 })}
-                                 {events.map((ev) => {
-                                    const person =
-                                       ev.studentFirst + " " + ev.studentLast;
-                                    const studentObj = ev.studentId
-                                       ? {
-                                            id: ev.studentId,
-                                            firstName: ev.studentFirst,
-                                            lastName: ev.studentLast,
-                                            phone: ev.studentPhone,
-                                            isConfirmed: ev.isConfirmed,
-                                         }
-                                       : null;
-                                    const evInHiddenOnly = hiddenAbs.some(
-                                       (hi) =>
-                                          ev.start >= hi.start &&
-                                          ev.end <= hi.end
-                                    );
-                                    if (evInHiddenOnly) return null;
-                                    const isVirtual = ev.isVirtual === true;
-                                    const lockColor = ev.lockColor === true;
-                                    const colorKey = (
-                                       isVirtual
-                                          ? "--normal"
-                                          : ev.color || "--default"
-                                    )
-                                       .replace(/^var\(/, "")
-                                       .replace(/\)$/, "");
-
-                                    return (
-                                       <div
-                                          key={ev.id}
-                                          className={`dayview__event dayview__event--${colorKey.replace(
-                                             /^--/,
-                                             ""
-                                          )} ${
-                                             isVirtual
-                                                ? "dayview__event--virtual"
-                                                : ""
-                                          }`}
-                                          style={styleVarsForEvent(ev)}
-                                       >
-                                          {colorOverlayFor === ev.id && (
-                                             <div
-                                                className="dayview__color-overlay"
-                                                onClick={() =>
-                                                   setColorOverlayFor(null)
-                                                }
-                                             >
-                                                <div
-                                                   className="dayview__color-grid"
-                                                   onClick={(e) =>
-                                                      e.stopPropagation()
-                                                   }
-                                                >
-                                                   {Array.from({
-                                                      length: 9,
-                                                   }).map((_, idx) => {
-                                                      if (idx === 2)
-                                                         return (
-                                                            <button
-                                                               key="close"
-                                                               type="button"
-                                                               className="dayview__color-close"
-                                                               aria-label="Închide selectorul"
-                                                               onClick={() =>
-                                                                  setColorOverlayFor(
-                                                                     null
-                                                                  )
-                                                               }
-                                                            >
-                                                               <ReactSVG
-                                                                  src={addIcon}
-                                                                  className="dayview__color-close-icon react-icon"
-                                                               />
-                                                            </button>
-                                                         );
-                                                      const COLORS = [
-                                                         "--yellow",
-                                                         "--green",
-                                                         "--red",
-                                                         "--orange",
-                                                         "--purple",
-                                                         "--pink",
-                                                         "--blue",
-                                                         "--indigo",
-                                                      ];
-                                                      const colorToken =
-                                                         COLORS[
-                                                            idx > 2
-                                                               ? idx - 1
-                                                               : idx
-                                                         ];
-                                                      return (
-                                                         <button
-                                                            key={colorToken}
-                                                            type="button"
-                                                            className={`dayview__color-cell dayview__color-cell--${colorToken.replace(
-                                                               /^--/,
-                                                               ""
-                                                            )}`}
-                                                            aria-label={
-                                                               colorToken
-                                                            }
-                                                            onClick={() => {
-                                                               setColorOverlayFor(
-                                                                  null
-                                                               );
-                                                               onChangeColor?.({
-                                                                  id: ev.id,
-                                                                  color: colorToken,
-                                                               });
-                                                            }}
-                                                         />
-                                                      );
-                                                   })}
-                                                </div>
-                                             </div>
-                                          )}
-                                          {!isVirtual && (
-                                             <div className="dayview__event-top">
-                                                <div className="dayview__event-person">
-                                                   <button
-                                                      type="button"
-                                                      className="dayview__event-person-name dayview__event-person-name--link"
-                                                      onClick={() =>
-                                                         handleOpenStudentPopup(
-                                                            studentObj
-                                                         )
-                                                      }
-                                                      title="Deschide detalii elev"
-                                                   >
-                                                      {highlightTokens(
-                                                         person,
-                                                         tokens
-                                                      )}
-                                                   </button>
-                                                </div>
-                                                {!lockColor && (
-                                                   <button
-                                                      type="button"
-                                                      className="dayview__color-trigger"
-                                                      aria-label="Schimbă culoarea"
-                                                      onClick={() =>
-                                                         setColorOverlayFor(
-                                                            colorOverlayFor ===
-                                                               ev.id
-                                                               ? null
-                                                               : ev.id
-                                                         )
-                                                      }
-                                                   >
-                                                      <span
-                                                         className="dayview__color-dot"
-                                                         data-color={colorKey}
-                                                      />
-                                                   </button>
-                                                )}
-                                             </div>
-                                          )}
-
-                                          {/* CONTINUT: 
-      - pentru virtual → DOAR ora
-      - pentru normal → rândul tău cu „Nu/Da”, ora, cutia de viteze etc.
-  */}
-                                          {isVirtual ? (
-                                             <div className="dv-meta-row dv-meta-row--solo">
-                                                <span className="dv-meta-pill">
-                                                   {hhmm(ev.start)}
-                                                </span>
-                                             </div>
-                                          ) : (
-                                             <>
-                                                <button
-                                                   type="button"
-                                                   className="dv-meta-row dv-clickable"
-                                                   onClick={() =>
-                                                      openPopup(
-                                                         "reservationEdit",
-                                                         {
-                                                            reservationId:
-                                                               ev.id,
-                                                         }
-                                                      )
-                                                   }
-                                                   title="Editează nota"
-                                                >
-                                                   <span className="dv-meta-pill">
-                                                      {ev.isConfirmed
-                                                         ? "Da"
-                                                         : "Nu"}
-                                                   </span>
-                                                   <span className="dv-meta-pill">
-                                                      {highlightTimeString(
-                                                         hhmm(ev.start),
-                                                         tokens
-                                                      )}
-                                                   </span>
-                                                   {ev.gearboxLabel && (
-                                                      <span className="dv-meta-pill">
-                                                         {ev.gearboxLabel}
-                                                      </span>
-                                                   )}
-                                                </button>
-                                                {ev.privateMessage && (
-                                                   <p
-                                                      className="dayview__event-note dv-clickable"
-                                                      title="Editează nota"
-                                                   >
-                                                      {highlightTokens(
-                                                         ev.privateMessage,
-                                                         tokens
-                                                      )}
-                                                   </p>
-                                                )}
-                                             </>
-                                          )}
-                                       </div>
-                                    );
-                                 })}
-                              </div>
-                           ))}
-                        </div>
-                     </div>
-                  </section>
-               );
-            })}
+            <div
+               className="dayview__track"
+               style={{
+                  position: "relative",
+                  width: contentW * zoom, // wrapperul se lărgește pentru scroll corect
+                  height: "100%",
+               }}
+            >
+               <div
+                  className="dv-scale"
+                  style={{
+                     width: contentW, // dimensiuni de bază (fără zoom)
+                     height: "100%",
+                     transform: `scale(${zoom})`,
+                     transformOrigin: "0 0",
+                     willChange: "transform",
+                  }}
+               >
+                  <DayWindow
+                     visibleDays={visibleDays}
+                     winStart={winStart}
+                     WINDOW={WINDOW}
+                     DAY_W={DAY_W_BASE}
+                     DAY_GAP={DAY_GAP}
+                     virtualize={VIRTUALIZE}
+                     maxColsPerGroup={maxColsPerGroup}
+                     COL_W={COL_W}
+                     metrics={baseMetrics} // ← METRICI DE BAZĂ
+                     ROW_GAP={ROW_GAP}
+                     toRowsOfN={toRowsOfN}
+                     buildUiDay={buildUiDay}
+                     mkStandardSlotsForDay={mkStandardSlotsForDay}
+                     instructorMeta={instructorMeta}
+                     instructorsGroups={instructorsGroups}
+                     editMode={editMode}
+                     swapColumnsForDay={swapColumnsForDay}
+                     highlightTokens={highlightTokens}
+                     tokens={tokens}
+                     getOrderStringForInst={getOrderStringForInst}
+                     getPosGeneric={getPosGeneric}
+                     getDayOnlyPos={getDayOnlyPos}
+                     nudgeInstructor={nudgeInstructor}
+                     onOpenReservation={openReservationOnDbl}
+                     onCreateFromEmpty={createFromEmptyOnDbl}
+                  />
+               </div>
+            </div>
          </div>
       </div>
    );
@@ -1932,18 +1756,22 @@ CustomDayView.navigate = (date, action) => {
       (__DV_NAV_STATE__.matchDays?.length || 0) > 0;
    if (!hasQuery) {
       const d = new Date(date);
+      let out;
       switch (String(action)) {
          case "TODAY":
-            return new Date();
+            out = new Date();
+            break;
          case "PREV":
-            // pas cu o zi înapoi, indiferent de căutare
-            return new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+            out = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+            break;
          case "NEXT":
-            // pas cu o zi înainte, indiferent de căutare
-            return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+            out = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+            break;
          default:
-            return d;
+            out = d;
       }
+      __DV_NAV_STATE__.centerOnDateNextTick = true;
+      return out;
    }
 
    const curTs = startOf(d);
@@ -1952,12 +1780,12 @@ CustomDayView.navigate = (date, action) => {
    if (String(action) === "NEXT") {
       const nextTs = list.find((ts) => ts > curTs) ?? null;
       if (nextTs != null) {
-         __DV_NAV_STATE__.suspendAutoJump = true; // oprește auto-jump după navigare manuală
+         __DV_NAV_STATE__.suspendAutoJump = true;
+         __DV_NAV_STATE__.centerOnDateNextTick = true;
          return new Date(nextTs);
       }
       return d;
    }
-
    if (String(action) === "PREV") {
       let prevTs = null;
       for (let i = list.length - 1; i >= 0; i--) {
@@ -1968,22 +1796,27 @@ CustomDayView.navigate = (date, action) => {
       }
       if (prevTs != null) {
          __DV_NAV_STATE__.suspendAutoJump = true;
+         __DV_NAV_STATE__.centerOnDateNextTick = true;
          return new Date(prevTs);
       }
       return d;
    }
-
-   if (String(action) === "TODAY") return new Date();
+   if (String(action) === "TODAY") {
+      __DV_NAV_STATE__.centerOnDateNextTick = true;
+      return new Date();
+   }
    return d;
 };
 
 CustomDayView.title = (date, { localizer } = {}) => {
-   if (localizer && typeof localizer.format === "function")
-      return localizer.format(date, "dddd, DD MMMM YYYY");
+   // ex: "sâm., 27 sept."
+   if (localizer && typeof localizer.format === "function") {
+      return localizer.format(date, "ddd, DD MMM");
+   }
    return new Date(date).toLocaleDateString("ro-RO", {
-      weekday: "long",
+      weekday: "short",
       day: "2-digit",
-      month: "long",
+      month: "short",
       year: "numeric",
    });
 };

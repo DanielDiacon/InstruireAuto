@@ -14,6 +14,18 @@ import IPanel from "./pages/IPanel";
 import IPToday from "./pages/IPages/IPToday";
 import IPInstrGroups from "./pages/IPages/IPInstrGroups";
 import IPCalendar from "./pages/IPages/IPCalendar";
+import APGroups from "./pages/APages/APGroups";
+import APCalendar from "./pages/APages/APCalendar";
+import APHistory from "./pages/APages/APHistory";
+import APInstrGroups from "./pages/APages/APInstrGroups";
+import MPGroups from "./pages/MPages/MPGroups";
+import MPHistory from "./pages/MPages/MPHistory";
+import MPCalendar from "./pages/MPages/MPCalendar";
+import MPInstrGroups from "./pages/MPages/MPInstrGroups";
+import Practice from "./components/SPanel/Practice";
+import SPTest from "./pages/SPages/SPTest";
+import SPExam from "./pages/SPages/SPExam";
+import ConfirmReservation from "./pages/ConfirmReservation";
 
 const App = () => {
    const darkMode = localStorage.getItem("darkMode") === "enabled";
@@ -50,6 +62,22 @@ const App = () => {
                   }
                />
                <Route
+                  path="/student/test"
+                  element={
+                     <ProtectedRoute allowedRoles={["USER"]}>
+                        <SPTest />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/student/exam"
+                  element={
+                     <ProtectedRoute allowedRoles={["USER"]}>
+                        <SPExam />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
                   path="/student/calendar"
                   element={
                      <ProtectedRoute allowedRoles={["USER"]}>
@@ -65,12 +93,75 @@ const App = () => {
                      </ProtectedRoute>
                   }
                />
-
+               <Route
+                  path="/admin/groups"
+                  element={
+                     <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <APGroups />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/admin/instr-groups"
+                  element={
+                     <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <APInstrGroups />
+                     </ProtectedRoute>
+                  }
+               />{" "}
+               <Route
+                  path="/admin/calendar"
+                  element={
+                     <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <APCalendar />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/admin/history"
+                  element={
+                     <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <APHistory />
+                     </ProtectedRoute>
+                  }
+               />
                <Route
                   path="/manager"
                   element={
                      <ProtectedRoute allowedRoles={["MANAGER"]}>
                         <MPanel />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/manager/groups"
+                  element={
+                     <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <MPGroups />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/manager/instr-groups"
+                  element={
+                     <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <MPInstrGroups />
+                     </ProtectedRoute>
+                  }
+               />{" "}
+               <Route
+                  path="/manager/calendar"
+                  element={
+                     <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <MPCalendar />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/manager/history"
+                  element={
+                     <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <MPHistory />
                      </ProtectedRoute>
                   }
                />
@@ -109,6 +200,10 @@ const App = () => {
                {/* Public */}
                <Route path="/register" element={<Register />} />
                <Route path="/reset-password" element={<ResetPassword />} />
+               <Route
+                  path="/confirm-reservation/:token"
+                  element={<ConfirmReservation />}
+               />
                <Route path="/" element={<SignPage />} />
             </Routes>
          </div>

@@ -23,7 +23,7 @@ export async function getUserById(userId) {
 /** POST /users  — IMPORTANT: trimitem JSON stringificat */
 export async function createUser(userData) {
    const payload = clean(userData);
-   console.log("[createUser] payload JSON ->", payload);
+   //console.log("[createUser] payload JSON ->", payload);
 
    const res = await apiClientService.post(
       "/users",
@@ -36,14 +36,14 @@ export async function createUser(userData) {
       throw new Error(text || `HTTP ${res.status}`);
    }
    const json = await res.json();
-   console.log("[createUser] response <-", json);
+   //console.log("[createUser] response <-", json);
    return json;
 }
 
 /** PATCH /users/:id — IMPORTANT: trimitem JSON stringificat */
 export async function updateUser(userId, userData) {
    const payload = clean(userData);
-   console.log("[updateUser] payload JSON ->", payload);
+   //console.log("[updateUser] payload JSON ->", payload);
 
    const res = await apiClientService.patch(
       `/users/${userId}`,
@@ -56,14 +56,27 @@ export async function updateUser(userId, userData) {
       throw new Error(text || `HTTP ${res.status}`);
    }
    const json = await res.json();
-   console.log("[updateUser] response <-", json);
+   //console.log("[updateUser] response <-", json);
    return json;
 }
 
 /** DELETE /users/:id */
+/** DELETE /users/:id */
 export async function deleteUser(userId) {
    const res = await apiClientService.delete(`/users/${userId}`);
-   if (!res.ok) throw new Error(await res.text());
+   if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+         const data = await res.json();
+         msg = data?.message || msg;
+      } catch {
+         try {
+            msg = await res.text();
+         } catch {}
+      }
+      console.error("[deleteUser] HTTP error:", res.status, msg);
+      throw new Error(msg);
+   }
    return true;
 }
 

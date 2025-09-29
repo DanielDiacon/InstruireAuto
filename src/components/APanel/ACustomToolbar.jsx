@@ -41,14 +41,6 @@ function ACustomToolbar({ label, onView, views, view, onNavigate }) {
                   Zi
                </button>
             )}
-
-            {/* Butonul pentru popup programări */}
-            <button
-               className="react-icon"
-               onClick={() => openPopup("sAddProg")}
-            >
-               <ReactSVG src={add} />
-            </button>
          </span>
       </div>
    );

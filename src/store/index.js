@@ -6,6 +6,7 @@ import reservationsReducer from "./reservationsSlice"; // nou
 import instructorsReducer from "./instructorsSlice"; // nou
 import instructorsGroupsReducer from "./instructorsGroupSlice"; // nou
 import carsReducer from "./carsSlice"; // nou
+import usersReducer from "./usersSlice";
 
 export const store = configureStore({
    reducer: {
@@ -15,5 +16,6 @@ export const store = configureStore({
       reservations: reservationsReducer,
       instructorsGroups: instructorsGroupsReducer,
       cars: carsReducer,
+      users: usersReducer,
    },
 });

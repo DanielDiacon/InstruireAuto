@@ -141,49 +141,111 @@
       }
    }
 }
+.modules {
+   width: 100%;
+   display: grid;
+   gap: 20px;
+   padding: 24px 24px 24px;
+   grid-template-columns: 1fr 1fr;
+   height: 400px;
+}
 .intro.admin {
    grid-template-columns: 2fr 3fr;
 }
-@media only screen and (max-width: $tablet) {
+@media (max-width: $tablet) {
    .intro.admin {
       grid-template-columns: 1fr;
       .intro__right {
-         gap: 16px;
+         gap: 6px;
          grid-template-columns: 1fr;
       }
       .intro__clock-wrapper {
          grid-template-rows: 1fr;
          grid-template-columns: 1fr 1fr;
-         gap: 16px;
+         gap: 6px;
       }
       .today {
       }
       .ipanel {
-         min-height: 400px;
          display: none;
       }
+      .students {
+         min-height: 300px;
+      }
+      .groups {
+         min-height: 300px;
+         //display: none;
+      }
+      .intro__clock {
+         aspect-ratio: 1/1;
+         position: relative;
+         border-radius: 50%;
+      }
+   }
+   .modules {
+      display: none;
    }
 }
+.page-calendar {
+   height: 100svh;
+   padding: 12px 12px 12px 20px;
+   .calendar {
+      height: 100% !important;
+      padding: 0;
+   }
+   .rbc-calendar {
+      height: 100% !important;
+   }
+   .dayview {
+      height: 100% !important;
+   }
+}
+
 .main {
    .page-wrapper {
       padding: 24px;
-      .groups.ipanel {
+      .groups {
          min-height: calc(100svh - 48px);
+         &__grid {
+            grid-template-columns: 1fr;
+         }
       }
+
       .today {
          min-height: calc(100svh - 48px);
+      }
+      .history {
+         min-height: calc(100svh - 48px);
+         &__grid {
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+         }
+      }
+      .instructorsgroup {
+         min-height: calc(100svh - 48px);
+         &__grid {
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+         }
       }
    }
 }
 @media only screen and (max-width: $mobile) {
    .main {
       .page-wrapper {
-         padding: 16px;
-         .groups.ipanel {
-            min-height: calc(100svh - 32px - 100px);
+         padding: 6px;
+         .groups {
+            min-height: calc(100svh - 12px - 100px);
          }
          .today {
-            min-height: calc(100svh - 32px - 100px);
+            min-height: calc(100svh - 12px - 100px);
+         }
+         .history {
+            min-height: calc(100svh - 12px - 100px);
+         }
+         .instructorsgroup {
+            min-height: calc(100svh - 12px - 100px);
+            &__grid {
+               grid-template-columns: 1fr;
+            }
          }
       }
    }
@@ -204,6 +266,7 @@
          grid-template-columns: 1fr;
       }
       &__left {
+         padding: 20px;
          &::after {
             right: auto;
             top: auto;
@@ -221,8 +284,8 @@
 }
 @media only screen and (max-width: 550px) {
    .intro {
-      padding: 16px 16px 0 16px;
-      gap: 16px;
+      padding: 6px 6px 0 6px;
+      gap: 6px;
       &.student {
          grid-template-columns: 1fr;
       }
@@ -241,7 +304,7 @@
          }
       }
       &__right {
-         gap: 16px;
+         gap: 6px;
          grid-template-columns: 1fr;
          grid-template-areas:
             "top"
@@ -250,7 +313,7 @@
       &__clock-wrapper {
          grid-template-rows: 1fr;
          grid-template-columns: 1fr 1fr;
-         gap: 16px;
+         gap: 6px;
          grid-area: top;
       }
       &__progress {
@@ -312,7 +375,9 @@
    padding: 25px;
    overflow: hidden;
    position: relative;
-
+   @media only screen and (max-width: $mobile) {
+      aspect-ratio: 4/3;
+   }
    &::after {
       content: "";
       position: absolute;
@@ -395,16 +460,37 @@
       }
    }
 }
-
-.modules {
-   width: 100%;
-   display: grid;
-   gap: 20px;
-   padding: 24px 24px 0 24px;
-   grid-template-columns: 1fr 1fr;
-   height: 400px;
+@media only screen and (max-width: $mobile) {
+   .intro__progress {
+      aspect-ratio: 2/1;
+      padding: 20px;
+      span {
+         left: 16px;
+         right: auto;
+         bottom: 16px;
+      }
+      h2 {
+         position: absolute;
+         width: 30%;
+      }
+      > div {
+         min-height: calc(100% - 0px);
+         display: flex;
+         .CircularProgressbar {
+            left: auto;
+            right: 0;
+            padding: 0px;
+            width: auto;
+            &-text {
+               fill: var(--white-s) !important;
+               font-size: 16px !important;
+            }
+            path {
+            }
+         }
+      }
+   }
 }
-
 .history {
    border-radius: 35px;
    padding: 0 12px;
@@ -477,7 +563,7 @@
       height: 100%;
       overflow: hidden;
       position: relative;
-      margin-top: -12px;
+      //margin-top: -12px;
       flex-grow: 1;
    }
 
@@ -487,7 +573,7 @@
       width: 100%;
       overflow-y: auto;
       display: grid;
-      padding-top: 24px;
+      padding-top: 32px;
       padding-bottom: 12px;
       mask-image: linear-gradient(
          to top,
@@ -562,20 +648,33 @@
             height: 20px;
             width: 20px;
          }
-         &.completed {
+
+         &.created {
             color: #0d3700;
             background: #9cf680;
          }
-
-         &.cancelled {
-            color: hsl(0, 100%, 13%);
-            background: hsl(0, 87%, 73%);
+         &.updated {
+            color: #002c41;
+            background: #80d1f6;
          }
-
-         &.pending {
-            color: hsl(35, 87%, 13%);
-            background: hsl(35, 94%, 73%);
-         }
+         //         &.cancelled {
+         //            color: hsl(0, 100%, 13%);
+         //            background: hsl(0, 87%, 73%);
+         //             --green-l: #9cf680;
+         //            --green-d: #0d3700;
+         //
+         //            --red-l: #f68080;
+         //            --red-d: #410000;
+         //         }
+         //
+         //         &.pending {
+         //            color: hsl(35, 87%, 13%);
+         //            background: hsl(35, 94%, 73%);
+         //         }
+         //         &.pending {
+         //            color: hsl(35, 87%, 13%);
+         //            background: hsl(35, 94%, 73%);
+         //         }
       }
    }
 

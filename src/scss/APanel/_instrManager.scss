@@ -33,6 +33,7 @@
    &__info {
       padding: 12px;
    }
+ 
    p {
       color: var(--white-s);
    }
@@ -99,6 +100,18 @@
          transform: scale(0.95);
          padding: 14px 20px;
          border-radius: 21px;
+      }
+   }
+}
+@media only screen and (max-width: $mobile) {
+   .instructori {
+      &__info {
+         padding: 4px 12px;
+      }
+      h3 {
+         font-size: 32px !important;
+         span {
+         }
       }
    }
 }

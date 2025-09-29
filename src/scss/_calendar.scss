@@ -1,10 +1,6 @@
 .calendar {
    padding: 24px 24px;
-
-   > div {
-      margin-top: 0 !important;
-      height: auto !important;
-   }
+   flex: 1 1 auto !important;
 }
 
 /* ---- react-big-calendar ---- */
@@ -277,7 +273,7 @@
 .rbc-time-content {
    gap: 6px !important;
    border: 0 !important;
-   max-height: 400px;
+   flex: 1 1 auto;
 
    &::-webkit-scrollbar-track {
       background: var(--black-s);
@@ -317,31 +313,34 @@
 .rbc-events-container {
    border: 0 !important;
 }
-
+.calendar.ipanel {
+   .add-btn-calendar {
+      display: none;
+   }
+}
 /* ---- Responsive ---- */
 @media (max-width: $mobile) {
    .calendar {
-      padding: 0;
+      padding: 6px;
+      //margin-top: 12px;
+
       &.page {
-         //min-height: 100svh !important;
       }
    }
+   .calendar.ipanel {
+      display: none !important;
+   }
    .rbc-calendar {
-      border-radius: 0px !important;
-      background: var(--black-p) !important;
+      //border-radius: 0px !important;
+      //background: var(--black-p) !important;
    }
    .rbc-toolbar {
       display: flex !important;
       flex-wrap: wrap !important;
       flex-direction: row !important;
-      background: var(--black-s) !important;
       align-items: flex-start !important;
       justify-content: flex-start !important;
-      border: 16px solid var(--black-p);
-      border-radius: 50px 50px 30px 30px;
-      padding: 12px;
-      gap: 8px;
-      margin-bottom: -16px !important;
+      gap: 6px;
       &-label {
          color: var(--white-p) !important;
          flex: 0;
@@ -349,45 +348,55 @@
    }
    .rbc-btn-group {
       align-self: flex-start !important;
-      button {
-         //background: var(--black-s) !important;
-      }
    }
    .rbc-header {
       white-space: pre-line !important;
    }
    /* ---- Month view ---- */
    .rbc-month-view {
-      padding: 6px !important;
+      padding: 0px 6px 9px 6px !important;
       .rbc-month-row {
          min-height: 60px !important;
+         &:last-child {
+            & .rbc-day-bg:first-child {
+               border-radius: 12px 12px 12px 24px !important;
+            }
+            & .rbc-day-bg:last-child {
+               border-radius: 12px 12px 24px 12px !important;
+            }
+         }
          .rbc-day-bg {
             border: 0 !important;
-            background: var(--black-s);
-            &.rbc-off-range-bg {
-               background: transparent;
-               border: 1px solid var(--bd) !important;
-            }
-            &.rbc-today {
-               background: var(--accent-l);
-               &:hover {
-                  opacity: 0.8;
-               }
-            }
+
+            //&.rbc-off-range-bg {
+            //   background: transparent;
+            //   //border: 1px solid var(--bd) !important;
+            //}
+            //&.rbc-today {
+            //   //background: var(--accent-l);
+            //   &:hover {
+            //      opacity: 0.8;
+            //   }
+            //}
          }
       }
    }
    .rbc-time-view {
-      padding: 6px;
+      padding: 0 6px;
       .rbc-time-content {
-         min-height: 612px;
+         min-height: 604px;
       }
-      .rbc-events-container {
-         background: var(--black-s);
+      .rbc-time-column {
+         margin-bottom: 0 !important;
       }
-
+      .rbc-time-column:nth-child(2) {
+         border-radius: 12px 12px 12px 29px !important;
+      }
+      .rbc-time-column:last-child {
+         border-radius: 12px 12px 29px 12px !important;
+      }
       .rbc-event {
-         border: 4px solid var(--black-s) !important;
+         //border: 4px solid var(--black-s) !important;
       }
       .rbc-event-label {
          text-overflow: ellipsis !important;
@@ -399,8 +408,14 @@
          overflow: hidden !important;
       }
    }
+   .rbc-time-header-gutter {
+      width: 0;
+      display: none;
+   }
    .rbc-time-gutter.rbc-time-column {
       //width: 30px;
+      width: 0;
+      display: none;
    }
    .rbc-time-column {
       font-size: 10px;

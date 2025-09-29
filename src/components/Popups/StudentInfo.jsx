@@ -7,7 +7,12 @@ import successIcon from "../../assets/svg/success.svg";
 import cancelIcon from "../../assets/svg/cancel.svg";
 import clockIcon from "../../assets/svg/clock.svg";
 import emailIcon from "../../assets/svg/email.svg";
-import { ReactSVG } from "react-svg";
+import { ReactSVG } from "react-svg"; // sus, lângă celelalte importuri
+import {
+   closePopup as closePopupStore,
+   openSubPopup,
+   closeSubPopup,
+} from "../Utils/popupStore";
 
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
@@ -31,6 +36,19 @@ export default function StudentInfoPopup({ student, onClose }) {
    const [noteValue, setNoteValue] = useState(student?.privateMessage || "");
    const [liveStudent, setLiveStudent] = useState(student || {});
 
+   // ✅ nou: confirmare pentru ștergere
+   const [confirmDelete, setConfirmDelete] = useState(false);
+   // sub useState-uri
+   const safeClose = () => {
+      if (typeof onClose === "function") {
+         onClose(); // dacă ți-l dă wrapperul Popup
+      } else {
+         try {
+            closePopupStore();
+         } catch (_) {} // fallback prin popupStore
+      }
+   };
+
    useEffect(() => {
       if (student?.id) {
          dispatch(fetchUserReservations(student.id));
@@ -44,6 +62,7 @@ export default function StudentInfoPopup({ student, onClose }) {
       });
       setNoteValue(student?.privateMessage || "");
       setLiveStudent(student || {});
+      setConfirmDelete(false); // reset la schimbarea studentului
    }, [student, dispatch]);
 
    const handleEditToggle = () => setIsEditing(!isEditing);
@@ -85,13 +104,16 @@ export default function StudentInfoPopup({ student, onClose }) {
    };
 
    const handleDelete = async () => {
-      if (!window.confirm("Sigur vrei să ștergi acest student?")) return;
       try {
          await dispatch(removeStudent(student.id)).unwrap();
-         onClose();
+         // opțional: curățăm state-ul local, ca să nu mai „clipească” datele vechi
+         setConfirmDelete(false);
+         setIsEditing(false);
+         setLiveStudent({});
+         safeClose(); // ⬅️ închide popup-ul ACUM
       } catch (err) {
          console.error("Eroare la ștergere:", err);
-         alert("Ștergerea a eșuat!");
+         alert(err?.message || "Ștergerea a eșuat!");
       }
    };
 
@@ -110,20 +132,12 @@ export default function StudentInfoPopup({ student, onClose }) {
 
          <div className="students-info__actions">
             {!isEditing && (
-               <>
-                  <button
-                     className="students-info__btn students-info__btn--edit"
-                     onClick={handleEditToggle}
-                  >
-                     Edit
-                  </button>
-                  <button
-                     className="students-info__btn students-info__btn--delete"
-                     onClick={handleDelete}
-                  >
-                     Delete
-                  </button>
-               </>
+               <button
+                  className="students-info__btn students-info__btn--edit"
+                  onClick={handleEditToggle}
+               >
+                  Edit
+               </button>
             )}
          </div>
 
@@ -161,6 +175,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                         onChange={handleChange}
                      />
                   </div>
+
                   <div className="students-info__btns">
                      <button
                         className="students-info__btn students-info__btn--save"
@@ -174,6 +189,36 @@ export default function StudentInfoPopup({ student, onClose }) {
                      >
                         Cancel
                      </button>
+
+                     <div className="students__item-delete">
+                        <button
+                           onClick={() => setConfirmDelete(true)}
+                           className={`delete-btn ${
+                              confirmDelete ? "hidden" : ""
+                           }`}
+                        >
+                           Șterge
+                        </button>
+
+                        <div
+                           className={`delete-confirmation ${
+                              confirmDelete ? "" : "hidden"
+                           }`}
+                        >
+                           <button
+                              onClick={handleDelete}
+                              className="delete-confirm"
+                           >
+                              Da
+                           </button>
+                           <button
+                              onClick={() => setConfirmDelete(false)}
+                              className="cancel-confirm"
+                           >
+                              Nu
+                           </button>
+                        </div>
+                     </div>
                   </div>
                </div>
             ) : (
@@ -261,6 +306,12 @@ export default function StudentInfoPopup({ student, onClose }) {
                         return (
                            <div
                               key={res.id + "-" + index}
+                              onClick={() =>
+                                 openSubPopup("reservationEdit", {
+                                    reservationId: res.id,
+                                    //onClose: () => closeSubPopup(), 
+                                 })
+                              }
                               className={`students-info__item students-info__item--${status}`}
                            >
                               <div className="students-info__item-left">

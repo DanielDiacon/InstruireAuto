@@ -14,8 +14,18 @@ export async function createReservations(payload) {
 }
 
 /** GET /api/reservations */
-export async function getReservations() {
-   const res = await apiClientService.get(`/reservations`);
+export async function getReservations(opts = {}) {
+   const { scope, from, to, pageSize = 5000 } = opts || {};
+   const qs = new URLSearchParams();
+   if (scope) qs.set("scope", scope);
+   if (from) qs.set("from", from);
+   if (to) qs.set("to", to);
+   if (pageSize) qs.set("pageSize", String(pageSize));
+
+   const url = qs.toString()
+      ? `/reservations?${qs.toString()}`
+      : `/reservations`;
+   const res = await apiClientService.get(url);
    if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(`Server error: ${text}`);
@@ -142,6 +152,130 @@ export async function getBusyReservations(q) {
       }
    }
 }
+/** GET /api/reservations/busy-reservation/instructor/{instructor_id} */
+export async function getBusyForInstructor(instructorId) {
+   if (!instructorId && instructorId !== 0) {
+      throw new Error("instructorId este obligatoriu");
+   }
 
+   const res = await apiClientService.get(
+      `/reservations/busy-reservation/instructor/${encodeURIComponent(
+         instructorId
+      )}`
+   );
+
+   if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`busy-reservation/instructor ${res.status}: ${text}`);
+   }
+   if (res.status === 204) return [];
+
+   const ct = res.headers?.get?.("content-type") || "";
+   if (ct.includes("application/json")) {
+      try {
+         return await res.json();
+      } catch {
+         return [];
+      }
+   } else {
+      const text = await res.text().catch(() => "");
+      if (!text) return [];
+      try {
+         return JSON.parse(text);
+      } catch {
+         throw new Error(
+            `busy-reservation/instructor: răspuns non-JSON: ${text.slice(
+               0,
+               200
+            )}`
+         );
+      }
+   }
+}
+
+/** GET /api/reservations/busy-reservation/instructors-group/{instructors_group_id} */
+export async function getBusyForInstructorsGroup(groupId) {
+   if (!groupId && groupId !== 0) {
+      throw new Error("instructors_group_id este obligatoriu");
+   }
+
+   const res = await apiClientService.get(
+      `/reservations/busy-reservation/instructors-group/${encodeURIComponent(
+         groupId
+      )}`
+   );
+
+   if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`busy-reservation/group ${res.status}: ${text}`);
+   }
+   if (res.status === 204) return [];
+
+   const ct = res.headers?.get?.("content-type") || "";
+   if (ct.includes("application/json")) {
+      try {
+         return await res.json();
+      } catch {
+         return [];
+      }
+   } else {
+      const text = await res.text().catch(() => "");
+      if (!text) return [];
+      try {
+         return JSON.parse(text);
+      } catch {
+         throw new Error(
+            `busy-reservation/group: răspuns non-JSON: ${text.slice(0, 200)}`
+         );
+      }
+   }
+}
+// GET /reservations/:id/history  (ajustează dacă ai alt path real)
+export async function getReservationHistory(reservationId) {
+   const res = await apiClientService.get(
+      `/reservations/${reservationId}/history`
+   );
+
+   if (!res.ok) {
+      let msg = "Nu am putut încărca istoricul.";
+      try {
+         const err = await res.json();
+         if (err?.message) msg = err.message;
+      } catch {}
+      throw new Error(msg);
+   }
+
+   // 🔎 log RAW din server
+   try {
+      const data = await res.json();
+      console.groupCollapsed(
+         "%c[History RAW]",
+         "color:#888",
+         `reservationId=${reservationId}`
+      );
+      console.log(data);
+      // dacă e listă de obiecte “frumoasă”, poți vedea și tabel
+      if (Array.isArray(data)) console.table(data);
+      console.groupEnd();
+      return data;
+   } catch {
+      console.warn("[History RAW] răspuns fără body (204/201 etc.)");
+      return [];
+   }
+}
+/** POST /api/reservations/for-user — creează una sau mai multe rezervări pentru un user selectat */
+export async function createReservationsForUser(payload) {
+   // payload:
+   // { instructorsGroupId?: number, instructorId?: number, userId: number, reservations: [{ startTime, sector?, gearbox?, privateMessage?, color? }] }
+   const res = await apiClientService.post(
+      "/reservations/for-user",
+      JSON.stringify(payload)
+   );
+   if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Server error: ${text || res.status}`);
+   }
+   return await res.json();
+}
 /* alias — dacă ai folosit deja getReservationsAll în alte fișiere */
 export { getAllReservations as getReservationsAll };

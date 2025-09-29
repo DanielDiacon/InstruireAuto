@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { dateFnsLocalizer } from "react-big-calendar";
 import format from "date-fns/format";
 import parse from "date-fns/parse";
@@ -13,17 +13,23 @@ import Header from "../../components/Header/Header";
 import Popup from "../../components/Utils/Popup";
 import SCalendar from "../../components/SPanel/SCalendar";
 
-import { getReservations } from "../../api/reservationsService";
+import { UserContext } from "../../UserContext";
+import {
+   getReservations,
+   getAllReservations,
+   getInstructorReservations,
+} from "../../api/reservationsService";
+import { getInstructors } from "../../api/instructorsService";
 
 // icoane
 import accIcon from "../../assets/svg/acc.svg";
 import todayIcon from "../../assets/svg/material-symbols--today-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import { openPopup } from "../../components/Utils/popupStore";
+import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
 
 /* ========= Localizer + RO formats/messages ========= */
 const locales = { ro, "ro-RO": ro };
-
 const startOfWeekRO = (date) =>
    startOfWeek(date, { weekStartsOn: 1, locale: ro });
 
@@ -35,21 +41,17 @@ const localizer = dateFnsLocalizer({
    locales,
 });
 
-// titlu: 25–31 aug / 25 aug – 2 sept
 const shortMonth = (date, l, culture) =>
    l.format(date, "MMM", culture).replaceAll(".", "");
 
 const formats = {
-   // Week view: două rânduri în headerul coloanei → "24\nlun"
    dayFormat: (date, culture, l) => {
       const d = l.format(date, "d", culture);
       const z = l.format(date, "EEE", culture).replaceAll(".", "");
       return `${d}\n${z}`;
    },
-   // Numele scurt al zilelor (folosit în Month view)
    weekdayFormat: (date, culture, l) =>
       l.format(date, "EEE", culture).replaceAll(".", ""),
-   // Titlul mare al săptămânii
    dayRangeHeaderFormat: ({ start, end }, culture, l) => {
       const sameMonth =
          l.format(start, "M", culture) === l.format(end, "M", culture);
@@ -93,43 +95,137 @@ function IPCalendar() {
    const links = [
       { popup: "profile", text: "Profil", icon: accIcon },
       { link: "/instructor/today", text: "Azi", icon: todayIcon },
-      { link: "/instructor", text: "Acasă", icon: homeIcon },
+      { link: "/instructor/groups", text: "Grupe", icon: groupsIcon },
       { link: "/instructor", text: "Acasă", icon: homeIcon },
    ];
 
+   const { user } = useContext(UserContext);
+   const [myInstructor, setMyInstructor] = useState(null);
    const [events, setEvents] = useState([]);
 
+   // 1) găsește instructorul curent după userId
    useEffect(() => {
+      let cancelled = false;
       (async () => {
+         if (!user || user.role !== "INSTRUCTOR") {
+            setMyInstructor(null);
+            return;
+         }
          try {
-            const data = await getReservations();
-            const formatted = data.map((item) => {
-               const start = new Date(item.startTime);
-               const end = new Date(start.getTime() + 90 * 60 * 1000);
-               return {
-                  id: item.id,
-                  title: "Programare",
-                  start,
-                  end,
-                  instructor: item.instructor,
-                  isConfirmed: item.isConfirmed,
-                  gearbox: item.gearbox,
-                  sector: item.sector,
-               };
-            });
-
-            setEvents(formatted);
+            const all = await getInstructors();
+            const mine = all.find((i) => String(i.userId) === String(user.id));
+            if (!cancelled) setMyInstructor(mine || null);
          } catch (e) {
-            console.error("Eroare la preluarea rezervărilor:", e);
+            console.error("[IPCalendar] getInstructors failed:", e);
+            if (!cancelled) setMyInstructor(null);
          }
       })();
-   }, []);
+      return () => {
+         cancelled = true;
+      };
+   }, [user]);
+
+   // 2) ia rezervările potrivite rolului (aceeași logică ca în IPanel)
+   useEffect(() => {
+      let cancelled = false;
+
+      const normStudent = (item) => {
+         if (Array.isArray(item.students) && item.students.length)
+            return {
+               list: item.students,
+               one: item.students.length === 1 ? item.students[0] : null,
+            };
+         if (Array.isArray(item.participants) && item.participants.length)
+            return {
+               list: item.participants,
+               one:
+                  item.participants.length === 1 ? item.participants[0] : null,
+            };
+         if (Array.isArray(item.users) && item.users.length)
+            return {
+               list: item.users,
+               one: item.users.length === 1 ? item.users[0] : null,
+            };
+         const one = item.student || item.user || null;
+         return { list: one ? [one] : [], one };
+      };
+
+      const toEvent = (item) => {
+         const start = new Date(item.startTime);
+         const end = new Date(item.endTime || start.getTime() + 90 * 60 * 1000);
+
+         const { list: studentsArr, one: studentObj } = normStudent(item);
+
+         const studentPhone =
+            studentObj?.phone ||
+            studentObj?.tel ||
+            studentObj?.phoneNumber ||
+            studentObj?.phone_number ||
+            null;
+
+         return {
+            id: item.id,
+            title: "Programare",
+            start,
+            end,
+
+            instructor: item.instructor,
+            phone: studentPhone,
+            isConfirmed: item.isConfirmed,
+            gearbox: item.gearbox,
+            sector: item.sector,
+
+            student: studentObj || null,
+            students: studentsArr,
+            studentsCount:
+               item.studentsCount ?? item.totalStudents ?? studentsArr.length,
+         };
+      };
+
+      (async () => {
+         try {
+            let raw = [];
+            if (user?.role === "INSTRUCTOR") {
+               if (!myInstructor?.id) return; // așteptăm să se rezolve instructorul
+               try {
+                  raw = await getInstructorReservations(
+                     myInstructor.id,
+                     user.id
+                  );
+               } catch (e) {
+                  console.warn(
+                     "[IPCalendar] /reservations/instructor/:id eșuat; fallback la /reservations/all + filter",
+                     e
+                  );
+                  const all = await getAllReservations();
+                  raw = all.filter(
+                     (r) =>
+                        String(r.instructorId || r?.instructor?.id) ===
+                           String(myInstructor.id) ||
+                        String(r?.instructor?.userId) === String(user.id)
+                  );
+               }
+            } else {
+               raw = await getReservations();
+            }
+
+            const mapped = raw.map(toEvent);
+            if (!cancelled) setEvents(mapped);
+         } catch (e) {
+            console.error("[IPCalendar] Eroare la preluarea rezervărilor:", e);
+         }
+      })();
+
+      return () => {
+         cancelled = true;
+      };
+   }, [user, myInstructor]);
+
    const handleEventClick = (event) => {
-      openPopup("eventInfo", { event }); // sau "dayInfo" dacă așa vrei
-      console.log("CLICK PE EVENIMENT:", event);
+      openPopup("instrEventInfo", { event }); // păstrăm același popup ca în IPanel
+      //console.log("[IPCalendar] CLICK EVENIMENT:", event);
    };
 
-   // interval vizibil în Week view: 07:00–21:00
    const MIN_TIME = new Date(1970, 0, 1, 7, 0, 0);
    const MAX_TIME = new Date(1970, 0, 1, 21, 0, 0);
 
@@ -140,7 +236,11 @@ function IPCalendar() {
          </Header>
 
          <main className="main">
-            <section className="calendar page">
+            {/* IMPORTANT: asigură înălțimea pentru rbc */}
+            <section
+               className="calendar page"
+               style={{ minHeight: "calc(100vh - 160px)" }}
+            >
                <SCalendar
                   localizer={localizer}
                   culture="ro-RO"

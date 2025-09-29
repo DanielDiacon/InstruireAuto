@@ -181,9 +181,21 @@ function indexBusyPayload(raw) {
 const reservationsSlice = createSlice({
    name: "reservations",
    initialState: {
+      // calendar (global)
       list: [],
+      loadingAll: false,
+      errorAll: null,
+
+      // pentru compatibilitate cu locuri vechi (poți elimina treptat):
       loading: false,
       error: null,
+
+      // popup student
+      byStudent: {}, // { [studentId]: Reservation[] }
+      loadingByStudent: {}, // { [studentId]: boolean }
+      errorByStudent: {}, // { [studentId]: string | null }
+
+      // busy
       busyLoading: false,
       busyError: null,
       busyLookup: {},
@@ -207,68 +219,104 @@ const reservationsSlice = createSlice({
          state.availableInstructors = [];
          state.busyQuery = null;
       },
+      // opțional: dacă vrei să cureți cache-ul unui student
+      clearStudentReservations(state, action) {
+         const sid = String(action.payload);
+         delete state.byStudent[sid];
+         delete state.loadingByStudent[sid];
+         delete state.errorByStudent[sid];
+      },
    },
    extraReducers: (builder) => {
+      // ===== getReservations (dacă îl folosești într-un alt ecran) =====
       builder
          .addCase(fetchReservations.pending, (s) => {
+            s.loadingAll = true;
             s.loading = true;
+            s.errorAll = null;
             s.error = null;
          })
          .addCase(fetchReservations.fulfilled, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
             s.list = a.payload;
          })
          .addCase(fetchReservations.rejected, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
+            s.errorAll = a.payload;
             s.error = a.payload;
-         })
+         });
 
+      // ===== ALL (calendar) =====
+      builder
          .addCase(fetchAllReservations.pending, (s) => {
+            s.loadingAll = true;
             s.loading = true;
+            s.errorAll = null;
             s.error = null;
          })
          .addCase(fetchAllReservations.fulfilled, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
             s.list = a.payload;
          })
          .addCase(fetchAllReservations.rejected, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
+            s.errorAll = a.payload;
             s.error = a.payload;
-         })
+         });
 
-         .addCase(fetchUserReservations.pending, (s) => {
-            s.loading = true;
-            s.error = null;
+      // ===== BY STUDENT (NU mai atingem s.list!) =====
+      builder
+         .addCase(fetchUserReservations.pending, (s, a) => {
+            const sid = String(a.meta.arg);
+            s.loadingByStudent[sid] = true;
+            s.errorByStudent[sid] = null;
          })
          .addCase(fetchUserReservations.fulfilled, (s, a) => {
-            s.loading = false;
-            s.list = a.payload;
+            const sid = String(a.meta.arg);
+            s.loadingByStudent[sid] = false;
+            s.byStudent[sid] = Array.isArray(a.payload) ? a.payload : [];
          })
          .addCase(fetchUserReservations.rejected, (s, a) => {
-            s.loading = false;
-            s.error = a.payload;
-         })
+            const sid = String(a.meta.arg);
+            s.loadingByStudent[sid] = false;
+            s.errorByStudent[sid] =
+               a.payload || "Eroare la rezervările studentului.";
+         });
 
+      // ===== CRUD pe list (global) =====
+      builder
          .addCase(addReservation.pending, (s) => {
+            s.loadingAll = true;
             s.loading = true;
+            s.errorAll = null;
             s.error = null;
          })
          .addCase(addReservation.fulfilled, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
             const payload = a.payload;
             if (Array.isArray(payload)) s.list.push(...payload);
             else s.list.push(payload);
          })
          .addCase(addReservation.rejected, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
+            s.errorAll = a.payload;
             s.error = a.payload;
          })
 
          .addCase(updateReservation.pending, (s) => {
+            s.loadingAll = true;
             s.loading = true;
+            s.errorAll = null;
             s.error = null;
          })
          .addCase(updateReservation.fulfilled, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
             const updated = a.payload;
             const id = updated?.id ?? a.meta.arg?.id;
@@ -276,7 +324,9 @@ const reservationsSlice = createSlice({
             if (idx !== -1) s.list[idx] = { ...s.list[idx], ...updated };
          })
          .addCase(updateReservation.rejected, (s, a) => {
+            s.loadingAll = false;
             s.loading = false;
+            s.errorAll = a.payload;
             s.error = a.payload;
          })
 
@@ -290,8 +340,10 @@ const reservationsSlice = createSlice({
          .addCase(removeReservation.fulfilled, (s, a) => {
             const id = a.payload;
             s.list = s.list.filter((r) => String(r.id) !== String(id));
-         })
+         });
 
+      // ===== BUSY =====
+      builder
          .addCase(fetchBusy.pending, (s) => {
             s.busyLoading = true;
             s.busyError = null;
@@ -316,6 +368,7 @@ const reservationsSlice = createSlice({
    },
 });
 
-export const { setReservationColorLocal, resetBusy } =
+export const { setReservationColorLocal, resetBusy, clearStudentReservations } =
    reservationsSlice.actions;
+
 export default reservationsSlice.reducer;

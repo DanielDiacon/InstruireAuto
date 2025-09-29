@@ -2,43 +2,156 @@ import React, { useState, useEffect, useContext } from "react";
 import { ReactSVG } from "react-svg";
 import { useDispatch, useSelector } from "react-redux";
 import addIcon from "../../assets/svg/add-s.svg";
-import saveIcon from "../../assets/svg/save2.svg";
 import searchIcon from "../../assets/svg/search.svg";
 import { UserContext } from "../../UserContext";
+
 import {
    fetchInstructorsGroups,
    addGroup,
    removeGroup,
-   addInstructor,
-   swapInstructor,
+   addInstructor as addInstructorToGrp,
+   updateGroup,
+   removeInstructor,
 } from "../../store/instructorsGroupSlice";
-import { fetchInstructors } from "../../store/instructorsSlice";
-import { fetchCars, addCar, updateCar, removeCar } from "../../store/carsSlice";
 
-function InstructorsGroupManager() {
+import { fetchInstructors } from "../../store/instructorsSlice";
+import { fetchCars } from "../../store/carsSlice";
+
+const toNum = (v) =>
+   v === null || v === undefined || v === "" || Number.isNaN(Number(v))
+      ? undefined
+      : Number(v);
+
+function InstructorChooser({
+   instructors,
+   cars,
+   excludeIds = [],
+   onPick,
+   onClose,
+   inline = false,
+}) {
+   const [query, setQuery] = useState("");
+   const taken = new Set((excludeIds || []).map(String));
+
+   const list = React.useMemo(() => {
+      const q = String(query ?? "").toLowerCase();
+      const base = q
+         ? instructors.filter(
+              (i) =>
+                 `${i.firstName} ${i.lastName}`.toLowerCase().includes(q) ||
+                 String(i.phone || "")
+                    .toLowerCase()
+                    .includes(q) ||
+                 (
+                    cars.find((c) => String(c.instructorId) === String(i.id))
+                       ?.plateNumber || ""
+                 )
+                    .toLowerCase()
+                    .includes(q)
+           )
+         : instructors;
+      return base.map((i) => {
+         const car = cars.find((c) => String(c.instructorId) === String(i.id));
+         return {
+            ...i,
+            carPlate: car?.plateNumber || "—",
+            disabled: taken.has(String(i.id)),
+         };
+      });
+   }, [query, instructors, cars, excludeIds]);
+
+   return (
+      <div
+         className={
+            inline
+               ? "instructorsgroup__create-form active"
+               : "instructorsgroup__edit-form"
+         }
+         style={inline ? { position: "static" } : undefined}
+      >
+         <div
+            className="instructorsgroup__actions"
+            style={{ alignItems: "center" }}
+         >
+            <button
+               type="button"
+               className="instructorsgroup__button"
+               onClick={onClose}
+            >
+               Înapoi
+            </button>
+            <input
+               className="picker__search"
+               placeholder="Caută instructor (nume, telefon, plăcuță)…"
+               value={query}
+               onChange={(e) => setQuery(e.target.value)}
+               style={{ width: "100%" }}
+            />
+         </div>
+
+         <ul className="picker__list" role="listbox">
+            {list.length === 0 && (
+               <li className="picker__empty">Niciun rezultat</li>
+            )}
+            {list.map((i) => (
+               <li
+                  key={i.id}
+                  role="option"
+                  className={
+                     "picker__item" + (i.disabled ? " is-disabled" : "")
+                  }
+                  title={
+                     i.disabled
+                        ? "Deja selectat pe alt rând"
+                        : `${i.firstName} ${i.lastName} ${i.phone || "—"}  ${
+                             i.carPlate
+                          }`
+                  }
+                  onClick={() => !i.disabled && onPick(i)}
+               >
+                  <div className="picker__label">
+                     {i.firstName} {i.lastName}
+                  </div>
+                  <div className="picker__meta">{i.phone || "—"}</div>
+                  <div className="picker__meta">{i.carPlate}</div>
+               </li>
+            ))}
+         </ul>
+      </div>
+   );
+}
+
+export default function InstructorsGroupManager() {
    const { user } = useContext(UserContext);
    const dispatch = useDispatch();
 
-   const groups = useSelector((state) => state.instructorsGroups.list || []);
-   const instructors = useSelector((state) => state.instructors.list || []);
-   const cars = useSelector((state) => state.cars.list || []);
-   const [gearbox, setGearbox] = useState("manual");
+   const groups = useSelector((s) => s.instructorsGroups.list || []);
+   const instructors = useSelector((s) => s.instructors.list || []);
+   const cars = useSelector((s) => s.cars.list || []);
 
-   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
-
-   const [sector, setSector] = useState("Botanica");
    const [showForm, setShowForm] = useState(false);
    const [newGroupName, setNewGroupName] = useState("");
+   const [sectorCreate, setSectorCreate] = useState("Botanica");
+
    const [grid, setGrid] = useState([
-      { instructorId: "", plateNumber: "", carId: null, gearbox: "manual" },
-      { instructorId: "", plateNumber: "", carId: null, gearbox: "manual" },
-      { instructorId: "", plateNumber: "", carId: null, gearbox: "manual" },
+      { instructorId: "" },
+      { instructorId: "" },
+      { instructorId: "" },
    ]);
 
+   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
    const [search, setSearch] = useState({ open: false, query: "" });
+   const [notice, setNotice] = useState(null);
+   const notify = (text, type = "error") => setNotice({ text, type });
+   const clearNotice = () => setNotice(null);
 
-   // State pentru editor inline per grupă
    const [editingGroups, setEditingGroups] = useState({});
+   const [chooser, setChooser] = useState({
+      open: false,
+      mode: null,
+      forRow: null,
+      groupId: null,
+   });
 
    useEffect(() => {
       if (user?.role === "ADMIN") {
@@ -48,187 +161,192 @@ function InstructorsGroupManager() {
       }
    }, [dispatch, user]);
 
-   // --- Form creare grup ---
-   const handleGridChange = (index, field, value) => {
+   const handleGridChange = (index, instructorId) => {
       setGrid((prev) =>
-         prev.map((item, i) =>
-            i === index ? { ...item, [field]: value } : item
-         )
+         prev.map((r, i) => (i === index ? { instructorId } : r))
       );
    };
 
-   const handleCreateGroupWithCars = async () => {
-      if (!newGroupName.trim()) return;
+   const handleCreateGroup = async () => {
+      clearNotice();
+      if (!newGroupName.trim()) return notify("Completează numele grupei.");
 
-      const createdCars = [];
-      for (const col of grid) {
-         if (!col.instructorId || !col.plateNumber) continue;
-
-         const newCar = await dispatch(
-            addCar({
-               plateNumber: col.plateNumber,
-               instructorId: Number(col.instructorId),
-               gearbox: gearbox, // ia valoarea din radio
+      try {
+         const group = await dispatch(
+            addGroup({
+               name: newGroupName,
+               sector: sectorCreate,
+               instructors: [],
+               cars: [],
             })
          ).unwrap();
+         const groupId = group?.id ?? group?.data?.id;
+         if (!groupId)
+            throw new Error("Crearea grupei nu a întors un ID valid.");
 
-         createdCars.push({ instructorId: col.instructorId, carId: newCar.id });
+         const seen = new Set();
+         for (const row of grid) {
+            const id = toNum(row.instructorId);
+            if (!id) continue;
+            if (seen.has(String(id))) continue;
+            seen.add(String(id));
+            await dispatch(
+               addInstructorToGrp({ groupId, instructorId: id })
+            ).unwrap();
+         }
+
+         setGrid([
+            { instructorId: "" },
+            { instructorId: "" },
+            { instructorId: "" },
+         ]);
+         setNewGroupName("");
+         setSectorCreate("Botanica");
+         setShowForm(false);
+         notify("Grupa a fost creată.", "success");
+         await dispatch(fetchInstructorsGroups());
+      } catch (e) {
+         console.error("Create group error:", e);
+         notify("Eroare la crearea grupei.");
       }
-
-      if (createdCars.length === 0) return;
-
-      const groupPayload = {
-         name: newGroupName,
-         sector: sector, // folosim sector din radio
-         instructors: [],
-         cars: [],
-      };
-
-      const group = await dispatch(addGroup(groupPayload)).unwrap();
-
-      for (const link of createdCars) {
-         await dispatch(
-            addInstructor({
-               groupId: group.id,
-               instructorId: link.instructorId,
-               carId: link.carId,
-            })
-         );
-      }
-
-      // reset form
-      setGrid([
-         { instructorId: "", plateNumber: "", carId: null, gearbox: "manual" },
-         { instructorId: "", plateNumber: "", carId: null, gearbox: "manual" },
-         { instructorId: "", plateNumber: "", carId: null, gearbox: "manual" },
-      ]);
-      setNewGroupName("");
-      setSector("Botanica");
-      setGearbox("manual"); // 🔥 resetăm și gearbox
-      setShowForm(false);
    };
 
-   const handleDeleteGroup = (id, name) => {
+   const handleDeleteGroup = (id) => {
+      clearNotice();
       dispatch(removeGroup(id));
       setConfirmDeleteId(null);
    };
 
-   // --- Editor inline ---
    const toggleEdit = (group) => {
+      clearNotice();
+      const insts = group.instructors || [];
       setEditingGroups((prev) => ({
          ...prev,
          [group.id]: {
             isEditing: !prev[group.id]?.isEditing,
+            name: prev[group.id]?.name ?? group.name,
+            sector: prev[group.id]?.sector ?? group.sector ?? "Botanica",
             editGrid:
                prev[group.id]?.editGrid ||
-               group.instructors
-                  .map((inst) => {
-                     const car = cars.find((c) => c.instructorId === inst.id);
-                     return {
-                        instructorId: inst.id,
-                        oldInstructorId: inst.id,
-                        plateNumber: car?.plateNumber || "",
-                        carId: car?.id || null,
-                     };
-                  })
+               insts
+                  .map((inst) => ({ instructorId: inst.id }))
                   .concat(
                      Array.from(
-                        { length: 3 - group.instructors.length },
-                        () => ({
-                           instructorId: "",
-                           plateNumber: "",
-                           carId: null,
-                        })
+                        { length: Math.max(0, 3 - insts.length) },
+                        () => ({ instructorId: "" })
                      )
                   ),
          },
       }));
    };
 
-   const handleEditGridChange = (groupId, index, field, value) => {
+   const handleEditGroupField = (groupId, field, value) => {
+      setEditingGroups((prev) => ({
+         ...prev,
+         [groupId]: { ...prev[groupId], [field]: value },
+      }));
+   };
+   const handleEditGridChange = (groupId, index, instructorId) => {
       setEditingGroups((prev) => ({
          ...prev,
          [groupId]: {
             ...prev[groupId],
-            editGrid: prev[groupId].editGrid.map((item, i) =>
-               i === index ? { ...item, [field]: value } : item
+            editGrid: prev[groupId].editGrid.map((r, i) =>
+               i === index ? { instructorId } : r
             ),
          },
       }));
    };
 
    const handleSaveInline = async (groupId) => {
-      const { editGrid } = editingGroups[groupId];
-      for (const col of editGrid) {
-         if (!col.instructorId || !col.plateNumber) continue;
+      clearNotice();
+      try {
+         const eg = editingGroups[groupId];
+         const currentGroup = groups.find((g) => g.id === groupId);
+         if (!currentGroup) throw new Error("Grupa nu a fost găsită.");
 
-         // Swap instructor dacă a fost schimbat
-         if (col.oldInstructorId && col.oldInstructorId !== col.instructorId) {
-            await dispatch(
-               swapInstructor({
-                  groupId,
-                  oldInstructorId: col.oldInstructorId,
-                  newInstructorId: col.instructorId,
-               })
-            ).unwrap();
+         // update grup
+         const newName = (eg?.name ?? currentGroup?.name ?? "").trim();
+         const newSector = eg?.sector ?? currentGroup?.sector ?? "Botanica";
+         const safeName = newName || (currentGroup?.name ?? "");
+         await dispatch(
+            updateGroup({
+               id: groupId,
+               data: { name: safeName, sector: newSector },
+            })
+         ).unwrap();
+
+         // add/remove instructori
+         const prevInstIds = new Set(
+            (currentGroup?.instructors || []).map((i) => String(i.id))
+         );
+         const wantedRows = (eg?.editGrid || [])
+            .map((r) => toNum(r.instructorId))
+            .filter(Boolean);
+         const newInstKeys = new Set(
+            Array.from(new Set(wantedRows.map(String)))
+         );
+
+         for (const k of newInstKeys) {
+            if (!prevInstIds.has(k)) {
+               await dispatch(
+                  addInstructorToGrp({ groupId, instructorId: Number(k) })
+               ).unwrap();
+            }
+         }
+         for (const k of prevInstIds) {
+            if (!newInstKeys.has(k)) {
+               await dispatch(
+                  removeInstructor({ groupId, instructorId: Number(k) })
+               ).unwrap();
+            }
          }
 
-         // Actualizare sau creare mașină
-         if (col.carId) {
-            await dispatch(
-               updateCar({
-                  id: col.carId,
-                  plateNumber: col.plateNumber,
-                  instructorId: col.instructorId,
-               })
-            ).unwrap();
-         } else {
-            const newCar = await dispatch(
-               addCar({
-                  plateNumber: col.plateNumber,
-                  instructorId: col.instructorId,
-               })
-            ).unwrap();
-            await dispatch(
-               addInstructor({
-                  groupId,
-                  instructorId: col.instructorId,
-                  carId: newCar.id,
-               })
-            ).unwrap();
-         }
+         setEditingGroups((prev) => ({
+            ...prev,
+            [groupId]: { ...prev[groupId], isEditing: false },
+         }));
+         notify("Modificările au fost salvate.", "success");
+         await dispatch(fetchInstructorsGroups());
+      } catch (err) {
+         console.error("handleSaveInline error:", err);
+         notify("Eroare la salvare. Verifică datele.");
       }
-
-      setEditingGroups((prev) => ({
-         ...prev,
-         [groupId]: { ...prev[groupId], isEditing: false },
-      }));
    };
 
-   // --- Filtrare ---
    const filteredGroups = groups.filter((group) => {
-      const groupNameMatch = group.name
-         .toLowerCase()
-         .includes(search.query.toLowerCase());
-      const instructorMatch = group.instructors.some((inst) =>
-         `${inst.firstName} ${inst.lastName}`
-            .toLowerCase()
-            .includes(search.query.toLowerCase())
+      const q = (search.query || "").toLowerCase();
+      const insts = group.instructors || [];
+      const groupNameMatch = (group.name || "").toLowerCase().includes(q);
+      const instructorMatch = insts.some((inst) =>
+         `${inst.firstName} ${inst.lastName}`.toLowerCase().includes(q)
       );
-      const carMatch = group.instructors.some((inst) => {
+      const carMatch = insts.some((inst) => {
          const car = cars.find((c) => c.instructorId === inst.id);
-         return car?.plateNumber
-            ?.toLowerCase()
-            .includes(search.query.toLowerCase());
+         return (
+            (car?.plateNumber || "").toLowerCase().includes(q) ||
+            (inst.phone || "").toLowerCase().includes(q)
+         );
       });
       return groupNameMatch || instructorMatch || carMatch;
    });
 
+   const instructorLabel = (id) => {
+      const i = instructors.find((x) => String(x.id) === String(id));
+      if (!i) return "Selectează instructor";
+      const car = cars.find((c) => String(c.instructorId) === String(i.id));
+      return `${i.firstName} ${i.lastName}${
+         car?.plateNumber ? " — " + car.plateNumber : ""
+      }`;
+   };
+
    const highlightText = (text, query) => {
-      if (!query) return text;
-      const parts = text.split(new RegExp(`(${query})`, "gi"));
+      const t = String(text ?? "");
+      const q = String(query ?? "");
+      if (!q) return t;
+      const parts = t.split(new RegExp(`(${q})`, "gi"));
       return parts.map((part, index) =>
-         part.toLowerCase() === query.toLowerCase() ? (
+         part.toLowerCase() === q.toLowerCase() ? (
             <i key={index} className="highlight">
                {part}
             </i>
@@ -237,6 +355,8 @@ function InstructorsGroupManager() {
          )
       );
    };
+
+   const isCreateChooserOpen = chooser.open && chooser.mode === "create";
 
    return (
       <div className="instructorsgroup">
@@ -249,7 +369,7 @@ function InstructorsGroupManager() {
                <div className="groups__search">
                   <input
                      type="text"
-                     placeholder="Caută grupă..."
+                     placeholder="Caută grupă / instructor / plăcuță / telefon…"
                      className="groups__input"
                      value={search.query}
                      onChange={(e) =>
@@ -278,207 +398,421 @@ function InstructorsGroupManager() {
             </div>
          </div>
 
+         {/* notice */}
+         {notice && (
+            <div
+               className="notice"
+               style={{
+                  margin: "6px 12px 0",
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  background:
+                     notice.type === "success" ? "#0f766e22" : "#ef444422",
+                  color: notice.type === "success" ? "#0f766e" : "#b91c1c",
+               }}
+               onClick={clearNotice}
+               title="Click pentru a ascunde"
+            >
+               {notice.text}
+            </div>
+         )}
+
          {/* Grid */}
          <div className="instructorsgroup__grid-wrapper">
             <div className="instructorsgroup__grid">
-               {/* Form creare grup */}
+               {/* Creare grup */}
                {showForm && (
-                  <div className="instructorsgroup__item instructorsgroup__create-form">
-                     <input
-                        type="text"
-                        placeholder="Numele grupei"
-                        value={newGroupName}
-                        onChange={(e) => setNewGroupName(e.target.value)}
-                        className="instructorsgroup__input"
-                     />
-                     <div
-                        className={`instructors-popup__radio-wrapper addprog ${
-                           sector === "Botanica"
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        }`}
-                     >
-                        <label>
+                  <div className="instructorsgroup__item instructorsgroup__create-form active">
+                     {isCreateChooserOpen ? (
+                        <InstructorChooser
+                           inline
+                           instructors={instructors}
+                           cars={cars}
+                           excludeIds={grid
+                              .map((r, idx) =>
+                                 idx === chooser.forRow ? null : r.instructorId
+                              )
+                              .filter(Boolean)}
+                           onClose={() =>
+                              setChooser({
+                                 open: false,
+                                 mode: null,
+                                 forRow: null,
+                                 groupId: null,
+                              })
+                           }
+                           onPick={(inst) => {
+                              const idx = chooser.forRow;
+                              handleGridChange(idx, String(inst.id));
+                              setChooser({
+                                 open: false,
+                                 mode: null,
+                                 forRow: null,
+                                 groupId: null,
+                              });
+                           }}
+                        />
+                     ) : (
+                        <>
                            <input
-                              type="radio"
-                              name="sector"
-                              value="Botanica"
-                              checked={sector === "Botanica"}
-                              onChange={(e) => setSector(e.target.value)}
+                              type="text"
+                              placeholder="Numele grupei"
+                              value={newGroupName}
+                              onChange={(e) => setNewGroupName(e.target.value)}
+                              className="instructorsgroup__input"
                            />
-                           Botanica
-                        </label>
-                        <label>
-                           <input
-                              type="radio"
-                              name="sector"
-                              value="Ciocana"
-                              checked={sector === "Ciocana"}
-                              onChange={(e) => setSector(e.target.value)}
-                           />
-                           Ciocana
-                        </label>
-                     </div>
 
-                     <div className="instructorsgroup__create-grid">
-                        {grid.map((col, idx) => (
                            <div
-                              key={idx}
-                              className="instructorsgroup__create-row"
+                              className={`instructors-popup__radio-wrapper instrgroup ${
+                                 sectorCreate === "Botanica"
+                                    ? "active-botanica"
+                                    : "active-ciocana"
+                              }`}
                            >
-                              <select
-                                 value={col.instructorId}
-                                 onChange={(e) =>
-                                    handleGridChange(
-                                       idx,
-                                       "instructorId",
-                                       e.target.value
-                                    )
-                                 }
-                                 className="instructorsgroup__select"
-                              >
-                                 <option value="">Selectează instructor</option>
-                                 {instructors.map((inst) => (
-                                    <option key={inst.id} value={inst.id}>
-                                       {inst.firstName} {inst.lastName}
-                                    </option>
-                                 ))}
-                              </select>
-                              <input
-                                 type="text"
-                                 placeholder="Nr. mașină"
-                                 value={col.plateNumber}
-                                 onChange={(e) =>
-                                    handleGridChange(
-                                       idx,
-                                       "plateNumber",
-                                       e.target.value
-                                    )
-                                 }
-                                 className="instructorsgroup__input"
-                              />
+                              <label>
+                                 <input
+                                    type="radio"
+                                    name="sector_create"
+                                    value="Botanica"
+                                    checked={sectorCreate === "Botanica"}
+                                    onChange={(e) =>
+                                       setSectorCreate(e.target.value)
+                                    }
+                                 />
+                                 Botanica
+                              </label>
+                              <label>
+                                 <input
+                                    type="radio"
+                                    name="sector_create"
+                                    value="Ciocana"
+                                    checked={sectorCreate === "Ciocana"}
+                                    onChange={(e) =>
+                                       setSectorCreate(e.target.value)
+                                    }
+                                 />
+                                 Ciocana
+                              </label>
                            </div>
-                        ))}
-                     </div>
 
-                     <button
-                        onClick={handleCreateGroupWithCars}
-                        className="instructorsgroup__button"
-                     >
-                        Creează grupă
-                     </button>
+                           {/* butoane cu Nume — Plăcuță */}
+                           <div className="instructorsgroup__create-grid">
+                              {grid.map((col, idx) => (
+                                 <div
+                                    key={idx}
+                                    className="instructorsgroup__create-row"
+                                 >
+                                    <button
+                                       type="button"
+                                       className="instructorsgroup__input"
+                                       onClick={() =>
+                                          setChooser({
+                                             open: true,
+                                             mode: "create",
+                                             forRow: idx,
+                                             groupId: null,
+                                          })
+                                       }
+                                       title={instructorLabel(col.instructorId)}
+                                       style={{ textAlign: "left" }}
+                                    >
+                                       {instructorLabel(col.instructorId)}
+                                    </button>
+                                 </div>
+                              ))}
+                           </div>
+
+                           <button
+                              onClick={handleCreateGroup}
+                              className="instructorsgroup__button"
+                           >
+                              Creează grupă
+                           </button>
+
+                           <div className="instructorsgroup__item-delete groups__item-delete">
+                              <button
+                                 onClick={() => setShowForm(false)}
+                                 className="cancel-confirm"
+                              >
+                                 Anulează
+                              </button>
+                           </div>
+                        </>
+                     )}
                   </div>
                )}
-               {/* Listează grupuri */}
+
+               {/* Grupe existente */}
                {filteredGroups.map((group) => {
                   const groupEdit = editingGroups[group.id] || {
                      isEditing: false,
                      editGrid: [],
+                     name: group.name,
+                     sector: group.sector || "Botanica",
                   };
+                  const insts = group.instructors || [];
+                  const isChooserOpenHere =
+                     chooser.open &&
+                     chooser.mode === "edit" &&
+                     chooser.groupId === group.id;
 
                   return (
                      <div
                         key={group.id}
-                        className={`instructorsgroup__item ${
-                           editingGroups[group.id]?.isEditing ? "active" : ""
-                        }`}
+                        className={
+                           "instructorsgroup__item " +
+                           (groupEdit.isEditing || isChooserOpenHere
+                              ? "active"
+                              : "")
+                        }
                      >
-                        {/* Header grup */}
                         <div className="instructorsgroup__item-header">
-                           <h4>
-                              {highlightText(group.name, search.query)} –{" "}
-                              {highlightText(group.sector, search.query)}
-                           </h4>
-                        </div>
-
-                        {/* Formular de editare */}
-                        {groupEdit.isEditing ? (
-                           <div className="instructorsgroup__edit-form">
-                              {groupEdit.editGrid.map((col, idx) => (
-                                 <div
-                                    key={idx}
-                                    className="instructorsgroup__edit-row"
-                                 >
-                                    <select
-                                       value={col.instructorId}
-                                       onChange={(e) =>
-                                          handleEditGridChange(
-                                             group.id,
-                                             idx,
-                                             "instructorId",
-                                             e.target.value
-                                          )
-                                       }
-                                       className="instructorsgroup__select"
-                                    >
-                                       <option value="">
-                                          Selectează instructor
-                                       </option>
-                                       {instructors.map((inst) => (
-                                          <option key={inst.id} value={inst.id}>
-                                             {inst.firstName} {inst.lastName}
-                                          </option>
-                                       ))}
-                                    </select>
-                                    <input
-                                       type="text"
-                                       value={col.plateNumber}
-                                       onChange={(e) =>
-                                          handleEditGridChange(
-                                             group.id,
-                                             idx,
-                                             "plateNumber",
-                                             e.target.value
-                                          )
-                                       }
-                                       placeholder="Nr. mașină"
-                                       className="instructorsgroup__input"
-                                    />
-                                 </div>
-                              ))}
-                              <div
-                                 className={`instructors-popup__radio-wrapper instrgroup ${
-                                    gearbox === "manual"
-                                       ? "active-botanica"
-                                       : "active-ciocana"
-                                 }`}
-                              >
-                                 <label>
-                                    <input
-                                       type="radio"
-                                       name="gearbox"
-                                       value="manual"
-                                       checked={gearbox === "manual"}
-                                       onChange={(e) =>
-                                          setGearbox(e.target.value)
-                                       }
-                                    />
-                                    Manual
-                                 </label>
-                                 <label>
-                                    <input
-                                       type="radio"
-                                       name="gearbox"
-                                       value="automat"
-                                       checked={gearbox === "automat"}
-                                       onChange={(e) =>
-                                          setGearbox(e.target.value)
-                                       }
-                                    />
-                                    Automat
-                                 </label>
-                              </div>
-                              <div className="instructorsgroup__actions">
-                                 <ReactSVG
-                                    onClick={() => handleSaveInline(group.id)}
-                                    className="instructorsgroup__button"
-                                    src={saveIcon}
+                           {groupEdit.isEditing ? (
+                              <>
+                                 <input
+                                    type="text"
+                                    className="instructorsgroup__input-title"
+                                    value={groupEdit.name ?? group.name ?? ""}
+                                    onChange={(e) =>
+                                       handleEditGroupField(
+                                          group.id,
+                                          "name",
+                                          e.target.value
+                                       )
+                                    }
+                                    placeholder={group.name || "Numele grupei"}
                                  />
-                                 <ReactSVG
+                                 <button
                                     onClick={() => toggleEdit(group)}
                                     className="instructorsgroup__button rotate45"
-                                    src={addIcon}
+                                 >
+                                    <ReactSVG
+                                       className="instructorsgroup__icon react-icon"
+                                       src={addIcon}
+                                    />
+                                 </button>
+                              </>
+                           ) : (
+                              <>
+                                 <h4>
+                                    {highlightText(group.name, search.query)}
+                                 </h4>
+                                 <div className="pillbar">
+                                    <span className="pill">
+                                       {(group.sector ?? "—").toLowerCase()}
+                                    </span>
+                                 </div>
+                              </>
+                           )}
+                        </div>
+
+                        {groupEdit.isEditing ? (
+                           <div className="instructorsgroup__create-form active">
+                              {isChooserOpenHere ? (
+                                 <InstructorChooser
+                                    inline
+                                    instructors={instructors}
+                                    cars={cars}
+                                    excludeIds={(
+                                       editingGroups[group.id]?.editGrid || []
+                                    )
+                                       .map((r, i) =>
+                                          i === chooser.forRow
+                                             ? null
+                                             : r.instructorId
+                                       )
+                                       .filter(Boolean)}
+                                    onClose={() =>
+                                       setChooser({
+                                          open: false,
+                                          mode: null,
+                                          forRow: null,
+                                          groupId: null,
+                                       })
+                                    }
+                                    onPick={(inst) => {
+                                       handleEditGridChange(
+                                          group.id,
+                                          chooser.forRow,
+                                          String(inst.id)
+                                       );
+                                       setChooser({
+                                          open: false,
+                                          mode: null,
+                                          forRow: null,
+                                          groupId: null,
+                                       });
+                                    }}
                                  />
+                              ) : (
+                                 <>
+                                    {/* butoanele din edit arată și plăcuța */}
+                                    <div className="instructorsgroup__create-grid">
+                                       {groupEdit.editGrid.map((col, idx) => (
+                                          <div
+                                             key={idx}
+                                             className="instructorsgroup__create-row"
+                                          >
+                                             <button
+                                                type="button"
+                                                className="instructorsgroup__input"
+                                                onClick={() =>
+                                                   setChooser({
+                                                      open: true,
+                                                      mode: "edit",
+                                                      forRow: idx,
+                                                      groupId: group.id,
+                                                   })
+                                                }
+                                                title={instructorLabel(
+                                                   col.instructorId
+                                                )}
+                                                style={{ textAlign: "left" }}
+                                             >
+                                                {instructorLabel(
+                                                   col.instructorId
+                                                )}
+                                             </button>
+                                          </div>
+                                       ))}
+                                    </div>
+
+                                    {/* Sector (edit) */}
+                                    <div
+                                       className={`instructors-popup__radio-wrapper instrgroup ${
+                                          (editingGroups[group.id]?.sector ||
+                                             "Botanica") === "Botanica"
+                                             ? "active-botanica"
+                                             : "active-ciocana"
+                                       }`}
+                                    >
+                                       <label>
+                                          <input
+                                             type="radio"
+                                             name={`sector_edit_${group.id}`}
+                                             value="Botanica"
+                                             checked={
+                                                (editingGroups[group.id]
+                                                   ?.sector || "Botanica") ===
+                                                "Botanica"
+                                             }
+                                             onChange={(e) =>
+                                                handleEditGroupField(
+                                                   group.id,
+                                                   "sector",
+                                                   e.target.value
+                                                )
+                                             }
+                                          />
+                                          Botanica
+                                       </label>
+                                       <label>
+                                          <input
+                                             type="radio"
+                                             name={`sector_edit_${group.id}`}
+                                             value="Ciocana"
+                                             checked={
+                                                (editingGroups[group.id]
+                                                   ?.sector || "Botanica") ===
+                                                "Ciocana"
+                                             }
+                                             onChange={(e) =>
+                                                handleEditGroupField(
+                                                   group.id,
+                                                   "sector",
+                                                   e.target.value
+                                                )
+                                             }
+                                          />
+                                          Ciocana
+                                       </label>
+                                    </div>
+
+                                    <div className="instructorsgroup__actions">
+                                       <button
+                                          onClick={() =>
+                                             handleSaveInline(group.id)
+                                          }
+                                          className="instructorsgroup__button"
+                                       >
+                                          Salvează
+                                       </button>
+
+                                       <div className="instructorsgroup__item-delete groups__item-delete">
+                                          <button
+                                             onClick={() =>
+                                                setConfirmDeleteId(group.id)
+                                             }
+                                             className={`delete-btn ${
+                                                confirmDeleteId === group.id
+                                                   ? "hidden"
+                                                   : ""
+                                             }`}
+                                          >
+                                             Șterge
+                                          </button>
+                                          <div
+                                             className={`delete-confirmation ${
+                                                confirmDeleteId === group.id
+                                                   ? ""
+                                                   : "hidden"
+                                             }`}
+                                          >
+                                             <button
+                                                onClick={() =>
+                                                   handleDeleteGroup(group.id)
+                                                }
+                                                className="delete-confirm"
+                                             >
+                                                Da
+                                             </button>
+                                             <button
+                                                onClick={() =>
+                                                   setConfirmDeleteId(null)
+                                                }
+                                                className="cancel-confirm"
+                                             >
+                                                Nu
+                                             </button>
+                                          </div>
+                                       </div>
+                                    </div>
+                                 </>
+                              )}
+                           </div>
+                        ) : (
+                           <>
+                              <ul className="instructorsgroup__list">
+                                 {(insts || []).map((inst) => {
+                                    const car = cars.find(
+                                       (c) => c.instructorId === inst.id
+                                    );
+                                    return (
+                                       <li key={inst.id}>
+                                          <p>
+                                             {highlightText(
+                                                `${inst.firstName} ${inst.lastName}`,
+                                                search.query
+                                             )}{" "}
+                                             —
+                                          </p>
+
+                                          <p>
+                                             {highlightText(
+                                                car?.plateNumber || "N/A",
+                                                search.query
+                                             )}
+                                          </p>
+                                       </li>
+                                    );
+                                 })}
+                              </ul>
+
+                              <div className="instructorsgroup__actions">
+                                 <button onClick={() => toggleEdit(group)}>
+                                    Editează
+                                 </button>
+
                                  <div className="instructorsgroup__item-delete groups__item-delete">
                                     <button
                                        onClick={() =>
@@ -518,35 +852,7 @@ function InstructorsGroupManager() {
                                     </div>
                                  </div>
                               </div>
-                           </div>
-                        ) : (
-                           <ul className="instructorsgroup__list">
-                              {group.instructors.map((inst) => {
-                                 const car = cars.find(
-                                    (c) => c.instructorId === inst.id
-                                 );
-                                 return (
-                                    <li key={inst.id}>
-                                       {highlightText(
-                                          `${inst.firstName} ${inst.lastName}`,
-                                          search.query
-                                       )}
-                                       {" – "}
-                                       {highlightText(
-                                          car?.plateNumber || "N/A",
-                                          search.query
-                                       )}
-                                       {" – "}
-                                       {car?.gearbox || "Manual"}
-                                    </li>
-                                 );
-                              })}
-                           </ul>
-                        )}
-                        {groupEdit.isEditing || (
-                           <button onClick={() => toggleEdit(group)}>
-                              Editează
-                           </button>
+                           </>
                         )}
                      </div>
                   );
@@ -556,43 +862,3 @@ function InstructorsGroupManager() {
       </div>
    );
 }
-
-export default InstructorsGroupManager;
-
-/**
-
-Andrei Burcă - XIX 740
-Kistrin Karam - BKB 787
-Oleg Stratan - WYW 789
-Roman Țîmbălari - WIU 355
-Constantin Ceban - WDW 797
-Cristian Lupei - VFP 597
-Radu Sîrbu - VWV 876
-Vlad Tureac - WIW 875
-Rodideal Cristian - BKB 841
-Michael Moruz Robert - SLL 230
-Alexandru Turcan - SLL 230
-Ghirișan Constantin - IZA 462
-Valentin Vasilașco - OOS 665
-Ilie Sula - AVC 513
-Oleg Stahurschi - QMX 036
-Alexei Vizitiu - HWH 873
-Alexandru Bistrea - WBW 084
-Sofciuc Dorin - TVD 575
-Andrei Zagrenco - SLL 204
-Novac Vlad - LML 797
-Andrei Zapescu - LML 797
-Alexandru Fronea - XIX 036
-Alexandru Smirnov - BTB 795
-Eduard Cicanci - WYW 620
-Bistrea Eugen - TFF 068 / WYW 620 (examen)
-Ion Tîrziu - BVA 018
-Turcan Dinu - BVA 018
-Roman Sevastianov - WIW 035
-Zgardan Victor - WIW 035
-Cebotari Alexandru - OZD 544
-Maxim Mușînschi - BXB 876
-Marin Vetrilă - GDG 822
-Vadim Stagiaru - GDG 822
-
- */

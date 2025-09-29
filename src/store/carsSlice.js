@@ -23,10 +23,16 @@ export const addCar = createAsyncThunk(
 );
 
 // ✅ Update mașină (doar plateNumber sau instructorId se pot schimba)
+// src/store/carsSlice.js
 export const updateCar = createAsyncThunk(
    "cars/updateCar",
-   async ({ id, plateNumber, instructorId }) => {
-      const updated = await patchCar(id, { plateNumber, instructorId });
+   async ({ id, plateNumber, instructorId, gearbox }) => {
+      // 👇 adăugăm gearbox în payload-ul PATCH
+      const updated = await patchCar(id, {
+         plateNumber,
+         instructorId,
+         gearbox,
+      });
       return updated;
    }
 );

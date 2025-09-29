@@ -262,3 +262,20 @@
       }
    }
 }
+@media only screen and (max-width: $mobile) {
+   .students-info {
+      &__note-section {
+         //background: red;
+         display: flex;
+         flex-wrap: wrap;
+         gap: 6px;
+         input {
+            border-radius: 16px;
+            padding: 14px 20px;
+            background: var(--black-p);
+            min-width: 100%;
+            flex: 1;
+         }
+      }
+   }
+}

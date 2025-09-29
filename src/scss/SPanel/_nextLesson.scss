@@ -58,3 +58,8 @@
       //margin: 2px;
    }
 }
+@media only screen and (max-width: $mobile) {
+   .intro__date {
+      padding: 20px;
+   }
+}

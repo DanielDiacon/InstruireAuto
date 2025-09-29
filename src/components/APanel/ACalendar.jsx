@@ -19,6 +19,9 @@ import {
    setReservationColorLocal,
 } from "../../store/reservationsSlice";
 
+// 👇 ADĂUGAT: thunk-ul care face PATCH /api/instructors/{id}
+import { updateInstructorWithUser } from "../../store/instructorsSlice";
+
 moment.locale("ro");
 const localizer = momentLocalizer(moment);
 
@@ -64,6 +67,26 @@ function ACalendarView({
       // deschizi pagina/sidepanel elev
    }, []);
 
+   // 👇 ADĂUGAT: handler care trimite stringul de ordine la backend
+   const handleChangeInstructorOrder = useCallback(
+      (id, order) => {
+         // PATCH /api/instructors/{id} cu body: { order: "..." }
+         const body = { order };
+         console.log("[PATCH instructors] →", {
+            url: `/api/instructors/${id}`,
+            body,
+         });
+         dispatch(updateInstructorWithUser({ id, data: body }))
+            .then((res) => {
+               console.log("[PATCH OK instructors] ←", res);
+            })
+            .catch((err) => {
+               console.error("[PATCH ERROR instructors] ←", err);
+            });
+      },
+      [dispatch]
+   );
+
    // Wrapper pt. Day view — o singură definiție
    const DayViewWithHandlers = useMemo(() => {
       const Comp = function DayViewWrapper(rbcProps) {
@@ -74,7 +97,8 @@ function ACalendarView({
                   colWidth: "150px", // lățimea coloanei instructorului
                   hoursColWidth: "12%", // lățimea coloanei cu ore
                   groupGap: "16px",
-                  containerHeight: "80vh",
+                  //containerHeight: "80vh",
+                  hoursColWidth: "64px",
                }}
                {...rbcProps} // include `date` controlat de Calendar
                onJumpToDate={(d) => setDate(d)} // pt. auto-jump din search
@@ -82,6 +106,8 @@ function ACalendarView({
                onChangeColor={handleChangeColor}
                onDelete={handleDelete}
                onViewStudent={handleViewStudent}
+               // 👇 ADĂUGAT: patch order către backend
+               onChangeInstructorOrder={handleChangeInstructorOrder}
                // swap order grupe (NU schimbă nume, NU rupe funcționalul)
                onSwapGroupOrder={async ({ updates }) => {
                   try {
@@ -108,6 +134,7 @@ function ACalendarView({
       handleChangeColor,
       handleDelete,
       handleViewStudent,
+      handleChangeInstructorOrder, // asigură re-memo corect
       dispatch,
    ]);
 
@@ -153,15 +180,63 @@ function ACalendarView({
                week: true,
             }}
             formats={{
+               // ore în gutter
                timeGutterFormat: "HH:mm",
+
+               // interval eveniment
                eventTimeRangeFormat: ({ start, end }, culture, local) =>
-                  `${local.format(start, "HH:mm", culture)} – ${local.format(
+                  `${local.format(start, "HH:mm", culture)}–${local.format(
                      end,
                      "HH:mm",
                      culture
                   )}`,
+
+               // label pentru header-ul „Zi” (Day view)
+               dayHeaderFormat: (date, culture, local) =>
+                  local.format(date, "ddd, DD MMM", culture), // ex: „lun, 22 aug”
+
+               // etichetele de deasupra coloanelor în Week view (Lu, Ma, … + data)
                dayFormat: (date, culture, local) =>
-                  local.format(date, "dddd, DD MMMM YYYY", culture),
+                  local.format(date, "ddd, DD MMM", culture), // ex: „lun, 22 aug”
+
+               // numele scurte ale zilelor (Monthly grid header)
+               weekdayFormat: (date, culture, local) =>
+                  local.format(date, "ddd", culture), // „lun”, „mar”…
+
+               // header-ul din Month view („Sept 2025” scurt)
+               monthHeaderFormat: (date, culture, local) =>
+                  local.format(date, "MMM YYYY", culture), // „sept. 2025”
+
+               // header-ul din Week view („22–28 aug 2025” scurt)
+               dayRangeHeaderFormat: ({ start, end }, culture, local) => {
+                  const sameMonth =
+                     local.format(start, "MM", culture) ===
+                     local.format(end, "MM", culture);
+                  if (sameMonth) {
+                     // „22–28 aug 2025”
+                     return `${local.format(
+                        start,
+                        "DD",
+                        culture
+                     )}–${local.format(end, "DD MMM YYYY", culture)}`;
+                  }
+                  // „30 aug – 05 sept 2025”
+                  return `${local.format(
+                     start,
+                     "DD MMM",
+                     culture
+                  )} – ${local.format(end, "DD MMM YYYY", culture)}`;
+               },
+
+               // (opțional) agenda
+               agendaHeaderFormat: ({ start, end }, culture, local) =>
+                  `${local.format(start, "DD MMM", culture)} – ${local.format(
+                     end,
+                     "DD MMM YYYY",
+                     culture
+                  )}`,
+               agendaDateFormat: (date, culture, local) =>
+                  local.format(date, "ddd, DD MMM", culture),
             }}
          />
       </div>

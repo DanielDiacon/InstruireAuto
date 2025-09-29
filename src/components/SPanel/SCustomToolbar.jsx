@@ -38,7 +38,7 @@ function SCustomToolbar({ label, onView, views, view, onNavigate }) {
 
             {/* Butonul tău custom */}
             <button
-               className="react-icon"
+               className="react-icon add-btn-calendar"
                onClick={() => openPopup("sAddProg")}
             >
                <ReactSVG src={add} />

@@ -177,7 +177,7 @@ function SignPage() {
          groupToken: registerForm.groupToken,
          phone: "+373" + registerForm.phone, // send with country code
       };
-      console.log(payload);
+      //console.log(payload);
 
       try {
          const response = await signup(payload);

@@ -477,7 +477,7 @@
 
    .menu-open {
       .menu__list {
-         height: calc(130px * var(--openRows) + 6px * (var(--openRows)));
+         height: calc(60px + 100px * var(--openRows) + 6px * (var(--openRows)));
          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
          gap: 6px;
          > * {
@@ -543,6 +543,5 @@
       &__icon {
          color: var(--accent-l);
       }
-    
    }
 }

@@ -1,0 +1,845 @@
+/* ===== Practice (dark, fără var() ) ===== */
+.test.page {
+   padding: 20px;
+   display: flex;
+   flex-direction: column;
+   gap: 20px;
+}
+
+.practice {
+   background: var(--black-s);
+   border-radius: 35px;
+   padding: 16px;
+   position: relative;
+   overflow: hidden;
+   min-height: calc(100vh - 48px);
+   &__header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 14px;
+      padding: 6px 6px 0 6px;
+      h2 {
+         font-size: 32px;
+         line-height: 1;
+         color: var(--white-p);
+         font-family: "Clash Display";
+         font-weight: 500;
+         position: relative;
+         z-index: 2;
+         flex-shrink: 0;
+         white-space: nowrap;
+      }
+   }
+
+   &__error {
+      margin: 10px 0 14px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: #2b1215;
+      color: #ff6b6b;
+      border: 1px solid rgba(255, 107, 107, 0.35);
+   }
+
+   &__grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 6px;
+   }
+
+   &__ticket {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 22px;
+      background: var(--black-p);
+      color: var(--white-p);
+      cursor: pointer;
+      transition: var(--elastic-s);
+      padding: 28px;
+      &:hover {
+         padding: 29px;
+         margin: -1px;
+         border-radius: 16px;
+      }
+      &:active {
+         scale: 0.95;
+         border-radius: 22px;
+      }
+      &:focus-visible {
+         outline: 2px solid var(--accent-l);
+         outline-offset: 2px;
+      }
+
+      &--disabled,
+      &:disabled {
+         opacity: 0.45;
+         cursor: not-allowed;
+         transform: none;
+      }
+
+      .practice__ticket-title {
+         position: relative;
+         z-index: 1;
+      }
+   }
+
+   /* — Toolbar — */
+   &__toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+   }
+
+   &__back {
+      background: var(--black-p);
+      color: var(--white-p);
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease,
+         transform 0.06s ease;
+
+      border-radius: 25px;
+      padding: 14px 20px;
+      transition: var(--classic-s);
+      position: relative;
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 32px;
+      }
+   }
+
+   &__timer {
+      font-variant-numeric: tabular-nums;
+      background: var(--black-p);
+      color: var(--white-p);
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease,
+         transform 0.06s ease;
+      border-radius: 25px;
+      padding: 14px 20px;
+      transition: var(--classic-s);
+      position: relative;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1, "lnum" 1;
+   }
+   /* — Status-board 2×12 — */
+   &__statusboard {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      margin-bottom: 12px;
+      gap: 6px;
+   }
+
+   &__dot {
+      background: var(--black-p);
+      color: var(--white-p);
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease,
+         transform 0.06s ease;
+      border-radius: 25px;
+      padding: 14px 20px;
+      transition: var(--classic-s);
+      position: relative;
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 32px;
+      }
+      &--current {
+         background: #80d1f6;
+         color: #002c41;
+      }
+      &--ok {
+         background: #9cf680;
+         color: #0d3700;
+      }
+      &--bad {
+         background: #f68080;
+         color: #410000;
+      }
+
+      &--none {
+         /* implicit */
+      }
+   }
+
+   /* — Card întrebare — */
+   &__question {
+      position: relative;
+   }
+   &__row {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+   }
+
+   &__qtext {
+      color: var(--white-p);
+      padding: 8px;
+   }
+   &__qimage-wrapper {
+      text-align: center;
+      background: var(--black-p);
+      border-radius: 16px;
+      overflow: hidden;
+      order: 1;
+      aspect-ratio: 1.36;
+      &.mobile {
+         display: none;
+      }
+   }
+
+   &__qimage {
+      user-select: none;
+      --bleed: 4px;
+
+      display: block;
+      width: calc(100% + (var(--bleed) * 2));
+      max-width: none;
+      height: auto;
+      margin-bottom: -8px;
+
+      transform: translate(calc(var(--bleed) * -1), calc(var(--bleed) * -1));
+      // fără border-radius aici; îl are wrapperul
+   }
+
+   /* — Răspunsuri — */
+   &__answers {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      user-select: none;
+      order: 2;
+   }
+
+   &__answer {
+      background: var(--black-p);
+      color: var(--white-p);
+      cursor: pointer;
+      border-radius: 16px;
+      padding: 14px 16px;
+      transition: var(--classic-s);
+      position: relative;
+      border: 1px solid transparent;
+      text-align: left;
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         border-radius: 12px;
+         opacity: 0.9;
+      }
+      &--correct {
+         background: #9cf680;
+         color: #0d3700;
+      }
+
+      &--wrong-selected {
+         background: #f68080;
+         color: #410000;
+      }
+   }
+
+   /* — Actions — */
+   &__actions {
+      display: flex;
+      align-items: center;
+      margin-top: 12px;
+      gap: 10px;
+   }
+   &__spacer {
+      flex: 1 1 auto;
+   }
+
+   &__secondary {
+      background: #9cf680;
+      color: #0d3700;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease,
+         transform 0.06s ease;
+
+      border-radius: 25px;
+      padding: 14px 20px;
+      transition: var(--classic-s);
+      position: relative;
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 32px;
+      }
+      &:focus-visible {
+         outline: 2px solid var();
+         outline-offset: 2px;
+      }
+   }
+
+   /* — Done — */
+   &__done {
+      text-align: center;
+      border: 1px solid #242938;
+      background: #12141a;
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+
+      h3 {
+         margin-top: 0;
+         color: #f6f8ff;
+      }
+      p {
+         color: #9aa3b2;
+      }
+   }
+   &__ticket {
+      position: relative;
+   }
+   &__ticket-badge {
+      position: absolute;
+      right: 10px;
+      top: 10px;
+      padding: 6px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid #2a3146;
+      background: #0f1117;
+      color: #cfd3dc;
+   }
+
+   /* Pills în toolbar (deja din răspunsul anterior) */
+   &__toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+   }
+   &__toolbar-center {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+   }
+   &__question-index {
+      background: var(--black-p);
+      color: var(--white-p);
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease,
+         transform 0.06s ease;
+      border-radius: 25px;
+      padding: 10px 14px;
+      transition: var(--classic-s);
+      position: relative;
+   }
+   &__summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+   }
+   &__summary-pill {
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease,
+         transform 0.06s ease;
+      border-radius: 25px;
+      padding: 10px 14px;
+      transition: var(--classic-s);
+      position: relative;
+      &--ok {
+         background: #9cf680;
+         color: #0d3700;
+      }
+      &--bad {
+         background: #f68080;
+         color: #410000;
+      }
+   }
+
+   /* Buton de finalizare */
+   &__secondary--primary {
+      background: #80d1f6;
+      color: #002c41;
+   }
+   &__secondary--primary:hover {
+      background: #80d1f6;
+      color: #002c41;
+   }
+   /* — Mobile — */
+} /* Ticket badges (verde/galben/roșu) pe card */
+.lives {
+   &__pill {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 12px;
+      border-radius: 99px;
+      background: var(--accent-l);
+      background: var(--black-p);
+   }
+   &__icon {
+      width: 21.5px;
+      height: 21.5px;
+      display: block;
+      color: #f68080;
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+         width: 21.5px;
+         height: 21.5px;
+      }
+      svg {
+         width: 21.5px;
+         height: 21.5px;
+      }
+   }
+}
+
+@media only screen and (max-width: $mobile) {
+   .test.page {
+      padding: 6px;
+      gap: 6px;
+   }
+   .practice {
+      min-height: calc(100vh - 110px);
+      &__grid {
+         grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+      }
+
+      &__ticket {
+         font-size: 12px;
+         padding: 12px 16px;
+         &:hover {
+            padding: 13px 17px;
+            margin: -1px;
+            border-radius: 16px;
+         }
+         &:active {
+            scale: 0.95;
+            padding: 12px 16px;
+         }
+      }
+      &__toolbar {
+         justify-content: space-between;
+         gap: 6px;
+         flex-wrap: wrap;
+         margin-bottom: 6px;
+      }
+      &__back {
+         order: 1;
+         padding: 10px 14px;
+
+         &:hover {
+            padding: 10px 16px;
+         }
+         &:active {
+            padding: 10px 20px;
+         }
+      }
+      &__back.bottom {
+         order: 0;
+         padding: 14px 20px;
+         &:hover {
+            padding: 14px 22px;
+         }
+         &:active {
+            padding: 14px 20px;
+         }
+      }
+      &__timer {
+         order: 2;
+         padding: 10px 14px;
+      }
+      &__qimage-wrapper {
+         display: none;
+
+         &.mobile {
+            display: block;
+         }
+      }
+      &__toolbar-center {
+         order: 3;
+         width: 100%;
+         justify-content: center; // centrare pe lățime
+         text-align: center;
+         gap: 6px;
+         flex-wrap: wrap;
+      }
+
+      /* (opțional) micșorează puțin pastilele pe mobil */
+      &__summary-pill,
+      &__question-index {
+         font-size: 12px;
+         padding: 8px 12px;
+      }
+      &__question-index {
+         margin-right: auto;
+      }
+      &__statusboard {
+         display: grid;
+         grid-template-columns: repeat(8, 1fr) !important;
+         gap: 3px !important;
+         margin-bottom: 0px !important;
+      }
+      &__dot {
+         padding: 8px 12px;
+         border-radius: 8px;
+         &:nth-child(1) {
+            border-radius: 16px 8px 8px 8px;
+         }
+         &:nth-child(8) {
+            border-radius: 8px 16px 8px 8px;
+         }
+         &:nth-child(17) {
+            border-radius: 8px 8px 8px 16px;
+         }
+         &:nth-child(24) {
+            border-radius: 8px 8px 16px 8px;
+         }
+         &:hover {
+            transition: all var(--elastic-s), background var(--classic-s);
+            border-radius: 16px;
+            padding: 8px 12px;
+         }
+         &:active {
+            transition: all var(--elastic-s), background var(--classic-s);
+            transform: scale(0.95);
+            padding: 8px 12px;
+            border-radius: 32px;
+         }
+      }
+      &__row {
+         grid-template-columns: repeat(1, 1fr);
+      }
+   }
+   .lives {
+      &__pill {
+         padding: 7px 12px;
+      }
+      &__icon {
+         width: 18px;
+         height: 18px;
+         div {
+            width: 18px;
+            height: 18px;
+         }
+         svg {
+            width: 18px;
+            height: 18px;
+         }
+      }
+   }
+}
+.practice-stats {
+   background: var(--black-s);
+   border-radius: 35px;
+   padding: 16px;
+   position: relative;
+
+   &__head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 14px;
+      padding: 6px 6px 0 6px;
+      h2 {
+         font-size: 32px;
+         line-height: 1;
+         color: var(--white-p);
+         font-family: "Clash Display";
+         font-weight: 500;
+         position: relative;
+         z-index: 2;
+         flex-shrink: 0;
+         white-space: nowrap;
+      }
+   }
+
+   &__section {
+   }
+
+   &__table {
+      border-radius: 16px;
+      background: var(--black-p);
+   }
+
+   &__col {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 8px;
+      padding: 8px 10px;
+   }
+   &__item {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      p {
+         color: var(--white-p);
+      }
+      span {
+         color: var(--white-t);
+      }
+   }
+
+   // bara de jos
+   &__bar {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 6px;
+   }
+
+   &__bar-inner {
+      display: flex;
+      height: 32px;
+      overflow: hidden;
+   }
+
+   &__bar-seg {
+      height: 100%;
+      transition: width 800ms 800ms cubic-bezier(0.2, 0.8, 0.2, 1);
+   }
+   &__bar-seg--ok {
+      background: #86eb67;
+      margin-right: 3px;
+      border-radius: 16px 8px 8px 16px;
+   }
+   &__bar-seg--bad {
+      border-radius: 100px;
+      background: #f68080;
+      margin-right: 3px;
+      border-radius: 8px;
+   }
+   &__bar-seg--skip {
+      background: var(--black-p);
+      border-radius: 8px 16px 16px 8px;
+   }
+
+   &__bar-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+   }
+   @media (max-width: 720px) {
+   }
+}
+
+@media only screen and (max-width: $mobile) {
+   .practice-stats {
+      &__table {
+         border-radius: 16px;
+         background: transparent;
+      }
+
+      &__col {
+         display: grid;
+         grid-template-columns: 1fr 1fr;
+         grid-template-rows: 1fr 1fr;
+         gap: 6px;
+         padding: 0;
+      }
+      &__item {
+         display: flex;
+         flex-direction: column;
+         background: var(--black-p);
+         border-radius: 16px;
+         padding: 8px 10px;
+         gap: 3px;
+      }
+   }
+}
+
+.practice__qtext {
+   scroll-margin-top: 0;
+}
+/* starea paginii */
+.practice.is-waiting {
+}
+.practice.is-test {
+}
+.practice.is-result {
+}
+
+/* card permisiune */
+.practice__permcard {
+   background: var(--black-p);
+   border: 1px solid #242938;
+   border-radius: 16px;
+   padding: 14px;
+   display: grid;
+   grid-template-columns: 1fr auto;
+   gap: 12px;
+   align-items: center;
+   margin-bottom: 12px;
+   position: relative;
+}
+.practice__permcard--ok {
+   box-shadow: 0 0 0 1px rgba(156, 246, 128, 0.16) inset;
+}
+.practice__permcard--wait {
+   box-shadow: 0 0 0 1px rgba(128, 209, 246, 0.16) inset;
+}
+.practice__permcard--checking::after {
+   content: "";
+   position: absolute;
+   inset: 0;
+   background: linear-gradient(
+      100deg,
+      transparent 30%,
+      rgba(255, 255, 255, 0.06) 50%,
+      transparent 70%
+   );
+   transform: translateX(-100%);
+   animation: permShimmer 1.15s infinite;
+}
+@keyframes permShimmer {
+   to {
+      transform: translateX(100%);
+   }
+}
+
+.practice__permcard-left {
+   display: grid;
+   gap: 8px;
+}
+.practice__permcard-right {
+   display: flex;
+   align-items: center;
+   gap: 8px;
+   margin-left: 8px;
+}
+
+.practice__permcard-title {
+   display: flex;
+   align-items: center;
+   gap: 8px;
+   font-weight: 700;
+   color: var(--white-p);
+}
+.practice__status-dot {
+   width: 10px;
+   height: 10px;
+   border-radius: 9999px;
+   display: inline-block;
+   background: #cfd3dc;
+   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25) inset;
+}
+.practice__status-dot--ok {
+   background: #86eb67;
+}
+.practice__status-dot--wait {
+   background: #80d1f6;
+}
+.practice__status-dot--spin {
+   background: #cfd3dc;
+   position: relative;
+}
+.practice__status-dot--spin::after {
+   content: "";
+   position: absolute;
+   inset: -3px;
+   border-radius: 9999px;
+   border: 2px solid transparent;
+   border-top-color: #cfd3dc;
+   animation: spin 1s linear infinite;
+}
+@keyframes spin {
+   to {
+      transform: rotate(360deg);
+   }
+}
+
+.practice__badge {
+   font-size: 12px;
+   font-weight: 800;
+   padding: 2px 6px;
+   border-radius: 12px;
+   border: 1px solid transparent;
+   line-height: 1;
+}
+.practice__badge--ok {
+   background: #9cf680;
+   color: #0d3700;
+   border-color: rgba(13, 55, 0, 0.25);
+}
+.practice__badge--wait {
+   background: #80d1f6;
+   color: #002c41;
+   border-color: rgba(0, 44, 65, 0.25);
+}
+
+.practice__permcard-meta {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 10px;
+   color: var(--white-t);
+   font-size: 14px;
+}
+.practice__meta-item b {
+   color: var(--white-p);
+}
+.practice__hint {
+   color: var(--white-t);
+   opacity: 0.85;
+}
+
+.practice__next {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 6px;
+}
+.practice__next-chip {
+   background: var(--black-s);
+   color: var(--white-t);
+   border: 1px solid #2a3146;
+   border-radius: 9999px;
+   padding: 6px 10px;
+   font-size: 12px;
+}
+.practice__next-chip b {
+   color: var(--white-p);
+}
+
+/* utilitare */
+.tnum,
+.practice__timer,
+.practice__permcard-meta {
+   font-variant-numeric: tabular-nums;
+}
+
+.practice__pill {
+   border-radius: 9999px;
+   padding: 6px 10px;
+   font-size: 12px;
+   background: #0f1117;
+   border: 1px solid #2a3146;
+   color: #cfd3dc;
+}
+
+@media (max-width: 720px) {
+   .practice__permcard {
+      grid-template-columns: 1fr;
+   }
+   .practice__permcard-right {
+      justify-content: flex-start;
+   }
+}

@@ -12,11 +12,17 @@ import "react-clock/dist/Clock.css";
 import Popup from "../components/Utils/Popup";
 import { openPopup } from "../components/Utils/popupStore";
 import addIcon from "../assets/svg/mdi--calendar-plus-outline.svg";
+import accIcon from "../assets/svg/acc.svg";
+import clockIcon from "../assets/svg/clock.svg";
+import groupsIcon from "../assets/svg/material-symbols--group-outline.svg";
+import instrGroupsIcon from "../assets/svg/material-symbols--group-add-outline.svg";
+import instrIcon from "../assets/svg/mdi--account-cog-outline.svg";
+import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
+import managerIcon from "../assets/svg/mdi--account-star-outline.svg";
 
 import { getAllReservations } from "../api/reservationsService";
 import { getUsers } from "../api/usersService";
 import { getGroups } from "../api/groupsService";
-import { getInstructors } from "../api/instructorsService";
 import { useSelector, useDispatch } from "react-redux";
 import { fetchInstructors } from "../store/instructorsSlice";
 
@@ -27,8 +33,10 @@ import ClockDisplay from "../components/UI/ClockDisplay";
 import ReservationHistory from "../components/APanel/ReservationHistory";
 import ACalendarView from "../components/APanel/ACalendar";
 
-import { useUserContext, UserContext } from "../UserContext";
+import { UserContext } from "../UserContext";
 import InstructorsGroupManager from "../components/APanel/InstructorsGroupManager";
+import SubPopup from "../components/Utils/SubPopup";
+import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -42,11 +50,18 @@ const localizer = dateFnsLocalizer({
 
 function APanel() {
    const links = [
-      //{ link: "/student/portfolio", text: "Profil", icon: accIcon },
-      { popup: "sAddProg", text: "Programare", icon: addIcon },
-      //{ link: "/student", text: "Acasă", icon: homeIcon },
-      //{ link: "/student", text: "Testare", icon: testIcon },
-      //{ link: "/student", text: "Examen", icon: examIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
+      { popup: "addProg", text: "Programare", icon: addIcon },
+      { popup: "addInstr", text: "Instrucori", icon: instrIcon },
+      { popup: "addManager", text: "Manageri", icon: managerIcon },
+      { link: "/admin/groups", text: "Grupe", icon: groupsIcon },
+      {
+         link: "/admin/instr-groups",
+         text: "Ins. Grupe",
+         icon: instrGroupsIcon,
+      },
+      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
+      { link: "/admin/history", text: "Istoric", icon: clockIcon },
    ];
    const dispatch = useDispatch();
 
@@ -167,6 +182,7 @@ function APanel() {
    return (
       <>
          <Header links={links}>
+            <SubPopup />
             <Popup />
          </Header>
          <main className="main">
@@ -190,14 +206,14 @@ function APanel() {
                />
                <InstructorsGroupManager></InstructorsGroupManager>
             </section>
-            <ACalendarView
+            {/*<ACalendarView
                events={events}
                localizer={localizer}
                currentView={currentView}
                onSelectSlot={handleDayClick}
                onSelectEvent={handleEventClick}
                onViewChange={handleViewChange}
-            />
+            />*/}
          </main>
       </>
    );

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { ReactSVG } from "react-svg";
+
 import {
    fetchInstructors,
    addInstructor,
@@ -8,18 +9,43 @@ import {
    removeInstructor,
 } from "../../store/instructorsSlice";
 
+import { fetchCars, addCar, updateCar, removeCar } from "../../store/carsSlice";
 import { getUserById, updateUser, createUser } from "../../api/usersService";
-import editIcon from "../../assets/svg/edit.svg";
 
-/* =============== Componenta =============== */
+import editIcon from "../../assets/svg/edit.svg";
+import AlertPills from "../Utils/AlertPills";
+
+/* helpers */
+const clean = (o = {}) =>
+   Object.fromEntries(
+      Object.entries(o).filter(([_, v]) => v !== undefined && v !== "")
+   );
+const norm = (s) =>
+   String(s || "")
+      .replace(/\s+/g, "")
+      .toLowerCase();
+const toApiGearbox = (v) =>
+   String(v || "")
+      .toLowerCase()
+      .includes("auto")
+      ? "automat"
+      : "manual";
+
 function AddInstr() {
    const dispatch = useDispatch();
    const { list: instructors, status } = useSelector((s) => s.instructors);
+   const cars = useSelector((s) => s.cars.list || []);
 
    const [activeTab, setActiveTab] = useState("list");
    const [search, setSearch] = useState("");
    const [saving, setSaving] = useState(false);
 
+   const [pillMessages, setPillMessages] = useState([]);
+   const pushPill = (text, type = "error") =>
+      setPillMessages((prev) => [...prev, { id: Date.now(), text, type }]);
+   const popPill = () => setPillMessages((prev) => prev.slice(0, -1));
+
+   // === creare (fără confirmare parolă) ===
    const [newInstr, setNewInstr] = useState({
       firstName: "",
       lastName: "",
@@ -29,36 +55,30 @@ function AddInstr() {
       sector: "Botanica",
       isActive: true,
       instructorsGroupId: null,
+      carPlate: "",
+      gearbox: "manual",
    });
 
    const [editingId, setEditingId] = useState(null);
    const [editingUserId, setEditingUserId] = useState(null);
-
    const [editInstr, setEditInstr] = useState({
       firstName: "",
       lastName: "",
       phone: "",
       email: "",
       sector: "Botanica",
+      carPlate: "",
+      gearbox: "manual",
    });
 
-   // cache: userId -> user { email, firstName, lastName, phone }
    const [usersById, setUsersById] = useState({});
-
-   // utils
-   const clean = (o = {}) =>
-      Object.fromEntries(
-         Object.entries(o).filter(([_, v]) => v !== undefined && v !== "")
-      );
 
    const pickName = (inst = {}, u = {}) => ({
       firstName: inst.firstName || u.firstName || "",
       lastName: inst.lastName || u.lastName || "",
    });
-
    const getUserData = (inst) =>
       inst?.userId ? usersById[inst.userId] || {} : {};
-   const getEmail = (inst) => inst.email || getUserData(inst).email || "";
 
    function highlightText(text, query) {
       if (text === undefined || text === null) return "";
@@ -75,12 +95,14 @@ function AddInstr() {
       );
    }
 
-   /* ====== efecte ====== */
+   /* effects */
    useEffect(() => {
-      if (status === "idle") dispatch(fetchInstructors());
+      if (status === "idle") {
+         dispatch(fetchInstructors());
+         dispatch(fetchCars());
+      }
    }, [status, dispatch]);
 
-   // încarcă userii pentru toți instructorii care au userId
    useEffect(() => {
       let cancelled = false;
       (async () => {
@@ -105,8 +127,7 @@ function AddInstr() {
                            phone: u?.phone || "",
                         },
                      ];
-                  } catch (e) {
-                     console.error("getUserById failed:", id, e);
+                  } catch {
                      return [
                         id,
                         { email: "", firstName: "", lastName: "", phone: "" },
@@ -115,14 +136,11 @@ function AddInstr() {
                })
             );
             if (!cancelled) setUsersById(Object.fromEntries(entries));
-         } catch (e) {
-            if (!cancelled) console.error(e);
-         }
+         } catch {}
       })();
       return () => void (cancelled = true);
    }, [instructors]);
 
-   /* ====== filtrare ====== */
    const filteredInstructors = instructors.filter((inst) => {
       const q = (search || "").toLowerCase();
       const u = getUserData(inst);
@@ -131,62 +149,110 @@ function AddInstr() {
       const email = (inst.email || u.email || "").toLowerCase();
       const phone = (inst.phone || u.phone || "").toLowerCase();
       const sector = (inst.sector || "").toLowerCase();
+      const car = cars.find((c) => String(c.instructorId) === String(inst.id));
+      const plate = (car?.plateNumber || "").toLowerCase();
       return (
          fullName.includes(q) ||
          email.includes(q) ||
          phone.includes(q) ||
-         sector.includes(q)
+         sector.includes(q) ||
+         plate.includes(q)
       );
    });
 
-   /* ====== ADD: creez user -> apoi instructor ====== */
+   /* car helpers */
+   const upsertCarForInstructor = async ({ instructorId, plate, gearbox }) => {
+      const normalizedPlate = norm(plate);
+      const existing = cars.find(
+         (c) => String(c.instructorId) === String(instructorId)
+      );
+
+      if (!normalizedPlate) {
+         if (existing) await dispatch(removeCar(existing.id)).unwrap();
+         return;
+      }
+      if (existing) {
+         if (
+            norm(existing.plateNumber) !== normalizedPlate ||
+            toApiGearbox(existing.gearbox) !== toApiGearbox(gearbox)
+         ) {
+            await dispatch(
+               updateCar({
+                  id: existing.id,
+                  plateNumber: plate.trim(),
+                  instructorId,
+                  gearbox: toApiGearbox(gearbox),
+               })
+            ).unwrap();
+         }
+      } else {
+         await dispatch(
+            addCar({
+               plateNumber: plate.trim(),
+               instructorId,
+               gearbox: toApiGearbox(gearbox),
+            })
+         ).unwrap();
+      }
+   };
+
+   /* ADD (fără confirmare) */
    const handleAdd = async () => {
       setSaving(true);
+
+      if (!newInstr.password || newInstr.password.length < 6) {
+         pushPill("Parola trebuie să aibă minim 6 caractere.");
+         setSaving(false);
+         return;
+      }
+
       try {
+         // user cu rol INSTRUCTOR
          const userPayload = clean({
             email: newInstr.email?.trim(),
-            password: newInstr.password, // cerut de backend la creare
+            password: newInstr.password,
             firstName: newInstr.firstName?.trim(),
             lastName: newInstr.lastName?.trim(),
             phone: newInstr.phone?.trim(),
+            role: "INSTRUCTOR",
+            roles: ["INSTRUCTOR"],
+            roleName: "INSTRUCTOR",
          });
-         console.log("[ADD] /users payload ->", userPayload);
          const createdUser = await createUser(userPayload);
-         console.log("[ADD] /users response <-", createdUser);
-
          const userId =
             createdUser?.id ?? createdUser?.userId ?? createdUser?.data?.id;
 
+         // instructor
          const instrPayload = clean({
             firstName: newInstr.firstName?.trim(),
             lastName: newInstr.lastName?.trim(),
             phone: newInstr.phone?.trim(),
-            email: newInstr.email?.trim(), // dublură
+            email: newInstr.email?.trim(),
             sector: newInstr.sector,
             isActive: newInstr.isActive,
             instructorsGroupId: newInstr.instructorsGroupId,
             userId,
          });
-         console.log("[ADD] /instructors payload ->", instrPayload);
+         const createdInstr = await dispatch(
+            addInstructor(instrPayload)
+         ).unwrap();
+         const instructorId = createdInstr?.id ?? createdInstr?.data?.id;
 
-         const action = await dispatch(addInstructor(instrPayload));
-         console.log(
-            "[ADD] /instructors response <-",
-            action?.payload ?? action
-         );
-
-         if (userId) {
-            setUsersById((prev) => ({
-               ...prev,
-               [userId]: {
-                  email: userPayload.email,
-                  firstName: userPayload.firstName,
-                  lastName: userPayload.lastName,
-                  phone: userPayload.phone,
-               },
-            }));
+         // car
+         if (instructorId) {
+            await upsertCarForInstructor({
+               instructorId,
+               plate: newInstr.carPlate || "",
+               gearbox: newInstr.gearbox || "manual",
+            });
          }
 
+         await Promise.all([
+            dispatch(fetchInstructors()),
+            dispatch(fetchCars()),
+         ]);
+
+         setPillMessages([]);
          setNewInstr({
             firstName: "",
             lastName: "",
@@ -196,65 +262,65 @@ function AddInstr() {
             sector: "Botanica",
             isActive: true,
             instructorsGroupId: null,
+            carPlate: "",
+            gearbox: "manual",
          });
          setActiveTab("list");
       } catch (e) {
          console.error("[ADD] Eroare (user/instructor):", e);
+         pushPill("Eroare la creare utilizator/instructor.");
       } finally {
          setSaving(false);
       }
    };
 
-   /* ====== EDIT: PATCH /users (email,phone) + PATCH /instructors (nume, email, phone, sector) ====== */
+   /* EDIT */
    const handleSaveEdit = async () => {
       setSaving(true);
-
-      // determin userId devreme (evităm “Cannot access 'uid' before initialization”)
-      const uid =
-         editingUserId ??
-         instructors.find((i) => i.id === editingId)?.userId ??
-         null;
-
-      const userPayload = clean({
-         email: editInstr.email?.trim(),
-         phone: editInstr.phone?.trim(),
-      });
-
-      const instrPayload = clean({
-         firstName: editInstr.firstName?.trim(),
-         lastName: editInstr.lastName?.trim(),
-         email: editInstr.email?.trim(),
-         phone: editInstr.phone?.trim(),
-         sector: editInstr.sector,
-      });
-
-      console.log("[EDIT] ids:", { instructorId: editingId, userId: uid });
-      console.log("[EDIT] PATCH /users payload ->", userPayload);
-      console.log("[EDIT] PATCH /instructors payload ->", instrPayload);
-
       try {
-         // 1) update pe user (doar câmpurile care backend-ul chiar le aplică)
+         const uid =
+            editingUserId ??
+            instructors.find((i) => i.id === editingId)?.userId ??
+            null;
+
+         const userPayload = clean({
+            email: editInstr.email?.trim(),
+            phone: editInstr.phone?.trim(),
+         });
+
+         const instrPayload = clean({
+            firstName: editInstr.firstName?.trim(),
+            lastName: editInstr.lastName?.trim(),
+            email: editInstr.email?.trim(),
+            phone: editInstr.phone?.trim(),
+            sector: editInstr.sector,
+         });
+
          if (uid) {
             const userRes = await updateUser(uid, userPayload);
-            console.log("[EDIT] /users response <-", userRes);
             setUsersById((prev) => ({
                ...prev,
                [uid]: { ...(prev[uid] || {}), ...userRes },
             }));
-         } else {
-            console.warn("[EDIT] Lipsă userId pentru instructor:", editingId);
          }
 
-         // 2) update pe instructor (inclusiv nume/prenume)
-         const action = await dispatch(
+         await dispatch(
             updateInstructor({ id: editingId, data: instrPayload })
-         );
-         console.log(
-            "[EDIT] /instructors response <-",
-            action?.payload ?? action
-         );
+         ).unwrap();
+
+         await upsertCarForInstructor({
+            instructorId: editingId,
+            plate: editInstr.carPlate || "",
+            gearbox: editInstr.gearbox || "manual",
+         });
+
+         await Promise.all([
+            dispatch(fetchInstructors()),
+            dispatch(fetchCars()),
+         ]);
       } catch (e) {
          console.error("[EDIT] Eroare (user/instructor):", e);
+         pushPill("Eroare la salvarea modificărilor.");
       } finally {
          setSaving(false);
          setEditingId(null);
@@ -262,17 +328,22 @@ function AddInstr() {
       }
    };
 
-   const handleDelete = (id) => {
-      if (window.confirm("Ești sigur că vrei să ștergi acest instructor?")) {
-         dispatch(removeInstructor(id));
-         setEditingId(null);
-         setEditingUserId(null);
-      }
+   const handleDelete = async (id) => {
+      if (!window.confirm("Ești sigur că vrei să ștergi acest instructor?"))
+         return;
+      try {
+         const existing = cars.find(
+            (c) => String(c.instructorId) === String(id)
+         );
+         if (existing) await dispatch(removeCar(existing.id)).unwrap();
+      } catch {}
+      dispatch(removeInstructor(id));
+      setEditingId(null);
+      setEditingUserId(null);
    };
 
-   /* ====== render ====== */
    return (
-      <div className="instructors-popup">
+      <>
          <div className="popup-panel__header">
             <h3 className="popup-panel__title">Instructori</h3>
          </div>
@@ -315,6 +386,9 @@ function AddInstr() {
                            const { firstName, lastName } = pickName(inst, u);
                            const mergedPhone = inst.phone || u.phone || "";
                            const mergedEmail = inst.email || u.email || "";
+                           const car = cars.find(
+                              (c) => String(c.instructorId) === String(inst.id)
+                           );
 
                            return (
                               <li
@@ -325,6 +399,7 @@ function AddInstr() {
                               >
                                  {editingId === inst.id ? (
                                     <div className="instructors-popup__form">
+                                       {/* rând 1: Prenume + Nume */}
                                        <div className="instructors-popup__form-row">
                                           <input
                                              type="text"
@@ -336,6 +411,10 @@ function AddInstr() {
                                                    firstName: e.target.value,
                                                 }))
                                              }
+                                             placeholder={
+                                                firstName || "Prenume"
+                                             }
+                                             autoComplete="given-name"
                                           />
                                           <input
                                              type="text"
@@ -347,12 +426,15 @@ function AddInstr() {
                                                    lastName: e.target.value,
                                                 }))
                                              }
+                                             placeholder={lastName || "Nume"}
+                                             autoComplete="family-name"
                                           />
                                        </div>
 
+                                       {/* rând 2: Telefon + Email */}
                                        <div className="instructors-popup__form-row">
                                           <input
-                                             type="text"
+                                             type="tel"
                                              className="instructors-popup__input"
                                              value={editInstr.phone}
                                              onChange={(e) =>
@@ -361,21 +443,45 @@ function AddInstr() {
                                                    phone: e.target.value,
                                                 }))
                                              }
+                                             placeholder={
+                                                (mergedPhone &&
+                                                   `Ex: ${mergedPhone}`) ||
+                                                "Telefon"
+                                             }
+                                             inputMode="tel"
+                                             autoComplete="tel"
                                           />
                                           <input
-                                             type="email"
+                                             type="text"
                                              className="instructors-popup__input"
-                                             value={editInstr.email}
+                                             placeholder="Nr. mașină"
+                                             value={editInstr.carPlate}
                                              onChange={(e) =>
                                                 setEditInstr((s) => ({
                                                    ...s,
-                                                   email: e.target.value,
+                                                   carPlate: e.target.value,
                                                 }))
                                              }
                                           />
+                                       </div>
+                                       <input
+                                          type="email"
+                                          className="instructors-popup__input"
+                                          value={editInstr.email}
+                                          onChange={(e) =>
+                                             setEditInstr((s) => ({
+                                                ...s,
+                                                email: e.target.value,
+                                             }))
+                                          }
+                                          placeholder={mergedEmail || "Email"}
+                                          autoComplete="email"
+                                       />
 
+                                       {/* rând 4: Sector (radio) + Cutie (radio) */}
+                                       <div className="instructors-popup__form-row">
                                           <div
-                                             className={`instructors-popup__radio-wrapper ${
+                                             className={`instructors-popup__radio-wrapper grow ${
                                                 editInstr.sector === "Botanica"
                                                    ? "active-botanica"
                                                    : "active-ciocana"
@@ -416,6 +522,53 @@ function AddInstr() {
                                                    }
                                                 />
                                                 Ciocana
+                                             </label>
+                                          </div>
+
+                                          <div
+                                             className={`instructors-popup__radio-wrapper grow ${
+                                                editInstr.gearbox === "manual"
+                                                   ? "active-botanica"
+                                                   : "active-ciocana"
+                                             }`}
+                                          >
+                                             <label>
+                                                <input
+                                                   type="radio"
+                                                   name={`gearbox-${editingId}`}
+                                                   value="manual"
+                                                   checked={
+                                                      editInstr.gearbox ===
+                                                      "manual"
+                                                   }
+                                                   onChange={(e) =>
+                                                      setEditInstr((s) => ({
+                                                         ...s,
+                                                         gearbox:
+                                                            e.target.value,
+                                                      }))
+                                                   }
+                                                />
+                                                Manual
+                                             </label>
+                                             <label>
+                                                <input
+                                                   type="radio"
+                                                   name={`gearbox-${editingId}`}
+                                                   value="automat"
+                                                   checked={
+                                                      editInstr.gearbox ===
+                                                      "automat"
+                                                   }
+                                                   onChange={(e) =>
+                                                      setEditInstr((s) => ({
+                                                         ...s,
+                                                         gearbox:
+                                                            e.target.value,
+                                                      }))
+                                                   }
+                                                />
+                                                Automat
                                              </label>
                                           </div>
                                        </div>
@@ -462,19 +615,33 @@ function AddInstr() {
                                           </h3>
                                           <p>
                                              {highlightText(
-                                                mergedPhone,
+                                                inst.phone ||
+                                                   getUserData(inst).phone ||
+                                                   "",
                                                 search
                                              )}
                                           </p>
                                           <p>
                                              {highlightText(
-                                                mergedEmail,
+                                                inst.email ||
+                                                   getUserData(inst).email ||
+                                                   "",
                                                 search
                                              )}
                                           </p>
                                           <p>
                                              {highlightText(
                                                 inst.sector || "",
+                                                search
+                                             )}
+                                          </p>
+                                          <p>
+                                             {highlightText(
+                                                cars.find(
+                                                   (c) =>
+                                                      String(c.instructorId) ===
+                                                      String(inst.id)
+                                                )?.plateNumber || "—",
                                                 search
                                              )}
                                           </p>
@@ -487,13 +654,28 @@ function AddInstr() {
                                              setEditingUserId(
                                                 inst.userId || null
                                              );
+                                             const car = cars.find(
+                                                (c) =>
+                                                   String(c.instructorId) ===
+                                                   String(inst.id)
+                                             );
+                                             const u = getUserData(inst);
+                                             const { firstName, lastName } =
+                                                pickName(inst, u);
                                              setEditInstr({
                                                 firstName,
                                                 lastName,
-                                                phone: mergedPhone,
-                                                email: mergedEmail,
+                                                phone:
+                                                   inst.phone || u.phone || "",
+                                                email:
+                                                   inst.email || u.email || "",
                                                 sector:
                                                    inst.sector || "Botanica",
+                                                carPlate:
+                                                   car?.plateNumber || "",
+                                                gearbox: toApiGearbox(
+                                                   car?.gearbox || "manual"
+                                                ),
                                              });
                                           }}
                                           src={editIcon}
@@ -509,6 +691,18 @@ function AddInstr() {
 
                {activeTab === "add" && (
                   <div className="instructors-popup__add">
+                     {/* Pills vizibile în add */}
+                     <div
+                        className="instructors-popup__pill"
+                        style={{ marginBottom: 8 }}
+                     >
+                        <AlertPills
+                           messages={pillMessages}
+                           onDismiss={popPill}
+                        />
+                     </div>
+
+                     {/* rând 1: Prenume + Nume */}
                      <div className="instructors-popup__form-row">
                         <input
                            type="text"
@@ -521,6 +715,7 @@ function AddInstr() {
                                  firstName: e.target.value,
                               })
                            }
+                           autoComplete="given-name"
                         />
                         <input
                            type="text"
@@ -533,9 +728,11 @@ function AddInstr() {
                                  lastName: e.target.value,
                               })
                            }
+                           autoComplete="family-name"
                         />
                      </div>
 
+                     {/* rând 2: Email + Telefon */}
                      <div className="instructors-popup__form-row">
                         <input
                            type="email"
@@ -548,7 +745,26 @@ function AddInstr() {
                                  email: e.target.value,
                               })
                            }
+                           autoComplete="email"
                         />
+                        <input
+                           type="tel"
+                           className="instructors-popup__input"
+                           placeholder="Telefon"
+                           value={newInstr.phone}
+                           onChange={(e) =>
+                              setNewInstr({
+                                 ...newInstr,
+                                 phone: e.target.value,
+                              })
+                           }
+                           inputMode="tel"
+                           autoComplete="tel"
+                        />
+                     </div>
+
+                     {/* rând 3: Parolă + Nr. mașină */}
+                     <div className="instructors-popup__form-row">
                         <input
                            type="password"
                            className="instructors-popup__input"
@@ -560,58 +776,101 @@ function AddInstr() {
                                  password: e.target.value,
                               })
                            }
+                           autoComplete="new-password"
                         />
                         <input
                            type="text"
                            className="instructors-popup__input"
-                           placeholder="Telefon"
-                           value={newInstr.phone}
+                           placeholder="Nr. mașină (opțional)"
+                           value={newInstr.carPlate}
                            onChange={(e) =>
                               setNewInstr({
                                  ...newInstr,
-                                 phone: e.target.value,
+                                 carPlate: e.target.value,
                               })
                            }
                         />
                      </div>
 
-                     <div
-                        className={`instructors-popup__radio-wrapper ${
-                           newInstr.sector === "Botanica"
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        }`}
-                     >
-                        <label>
-                           <input
-                              type="radio"
-                              name="sector"
-                              value="Botanica"
-                              checked={newInstr.sector === "Botanica"}
-                              onChange={(e) =>
-                                 setNewInstr({
-                                    ...newInstr,
-                                    sector: e.target.value,
-                                 })
-                              }
-                           />
-                           Botanica
-                        </label>
-                        <label>
-                           <input
-                              type="radio"
-                              name="sector"
-                              value="Ciocana"
-                              checked={newInstr.sector === "Ciocana"}
-                              onChange={(e) =>
-                                 setNewInstr({
-                                    ...newInstr,
-                                    sector: e.target.value,
-                                 })
-                              }
-                           />
-                           Ciocana
-                        </label>
+                     {/* rând 4: Sector (radio) + Cutie (radio) */}
+                     <div className="instructors-popup__form-row">
+                        <div
+                           className={`instructors-popup__radio-wrapper grow ${
+                              newInstr.sector === "Botanica"
+                                 ? "active-botanica"
+                                 : "active-ciocana"
+                           }`}
+                        >
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="sector"
+                                 value="Botanica"
+                                 checked={newInstr.sector === "Botanica"}
+                                 onChange={(e) =>
+                                    setNewInstr({
+                                       ...newInstr,
+                                       sector: e.target.value,
+                                    })
+                                 }
+                              />
+                              Botanica
+                           </label>
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="sector"
+                                 value="Ciocana"
+                                 checked={newInstr.sector === "Ciocana"}
+                                 onChange={(e) =>
+                                    setNewInstr({
+                                       ...newInstr,
+                                       sector: e.target.value,
+                                    })
+                                 }
+                              />
+                              Ciocana
+                           </label>
+                        </div>
+
+                        <div
+                           className={`instructors-popup__radio-wrapper grow ${
+                              newInstr.gearbox === "manual"
+                                 ? "active-botanica"
+                                 : "active-ciocana"
+                           }`}
+                        >
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="gearbox_add"
+                                 value="manual"
+                                 checked={newInstr.gearbox === "manual"}
+                                 onChange={(e) =>
+                                    setNewInstr({
+                                       ...newInstr,
+                                       gearbox: e.target.value,
+                                    })
+                                 }
+                              />
+                              Manual
+                           </label>
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="gearbox_add"
+                                 value="automat"
+                                 checked={newInstr.gearbox === "automat"}
+                                 onChange={(e) =>
+                                    setNewInstr({
+                                       ...newInstr,
+                                       gearbox: e.target.value,
+                                    })
+                                 }
+                              />
+                              Automat
+                           </label>
+                        </div>
                      </div>
 
                      <div className="instructors-popup__btns">
@@ -634,7 +893,7 @@ function AddInstr() {
                )}
             </div>
          </div>
-      </div>
+      </>
    );
 }
 

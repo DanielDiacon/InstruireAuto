@@ -129,7 +129,7 @@ function SPCalendar() {
    }, []);
    const handleEventClick = (event) => {
       openPopup("eventInfo", { event }); // sau "dayInfo" dacă așa vrei
-      console.log("CLICK PE EVENIMENT:", event);
+      //console.log("CLICK PE EVENIMENT:", event);
    };
 
    // interval vizibil în Week view: 07:00–21:00

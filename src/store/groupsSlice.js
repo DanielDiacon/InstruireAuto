@@ -21,17 +21,23 @@ export const fetchGroups = createAsyncThunk("groups/fetchGroups", async () => {
 
 export const addGroup = createAsyncThunk(
    "groups/addGroup",
-   async ({ name, instructorId }) => {
-      return await createGroups({ name, instructorId });
+   async ({ name, instructorId, token }) => {
+      return await createGroups({ name, instructorId, token });
    }
 );
 
 export const updateGroup = createAsyncThunk(
    "groups/updateGroup",
-   async ({ id, name, instructorId = 1 }) => {
-      // ⚡ trimite corect payload-ul către API
-      await patchGroup(id, { name, instructorId });
-      return { id, name };
+   async ({ id, name, instructorId, token }) => {
+      const payload = {};
+      if (typeof name !== "undefined") payload.name = name;
+      if (typeof instructorId !== "undefined")
+         payload.instructorId = instructorId;
+      if (typeof token !== "undefined") payload.token = token;
+
+      await patchGroup(id, payload);
+      // întoarcem ce s-a trimis ca să putem actualiza store-ul corect
+      return { id, ...payload };
    }
 );
 
@@ -72,8 +78,19 @@ const groupsSlice = createSlice({
          })
          .addCase(updateGroup.fulfilled, (state, action) => {
             const group = state.list.find((g) => g.id === action.payload.id);
-            if (group) group.name = action.payload.name;
+            if (group) {
+               if (typeof action.payload.name !== "undefined") {
+                  group.name = action.payload.name;
+               }
+               if (typeof action.payload.instructorId !== "undefined") {
+                  group.instructorId = action.payload.instructorId;
+               }
+                if (typeof action.payload.token !== "undefined") {
+       group.token = action.payload.token;
+     }
+            }
          })
+
          .addCase(removeGroup.fulfilled, (state, action) => {
             state.list = state.list.filter((g) => g.id !== action.payload);
          });

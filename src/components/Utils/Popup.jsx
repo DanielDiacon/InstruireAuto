@@ -3,6 +3,8 @@ import {
    subscribePopup,
    getCurrentPopup,
    closePopup as closePopupStore,
+   getCurrentSubPopup,
+   closeSubPopup as requestCloseSubPopup,
 } from "./popupStore";
 import AAddProg from "../Popups/AAddProg";
 import SAddProg from "../Popups/SAddProg";
@@ -15,6 +17,7 @@ import addIcon from "../../assets/svg/add-s.svg";
 import Profile from "../Popups/Profile";
 import EventInfoPopup from "../Popups/EventInfo";
 import InstrEventInfoPopup from "../Popups/InstrEventInfo";
+import AddManager from "../Popups/AddManager";
 
 export default function Popup() {
    const [popupState, setPopupState] = useState({
@@ -23,6 +26,9 @@ export default function Popup() {
    });
    const [exiting, setExiting] = useState(false);
    const panelRef = useRef(null);
+
+   // 🔑 cheie care forțează remount pe fiecare OPEN
+   const [openKey, setOpenKey] = useState(0);
 
    // --- mobil doar (pentru back care închide popup-ul)
    const isMobile = () =>
@@ -36,7 +42,10 @@ export default function Popup() {
    const closingByPopstateRef = useRef(false);
 
    const handleCloseClick = () => {
-      // pe mobil, dacă intrarea din istorie aparține sesiunii active → consumă Back
+      if (getCurrentSubPopup()) {
+         requestCloseSubPopup();
+         return;
+      }
       if (
          isMobile() &&
          hasHistoryEntryRef.current === sessionIdRef.current &&
@@ -50,6 +59,11 @@ export default function Popup() {
 
    useEffect(() => {
       const onPopState = () => {
+         // dacă există un SubPopup deschis, îl lăsăm pe el să gestioneze back-ul
+         if (getCurrentSubPopup()) return;
+         // dacă back-ul este pentru SubPopup, îl lăsăm pe SubPopup să-l gestioneze
+         const st = typeof window !== "undefined" ? window.history.state : null;
+         if (st && st.__subpopup_dummy) return;
          if (!isMobile()) return;
          if (!hasHistoryEntryRef.current) return;
 
@@ -79,9 +93,16 @@ export default function Popup() {
             sessionIdRef.current += 1;
             const sid = sessionIdRef.current;
 
+            // 🔄 forțează remount la fiecare deschidere
+            setOpenKey(sid);
+
             setExiting(false);
             document.body.classList.add("popup-open");
-            setPopupState({ type: detail.type, props: detail.props || {} });
+            // copiem props ca obiect nou
+            setPopupState({
+               type: detail.type,
+               props: { ...(detail.props || {}) },
+            });
 
             // pune intrare în istorie DOAR pe mobil
             if (isMobile()) {
@@ -110,7 +131,8 @@ export default function Popup() {
 
             const handleTransitionEnd = (e) => {
                if (e.target === panelRef.current && exiting) {
-                  setPopupState((prev) => ({ ...prev, type: null }));
+                  // șterge complet conținutul ca să nu rămână state vechi
+                  setPopupState({ type: null, props: {} });
                   panelRef.current.removeEventListener(
                      "transitionend",
                      handleTransitionEnd
@@ -131,23 +153,25 @@ export default function Popup() {
    const renderContent = () => {
       switch (popupState.type) {
          case "addProg":
-            return <AAddProg {...popupState.props} />;
+            return <AAddProg key={openKey} {...popupState.props} />;
          case "sAddProg":
-            return <SAddProg {...popupState.props} />;
+            return <SAddProg key={openKey} {...popupState.props} />;
          case "addInstr":
-            return <AddInstr {...popupState.props} />;
+            return <AddInstr key={openKey} {...popupState.props} />;
          case "dayInfo":
-            return <ADayInfoPopup {...popupState.props} />;
+            return <ADayInfoPopup key={openKey} {...popupState.props} />;
          case "studentDetails":
-            return <StudentInfo {...popupState.props} />;
+            return <StudentInfo key={openKey} {...popupState.props} />;
          case "reservationEdit":
-            return <ReservationEdit {...popupState.props} />;
+            return <ReservationEdit key={openKey} {...popupState.props} />;
          case "profile":
-            return <Profile {...popupState.props} />;
+            return <Profile key={openKey} {...popupState.props} />;
          case "eventInfo":
-            return <EventInfoPopup {...popupState.props} />;
+            return <EventInfoPopup key={openKey} {...popupState.props} />;
          case "instrEventInfo":
-            return <InstrEventInfoPopup {...popupState.props} />;
+            return <InstrEventInfoPopup key={openKey} {...popupState.props} />;
+         case "addManager":
+            return <AddManager key={openKey} {...popupState.props} />;
          default:
             return null;
       }

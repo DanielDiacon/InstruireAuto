@@ -121,14 +121,18 @@
          border-radius: 32px;
       }
    }
-
+   &__create {
+      padding: 6px;
+      border-radius: 22px;
+      background: var(--black-p);
+   }
    &__form {
       border-radius: 22px;
       background: var(--black-p);
       display: flex;
       flex-direction: column;
-      padding: 6px;
       justify-content: space-between;
+      padding: 0px;
       gap: 3px;
       input {
          border-radius: 16px;
@@ -196,7 +200,7 @@
       display: grid;
       padding-top: 24px;
       padding-bottom: 12px;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)) !important;
       grid-auto-rows: min-content;
       gap: 6px;
    }
@@ -211,8 +215,9 @@
       &-left {
          display: flex;
          flex-direction: column;
+         color: var(--white-p);
          width: 100%;
-         padding: 12px 0px 12px 12px;
+         padding: 12px 0px 48px 12px;
       }
       &-left-top {
          position: relative;
@@ -230,7 +235,7 @@
          padding: 0px;
          transition: all var(--elastic-s), background var(--classic-f);
          line-height: 1.4;
-         visibility: hidden;
+         //visibility: hidden;
       }
 
       &-right {
@@ -327,6 +332,7 @@
             scale: 0.9;
          }
       }
+
       &-delete {
          button {
             background: var(--black-s);
@@ -398,39 +404,42 @@
             }
          }
       }
-      &.active {
-         .groups__item-input {
-            background: var(--black-s);
-            padding: 10px 16px 10px 16px;
-            visibility: visible;
-            top: -6px;
-            width: calc(100% + 6px);
-            left: -6px;
-         }
-         .groups__item-key {
-            opacity: 0;
-         }
-         .delete-btn {
-            visibility: visible;
-            opacity: 1;
-         }
-         .groups__item-right {
-            gap: 3px;
-         }
-         h3 {
-            padding: 4px 0 0 10px;
-            visibility: hidden;
-            opacity: 1;
-         }
-         p {
-            visibility: hidden;
-            opacity: 0;
-         }
-         .delete-btn.hidden {
-            opacity: 0;
-            visibility: hidden;
-            padding: 12px 10px;
-         }
-      }
+      //&.active {
+      //   .groups__item-input {
+      //      background: var(--black-s);
+      //      padding: 10px 16px 10px 16px;
+      //      visibility: visible;
+      //      top: -6px;
+      //      width: calc(100% + 6px);
+      //      left: -6px;
+      //   }
+      //   .groups__item-key {
+      //      opacity: 0;
+      //   }
+      //   .delete-btn {
+      //      visibility: visible;
+      //      opacity: 1;
+      //   }
+      //   .groups__item-right {
+      //      gap: 3px;
+      //   }
+      //   h3 {
+      //      padding: 4px 0 0 10px;
+      //      visibility: hidden;
+      //      opacity: 1;
+      //   }
+      //   p {
+      //      visibility: hidden;
+      //      opacity: 0;
+      //   }
+      //   .delete-btn.hidden {
+      //      opacity: 0;
+      //      visibility: hidden;
+      //      padding: 12px 10px;
+      //   }
+      //}
+   }
+   &__chooser-btn {
+      width: 100% !important;
    }
 }

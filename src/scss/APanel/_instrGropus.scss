@@ -8,7 +8,6 @@
    display: flex;
    flex-direction: column;
    height: 100%;
-
    &__grid-wrapper {
       z-index: 2;
       position: relative;
@@ -45,7 +44,8 @@
       display: grid;
       padding-top: 24px;
       padding-bottom: 12px;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+
       grid-auto-rows: min-content;
       gap: 6px;
    }
@@ -128,7 +128,13 @@
       padding: 6px;
       gap: 6px;
       &-header {
-         padding: 6px 6px 0 6px;
+         display: flex;
+         justify-content: space-between;
+         gap: 6px;
+         h4 {
+            color: var(--white-p);
+            padding: 8px 0px 4px 12px;
+         }
       }
       button {
          background: var(--black-s);
@@ -137,15 +143,6 @@
          bottom: 0;
          left: 0;
          position: relative;
-         button {
-            padding: 14px 20px !important;
-            &:hover {
-               padding: 14px 22px !important;
-            }
-            &:active {
-               padding: 14px 20px !important;
-            }
-         }
          .delete-btn {
             bottom: 0px;
             left: 0px;
@@ -157,7 +154,6 @@
          .delete-btn.hidden {
             opacity: 0;
             visibility: hidden;
-            padding: 14px 20px;
          }
          .delete-confirmation {
             bottom: 0px;
@@ -195,7 +191,7 @@
          background: var(--black-p);
          display: flex;
          flex-direction: column;
-         padding: 6px;
+         padding: 0px;
          justify-content: space-between;
          gap: 6px;
          input {
@@ -232,95 +228,112 @@
          gap: 6px;
       }
    }
-   &__edit {
+
+   &__edit,
+   &__create {
       &-form {
       }
       &-row {
+         display: grid;
+         //grid-template-columns: 3fr 2fr;
       }
    }
-   &__input {
+   /* —— Common ———————————————————————————————— */
+   &__input-title {
+      border-radius: 16px;
+      padding: 10px 16px 11px 16px;
+      font-size: 14px;
+      background: var(--black-s);
+      color: var(--white-p);
+      width: 100%;
+   }
+   &__button {
+      &.rotate45 {
+         svg {
+            rotate: 45deg;
+         }
+      }
+   }
+   &__actions {
+   }
+   &__item-delete {
+   }
+   &__list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+   }
+   &__list li {
+      display: flex;
+      gap: 6px;
+      padding: 12px 20px;
+      border-radius: 16px;
+      background: var(--black-s);
+      color: var(--white-p);
+   }
+   &__icon {
    }
    &__select {
    }
-   &__button {
+   .pillbar {
+      display: flex;
+      gap: 6px;
    }
-   &__list {
+   .pill {
+      padding: 8px 12px;
+      background: var(--accent-t);
+      text-transform: capitalize;
+      color: var(--white-p);
+      border-radius: 30px;
+   }
+   /* === Chooser (lista mare de instructori) ================================== */
+   .picker__search {
+   }
+   .picker__list {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+   }
+   .picker__empty {
+   }
+   .picker__item {
+      background: var(--black-s);
+      padding: 8px 12px;
+      color: var(--white-p);
+      border-radius: 16px;
+      transition: var(--classic-s);
+      cursor: pointer;
+      &.is-disabled {
+      }
+      &:hover {
+         border-radius: 12px;
+         background: var(--accent-t);
+      }
+   }
+   .picker__label {
+   }
+   .picker__meta {
    }
 }
 
-.instructorsgroup {
-}
-.instructorsgroup__header {
-}
-.open {
-}
-.groups__right {
-}
-.groups__search {
-}
-.groups__input {
-}
-.groups__icon {
-}
-.react-icon {
-}
-.rotate45 {
-}
-.instructorsgroup__icon {
-}
-.instructorsgroup__grid-wrapper {
-}
-.instructorsgroup__grid {
-}
-.instructorsgroup__item {
-}
-.instructorsgroup__create-form {
-}
-.instructorsgroup__input {
-}
-.instructors-popup__radio-wrapper {
-}
-.addprog {
-}
-.active-botanica {
-}
-.active-ciocana {
-}
-.instructorsgroup__create-grid {
-}
-.instructorsgroup__create-row {
-}
-.instructorsgroup__select {
-}
-.instructorsgroup__button {
-}
-.active {
-}
-.instructorsgroup__item-header {
-}
-.instructorsgroup__edit-form {
-}
-.instructorsgroup__edit-row {
-}
-.instrgroup {
-}
-.instructorsgroup__list {
-}
-.instructorsgroup__actions {
-}
-.instructorsgroup__item-delete {
-}
-.groups__item-delete {
-}
+/* === Delete / Confirm ===================================================== */
 .delete-btn {
+   /* buton „Șterge” (stare normală) */
 }
 .hidden {
+   /* ascunde butonul (când apare confirmarea) */
 }
 .delete-confirmation {
+   /* container „Da / Nu” */
 }
 .delete-confirm {
+   /* buton DA */
 }
 .cancel-confirm {
+   /* buton NU + „Anulează” din create form */
 }
+
+/* === Utility =============================================================== */
 .highlight {
+   /* wrap <i> pentru text evidențiat la search */
 }

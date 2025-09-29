@@ -1,4 +1,3 @@
-// src/store/instructorsSlice.js
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import {
    getInstructors,
@@ -8,15 +7,16 @@ import {
 } from "../api/instructorsService";
 import { createUser, updateUser } from "../api/usersService";
 
-// helper: ținem doar câmpurile de user acceptate de backend
+/** doar câmpurile permise pe /users */
 const pickUserFields = (d = {}) => ({
    email: d.email,
    firstName: d.firstName,
    lastName: d.lastName,
    phone: d.phone,
+   privateMessage: d.privateMessage, // aici ținem “Înlocuitor: ...”
 });
 
-// === Thunks existente ===
+/* ===== Thunks de bază ===== */
 export const fetchInstructors = createAsyncThunk(
    "instructors/fetchInstructors",
    async () => {
@@ -26,12 +26,14 @@ export const fetchInstructors = createAsyncThunk(
       );
    }
 );
+
 export const addInstructor = createAsyncThunk(
    "instructors/addInstructor",
-   async (p) => {
-      return await createInstructors(p);
+   async (payload) => {
+      return await createInstructors(payload);
    }
 );
+
 export const updateInstructor = createAsyncThunk(
    "instructors/updateInstructor",
    async ({ id, data }) => {
@@ -39,6 +41,7 @@ export const updateInstructor = createAsyncThunk(
       return { id, ...data };
    }
 );
+
 export const removeInstructor = createAsyncThunk(
    "instructors/removeInstructor",
    async (id) => {
@@ -47,64 +50,66 @@ export const removeInstructor = createAsyncThunk(
    }
 );
 
-// === NOI: ADD user -> apoi instructor (cu dubluri) ===
+/* ===== Add: creează mai întâi user, apoi instructor ===== */
 export const addInstructorWithUser = createAsyncThunk(
    "instructors/addWithUser",
    async (payload) => {
-      const user = await createUser(pickUserFields(payload)); // email, firstName, lastName, phone (+password dacă ai în createUser)
+      const user = await createUser(pickUserFields(payload));
       const userId = user?.id ?? user?.userId ?? user?.data?.id;
 
       const instructor = await createInstructors({
          firstName: payload.firstName,
          lastName: payload.lastName,
          phone: payload.phone,
-         email: payload.email, // dublură pe instructor
+         email: payload.email,
          sector: payload.sector,
          isActive: payload.isActive,
          instructorsGroupId: payload.instructorsGroupId,
-         userId, // legătura
+         userId,
       });
 
-      return instructor; // serverul ar trebui să returneze recordul complet
+      return instructor;
    }
 );
 
-// === NOI: UPDATE user + instructor cu aceleași valori ===
+/* ===== Update: sincronizează user (privateMessage) + instructor ===== */
 export const updateInstructorWithUser = createAsyncThunk(
    "instructors/updateWithUser",
    async ({ id, data }, { getState }) => {
-      // găsim userId din store dacă nu e furnizat
       const state = getState();
-      const instr = state.instructors.list.find((i) => i.id === id);
+      const instr = state.instructors.list.find(
+         (i) => String(i.id) === String(id)
+      );
       const userId = data.userId ?? instr?.userId;
 
       if (userId) {
-         await updateUser(userId, pickUserFields(data)); // PATCH /users/:id
+         await updateUser(userId, pickUserFields(data)); // aici ajunge “Înlocuitor: …”
       }
 
       await patchInstructors(id, {
-         email: data.email, // dubluri
+         email: data.email,
          firstName: data.firstName,
          lastName: data.lastName,
          phone: data.phone,
          sector: data.sector,
+         isActive: data.isActive,
+         instructorsGroupId: data.instructorsGroupId,
+         userId,
       });
 
-      return { id, ...data }; // pentru merge local
+      return { id, ...data };
    }
 );
 
-// === Slice ===
+/* ===== Slice ===== */
 const instructorsSlice = createSlice({
    name: "instructors",
    initialState: { list: [], status: "idle", error: null },
    reducers: {},
-   extraReducers: (builder) => {
-      builder
-         // FETCH
-         .addCase(fetchInstructors.pending, (s) => {
-            s.status = "loading";
-         })
+   extraReducers: (b) => {
+      b.addCase(fetchInstructors.pending, (s) => {
+         s.status = "loading";
+      })
          .addCase(fetchInstructors.fulfilled, (s, a) => {
             s.status = "succeeded";
             s.list = a.payload;
@@ -113,31 +118,25 @@ const instructorsSlice = createSlice({
             s.status = "failed";
             s.error = a.error.message;
          })
-
-         // ADD (vechi)
          .addCase(addInstructor.fulfilled, (s, a) => {
             s.list.push(a.payload);
          })
-
-         // UPDATE (vechi)
          .addCase(updateInstructor.fulfilled, (s, a) => {
-            const idx = s.list.findIndex((i) => i.id === a.payload.id);
+            const idx = s.list.findIndex(
+               (i) => String(i.id) === String(a.payload.id)
+            );
             if (idx !== -1) s.list[idx] = { ...s.list[idx], ...a.payload };
          })
-
-         // REMOVE
          .addCase(removeInstructor.fulfilled, (s, a) => {
-            s.list = s.list.filter((i) => i.id !== a.payload);
+            s.list = s.list.filter((i) => String(i.id) !== String(a.payload));
          })
-
-         // ADD + USER (nou)
          .addCase(addInstructorWithUser.fulfilled, (s, a) => {
             s.list.push(a.payload);
          })
-
-         // UPDATE + USER (nou)
          .addCase(updateInstructorWithUser.fulfilled, (s, a) => {
-            const idx = s.list.findIndex((i) => i.id === a.payload.id);
+            const idx = s.list.findIndex(
+               (i) => String(i.id) === String(a.payload.id)
+            );
             if (idx !== -1) s.list[idx] = { ...s.list[idx], ...a.payload };
          });
    },

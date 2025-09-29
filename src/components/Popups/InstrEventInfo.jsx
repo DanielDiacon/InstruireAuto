@@ -38,7 +38,7 @@ export default function InstrEventInfoPopup({ event }) {
       ? event.studentsCount
       : students.length;
 
-   // studentul „principal” (dacă e doar unul)
+   // student „principal” (dacă e doar unul)
    const primaryStudent = students.length === 1 ? students[0] : null;
    const primaryStudentPhone =
       primaryStudent?.phone ||
@@ -47,12 +47,11 @@ export default function InstrEventInfoPopup({ event }) {
       primaryStudent?.phone_number ||
       "-";
 
-   // telefonul afișat în câmpul „Telefon” – preferăm studentul
+   // telefonul afișat – preferăm studentul, altfel listăm toate numerele cunoscute
    const phoneField =
       primaryStudentPhone !== "-"
          ? primaryStudentPhone
-         : // fallback: dacă sunt mai mulți, poți lista toate
-           students
+         : students
               .map(
                  (s) =>
                     s?.phone ||
@@ -64,57 +63,84 @@ export default function InstrEventInfoPopup({ event }) {
               .filter(Boolean)
               .join(", ") || "-";
 
+   const confirmedMod = event.isConfirmed ? "confirmed-yes" : "confirmed-no";
+   const gbx = (event.gearbox || "–").toString().toLowerCase();
+   const gearboxMod = gbx.includes("man")
+      ? "gearbox-manual"
+      : gbx.includes("auto")
+      ? "gearbox-automatic"
+      : "gearbox-na";
+
    return (
-      <div className="event-info">
-         <div className="popup-panel__header">
-            <h3 className="popup-panel__title">Detalii Programare</h3>
+      <>
+         <div className="popup-panel__header instr-event__header">
+            <h3 className="popup-panel__title instr-event__title">
+               Detalii Programare
+            </h3>
          </div>
 
-         <div className="popup-panel__content">
-            <div className="row">
-               <strong>Zi:</strong> <span>{format(event.start)}</span>
+         <div className="popup-panel__content instr-event__content">
+            <div className="row instr-event__row instr-event__row--day">
+               <strong className="instr-event__label">Zi:</strong>
+               <span className="instr-event__value instr-event__value--day">
+                  {format(event.start)}
+               </span>
             </div>
-            <div className="row">
-               <strong>Interval:</strong>{" "}
-               <span>
+
+            <div className="row instr-event__row instr-event__row--time">
+               <strong className="instr-event__label">Interval:</strong>
+               <span className="instr-event__value instr-event__value--time">
                   {fmt(event.start)} – {fmt(event.end)}
                </span>
             </div>
 
-            {/* 👇 Student în prim-plan */}
-            <div className="row">
-               <strong>Student:</strong>{" "}
-               <span>
+            {/* Student */}
+            <div className="row instr-event__row instr-event__row--student">
+               <strong className="instr-event__label">Student:</strong>
+               <span className="instr-event__value instr-event__value--student">
                   {primaryStudent
                      ? fullName(primaryStudent)
                      : studentCount > 0
                      ? `${studentCount} studenți`
                      : "-"}
                </span>
-            </div>
-            <div className="row">
-               <strong>Telefon:</strong> <span>{phoneField}</span>
-            </div>
-
-            {/* info instructor rămâne vizibil mai jos */}
-            <div className="row">
-               <strong>Instructor:</strong>{" "}
-               <span>
-                  {event.instructor?.firstName} {event.instructor?.lastName}
+               <span className="instr-event__value instr-event__value--phone">
+                  {phoneField}
                </span>
             </div>
 
-            <div className="row">
-               <strong>Confirmat:</strong>{" "}
-               <span>{event.isConfirmed ? "Da" : "Nu"}</span>
+            {/* Confirmare */}
+            <div
+               className={`row instr-event__row instr-event__row--confirmed instr-event__row--${confirmedMod}`}
+            >
+               <strong className="instr-event__label">Starea:</strong>
+               <span
+                  className={`instr-event__value instr-event__value--confirmed instr-event__value--${confirmedMod}`}
+               >
+                  {event.isConfirmed ? "Confirmată" : "Neconfirmată"}
+               </span>
             </div>
-            <div className="row">
-               <strong>Cutie:</strong> <span>{event.gearbox || "–"}</span>
+
+            {/* Cutie */}
+            <div
+               className={`row instr-event__row instr-event__row--gearbox instr-event__row--${gearboxMod}`}
+            >
+               <strong className="instr-event__label">Cutie:</strong>
+               <span
+                  className={`instr-event__value instr-event__value--gearbox instr-event__value--${gearboxMod}`}
+               >
+                  {event.gearbox || "–"}
+               </span>
             </div>
-            <div className="row">
-               <strong>Sector:</strong> <span>{event.sector || "-"}</span>
+
+            {/* Sector */}
+            <div className="row instr-event__row instr-event__row--sector">
+               <strong className="instr-event__label">Sector:</strong>
+               <span className="instr-event__value instr-event__value--sector">
+                  {event.sector || "-"}
+               </span>
             </div>
          </div>
-      </div>
+      </>
    );
 }

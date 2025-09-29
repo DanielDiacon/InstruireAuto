@@ -31,6 +31,7 @@ import todayIcon from "../assets/svg/material-symbols--today-outline.svg";
 import { openPopup } from "../components/Utils/popupStore";
 import InstrGroups from "../components/IPanel/InstrGroups";
 import TodayInfo from "../components/IPanel/TodayInfo";
+import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
 
 /* ========= Localizer + RO formats/messages ========= */
 const locales = { ro, "ro-RO": ro };
@@ -270,7 +271,7 @@ function IPanel() {
 
    const handleEventClick = (event) => {
       openPopup("instrEventInfo", { event });
-      console.log("CLICK PE EVENIMENT:", event);
+      //console.log("CLICK PE EVENIMENT:", event);
    };
 
    const MIN_TIME = new Date(1970, 0, 1, 7, 0, 0);
@@ -291,18 +292,19 @@ function IPanel() {
                <TodayInfo />
                <div className="intro__right">
                   <InstrGroups />
+
                   <div className="intro__clock-wrapper">
                      <ClockDisplay />
                      <NextLesson
                         nextLesson={nextLesson}
                         nextLessonIndex={nextLessonIndex}
-                        instr='instr'
+                        instr="instr"
                      />
                   </div>
                </div>
             </section>
 
-            <section className="calendar">
+            <section className="calendar ipanel">
                <SCalendar
                   localizer={localizer}
                   culture="ro-RO"

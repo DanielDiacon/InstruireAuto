@@ -1,14 +1,16 @@
 .saddprogramari {
-   padding-bottom: 1px;
    &__selector {
       display: grid;
       gap: 6px;
-      grid-template-columns: 1fr;
+      grid-template-columns: 5fr 3fr;
       flex-wrap: wrap;
       &.row {
          grid-template-columns: 1fr 1fr;
          padding: 0 0 6px 0px;
          align-items: center;
+      }
+      &.col {
+         grid-template-columns: 1fr;
       }
    }
    &__title {
@@ -33,14 +35,16 @@
       flex-direction: column;
       gap: 6px;
       padding: 5px;
+      overflow: hidden;
    }
 
    &__times-list {
       position: relative;
       display: grid;
       gap: 6px;
-      padding-bottom: 10px;
-      grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(50px, 1fr));
+      grid-template-rows: repeat(4, 1fr);
+      height: 100%;
    }
    &__disclaimer {
       position: absolute;
@@ -67,23 +71,24 @@
       background: var(--black-p);
       color: var(--white-s);
       border-radius: 25px;
-      padding: 17px 20px;
+      padding: 12px 16px;
       transition: var(--classic-s);
       box-shadow: none;
       font-weight: 500;
+      height: 100%;
       //margin: 0 ;
       &:hover {
          transition: all var(--elastic-s), background var(--classic-s);
          color: var(--accent-l);
          border-radius: 16px;
-         padding: 18px 22px;
-         margin: -1px 0;
+         padding: 12px 16px;
+         //margin: -1px 0;
       }
       &:active {
          transition: all var(--elastic-s), background var(--classic-s);
          transform: scale(0.93);
          margin: 0;
-         padding: 17px 20px;
+         padding: 12px 16px;
          border-radius: 32px;
       }
 
@@ -100,7 +105,7 @@
          &:hover {
             color: var(--white-s);
             border-radius: 32px;
-            padding: 17px 20px;
+            padding: 12px 16px;
             margin: 0;
          }
       }
@@ -260,6 +265,9 @@
       &-date {
          color: var(--white-p);
       }
+      &--conflict {
+         background: #f2919179;
+      }
    }
    /* containere & spacing */
    &__box {
@@ -285,6 +293,7 @@
    &__ghost-btn {
       color: var(--white-s);
    }
+
    &__confirm {
       gap: 10px;
       display: grid;
@@ -315,8 +324,141 @@
          background: var(--black-s);
       }
    }
-}
+   &__toggle {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+   }
+   &__toggle-btn {
+      border-radius: 25px;
+      padding: 13px 20px;
+      transition: var(--classic-s);
+      background: var(--black-p);
+      color: var(--white-s);
+      z-index: 2;
+      position: relative;
+      width: auto;
+      &:hover {
+         transition: all var(--elastic-s), background var(--classic-s);
+         border-radius: 16px;
+         padding: 13px 22px;
+      }
+      &:active {
+         transition: all var(--elastic-s), background var(--classic-s);
+         transform: scale(0.95);
+         padding: 13px 20px;
+         border-radius: 32px;
+      }
+   }
+   &__toggle-btn.is-active {
+      background: var(--accent-l);
+      color: var(--accent-d);
+   }
+   &__new-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+   }
+   /* grid pentru swatch-uri */
+   &__color-grid {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+      width: 100%;
+      background: var(--black-p);
+      border-radius: 24px;
+      padding: 8px;
+   }
 
+   &__color-swatch {
+      --sw: var(--event-default);
+      height: 28px;
+      border-radius: 16px;
+      background: var(--sw);
+      cursor: pointer;
+      outline: none;
+      transition: var(--elastic-f);
+      flex: 1;
+      outline: 0px solid color-mix(in srgb, var(--sw), white);
+      outline-offset: 0px;
+   }
+   &__color-swatch:hover {
+      transition: var(--elastic-f);
+      outline: 3px solid color-mix(in srgb, var(--sw) 85%, white 15%);
+      outline-offset: -1px;
+   }
+   &__color-swatch:active {
+      scale: 0.96;
+   }
+   &__color-swatch.is-active {
+      border-color: var(--sw);
+      outline: 2px solid var(--sw);
+      outline-offset: 2px;
+   }
+   /* dacă ai suport pentru color-mix(), folosește-l pentru un accent mai “vizibil” */
+   @supports (outline-color: color-mix(in srgb, white, black)) {
+      &__color-swatch.is-active {
+         outline: 2px solid color-mix(in srgb, var(--sw) 85%, white 15%);
+         outline-offset: 2px;
+      }
+   }
+
+   /* accesibilitate: focus vizibil */
+   &__color-swatch:focus-visible {
+      outline: 2px dashed color-mix(in srgb, var(--sw) 85%, white 15%);
+      outline-offset: 2px;
+   }
+
+   /* mapare token -> variabila CSS a culorii */
+   &__color-swatch--red {
+      --sw: var(--event-red);
+   }
+   &__color-swatch--orange {
+      --sw: var(--event-orange);
+   }
+   &__color-swatch--yellow {
+      --sw: var(--event-yellow);
+   }
+   &__color-swatch--green {
+      --sw: var(--event-green);
+   }
+   &__color-swatch--blue {
+      --sw: var(--event-blue);
+   }
+   &__color-swatch--indigo {
+      --sw: var(--event-indigo);
+   }
+   &__color-swatch--purple {
+      --sw: var(--event-purple);
+   }
+   &__color-swatch--pink {
+      --sw: var(--event-pink);
+   }
+}
+.phone-suggestions {
+   display: grid;
+   grid-template-columns: 1fr 1fr;
+   gap: 6px;
+   padding: 6px 0;
+   &__item {
+      background: var(--black-p);
+      border-radius: 16px;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: var(--classic-f);
+      color: var(--white-s);
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      &:hover {
+         background: var(--green-l);
+         color: var(--green-d);
+      }
+      &:active {
+         transform: scale(0.97);
+      }
+   }
+}
 /* butoane simple reutilizabile */
 
 @media only screen and (max-width: $mobile) {
@@ -328,18 +470,40 @@
             align-items: center;
          }
       }
+      &__title.hide {
+         display: none;
+      }
+      &__times {
+         color: var(--white-p) !important;
+         display: flex;
+         flex-direction: column;
+         gap: 6px;
+         height: 100%;
+         padding: 0;
+      }
+
       &__times-list {
-         grid-template-columns: 1fr 1fr 1fr;
+         display: grid;
+         grid-template-columns: 1fr 1fr 1fr 1fr;
+         grid-template-rows: 1fr 1fr;
+         gap: 6px;
+         width: 100%;
+         height: 100%;
       }
       &__time-btn:last-child {
          grid-column: auto;
       }
-      .instructors-popup__radio-wrapper {
+   }
+   .react-datepicker {
+      &__day {
+         aspect-ratio: 4/3;
+         display: flex !important;
+         align-items: center;
+         justify-content: center;
       }
    }
 }
 
-//
 //
 //
 //
@@ -423,6 +587,11 @@
 
    &__day-name {
       color: var(--white-p) !important;
+      text-align: center !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
       // fiecare zi din antet
    }
 
@@ -486,42 +655,6 @@
       &--keyboard-selected:hover {
          background: var(--black-p) !important;
          color: var(--white-s) !important;
-      }
-
-      // zile numerotate: .react-datepicker__day--001 până la --031
-      // le poți stiliza generic:
-      &--001,
-      &--002,
-      &--003,
-      &--004,
-      &--005,
-      &--006,
-      &--007,
-      &--008,
-      &--009,
-      &--010,
-      &--011,
-      &--012,
-      &--013,
-      &--014,
-      &--015,
-      &--016,
-      &--017,
-      &--018,
-      &--019,
-      &--020,
-      &--021,
-      &--022,
-      &--023,
-      &--024,
-      &--025,
-      &--026,
-      &--027,
-      &--028,
-      &--029,
-      &--030,
-      &--031 {
-         // zile calendar numerotate
       }
    }
 }

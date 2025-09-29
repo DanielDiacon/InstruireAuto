@@ -15,39 +15,46 @@ const sendRequest = async (
    contentType = null
 ) => {
    const defaultContentType = "application/json; charset=UTF-8";
+   const token = getCookie("access_token");
+   // după const token = getCookie("access_token");
+   if (!token) {
+      console.warn(
+         "[AUTH] Nu există access_token în cookies → Authorization nu va fi trimis."
+      );
+   } else {
+      console.debug(
+         "[AUTH] Token prezent. Primele 12 caractere:",
+         token.slice(0, 12),
+         "..."
+      );
+   }
 
    const headers = {
-      Authorization: `Bearer ${getCookie("access_token") || ""}`.trim(),
+      Accept: "application/json",
    };
 
-   // Setăm Content-Type doar dacă NU e GET/HEAD și doar dacă nu e FormData
+   // adaugă Authorization doar dacă există token
+   if (token) {
+      headers.Authorization = `Bearer ${token}`;
+   }
+
    const upper = method.toUpperCase();
    if (upper !== "GET" && upper !== "HEAD") {
+      // setează Content-Type doar pentru metode cu body
       headers["Content-Type"] = contentType ?? defaultContentType;
    }
 
-   // Bun de avut: semnalăm că dorim JSON în răspuns (nu strică dacă serverul îl ignoră)
-   headers["Accept"] = "application/json";
+   const requestOptions = { method: upper, headers };
 
-   const requestOptions = {
-      method: upper,
-      headers,
-   };
-
-   // Body
    if (data != null && upper !== "GET" && upper !== "HEAD") {
       if (data instanceof FormData) {
-         // Lăsăm browserul să seteze boundary-ul corect
          delete requestOptions.headers["Content-Type"];
          requestOptions.body = data;
       } else if (typeof data === "string" || data instanceof Blob) {
-         // Dacă trimiți deja un string (ex: JSON.stringify manual) sau Blob, folosește-l ca atare
          requestOptions.body = data;
       } else if (isJsonContentType(requestOptions.headers["Content-Type"])) {
-         // Trimitere JSON corectă
          requestOptions.body = JSON.stringify(data);
       } else {
-         // Alte tipuri (ex: x-www-form-urlencoded, text/plain) — presupunem că e deja corect
          requestOptions.body = data;
       }
    }
@@ -55,20 +62,23 @@ const sendRequest = async (
    try {
       const url = "https://instruireauto.site/api" + endpoint;
 
-      // GET/HEAD fără body
-      const response =
-         upper === "GET" || upper === "HEAD"
-            ? await fetch(url, {
-                 headers: {
-                    Authorization: headers.Authorization,
-                    Accept: headers.Accept,
-                 },
-              })
-            : await fetch(url, requestOptions);
+      // DEBUG prietenos
+      try {
+         console.debug("[HTTP]", upper, endpoint, {
+            headers,
+            body: requestOptions.body,
+         });
+      } catch {}
 
-      if (response.type === "cors" && response.redirected) {
-         window.location.href = response.url;
-      }
+      const response = await fetch(url, requestOptions);
+
+      let responseText = "";
+      try {
+         responseText = await response.clone().text();
+      } catch {}
+      try {
+         console.debug("[HTTP RES]", response.status, endpoint, responseText);
+      } catch {}
 
       return response;
    } catch (error) {

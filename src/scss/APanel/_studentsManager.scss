@@ -111,12 +111,9 @@
       }
    }
 
-   &__form {
-      border-radius: 22px;
-      background: var(--black-p);
+   &-info__form {
       display: flex;
       flex-direction: column;
-      padding: 6px;
       justify-content: space-between;
       gap: 3px;
       input {
@@ -125,28 +122,8 @@
          font-size: 14px;
          background: var(--black-s);
          color: var(--white-p);
+         background: red;
          width: 100%;
-      }
-      p {
-         padding: 0 6px;
-         color: var(--white-t);
-         opacity: 0.6;
-         height: 0;
-      }
-      button {
-         background: var(--black-s);
-         border-radius: 16px;
-         align-self: flex-end;
-         padding: auto;
-         padding: 12px 20px;
-         &:hover {
-            background: var(--green-d);
-            padding: 12px 24px;
-            color: var(--green-l);
-         }
-         &:active {
-            padding: 12px 24px;
-         }
       }
    }
    &__grid-wrapper {
@@ -197,6 +174,7 @@
       justify-content: space-between;
       position: relative;
       height: auto;
+      overflow: hidden;
       &-left {
          display: flex;
          flex-direction: column;
@@ -238,6 +216,9 @@
       p {
          transition: 0.3s;
          color: var(--white-s);
+         text-overflow: ellipsis;
+         width: 100%;
+         overflow: hidden;
       }
       &-key {
          color: var(--white-s);
@@ -314,72 +295,59 @@
       }
       &-delete {
          button {
-            background: var(--black-s);
-            border-radius: 16px;
+            background: var(--black-p);
+            color: var(--accent-l);
+            border-radius: 20px;
             align-self: flex-end;
-            padding: 12px 20px;
-            transition: var(--elastic-s);
+            padding: 14px 20px;
+            transition: all var(--elastic-s), background var(--classic-s);
             &:hover {
-               padding: 12px 24px;
+               padding: 14px 24px;
                color: hsl(0, 100%, 11%);
                background: hsl(0, 100%, 81%);
             }
             &:active {
-               padding: 12px 24px;
+               padding: 14px 24px;
             }
          }
          .delete-btn {
-            opacity: 1;
-            position: absolute;
-            bottom: 6px;
-            left: 6px;
-            visibility: visible;
-            padding: 12px 20px;
-            visibility: hidden;
-            opacity: 0;
-            transition: 0.3s;
          }
          .delete-btn.hidden {
-            opacity: 0;
+            display: none;
             visibility: hidden;
-            padding: 12px 10px;
          }
          .delete-confirmation {
             gap: 6px;
             opacity: 1;
             display: flex;
-            visibility: visible;
-            position: absolute;
-            bottom: 6px;
-            left: 6px;
-            transition: var(--elastic-s);
             button {
-               padding: 12px 20px;
+               padding: 14px 20px;
             }
          }
          .delete-confirmation.hidden {
             gap: 3px;
-            opacity: 0;
-            visibility: hidden;
+            display: none;
             button {
-               padding: 12px 10px;
+               padding: 14px 10px;
             }
          }
          .delete-confirm {
+            transition: all var(--elastic-s), background var(--classic-f);
+
             &:hover {
-               padding: 12px 24px;
+               padding: 14px 24px;
             }
          }
          .cancel-confirm {
             color: var(--white-p);
-            background: var(--black-s);
+            background: var(--black-p);
             &:hover {
-               padding: 12px 24px;
+               padding: 14px 24px;
                color: var(--white-p);
-               background: var(--black-s);
+               background: var(--black-p);
             }
             &:active {
-               padding: 12px 24px;
+               padding: 14px 24px;
             }
          }
       }
@@ -419,6 +387,7 @@
       }
    }
    &__item {
+      cursor: pointer;
       border-radius: 22px;
       background: var(--black-p);
       display: flex;

@@ -96,8 +96,8 @@ function SPanel() {
       { popup: "profile", text: "Profil", icon: accIcon },
       { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
-      { link: "/student", text: "Testare", icon: testIcon },
-      { link: "/student", text: "Examen", icon: examIcon },
+      { link: "/student/test", text: "Testare", icon: testIcon },
+      { link: "/student/exam", text: "Examen", icon: examIcon },
    ];
 
    const { user } = useContext(UserContext);
@@ -150,7 +150,7 @@ function SPanel() {
    }, []);
    const handleEventClick = (event) => {
       openPopup("eventInfo", { event });
-      console.log("CLICK PE EVENIMENT:", event);
+      //console.log("CLICK PE EVENIMENT:", event);
    };
    // Week view: 07:00–21:00
    const MIN_TIME = new Date(1970, 0, 1, 7, 0, 0);

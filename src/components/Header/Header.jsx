@@ -54,23 +54,23 @@ const Header = ({ children, links }) => {
          if (user.role === "INSTRUCTOR") {
             try {
                const list = await getInstructors();
-               console.log("[Header] GET /instructors ->", list);
+               //console.log("[Header] GET /instructors ->", list);
 
                const mine = list.find((i) => i.userId === user.id);
                if (mine) {
                   // prefer numele din instructor; dacă lipsesc, cad pe cele din user
                   firstName = mine.firstName || firstName || "";
                   lastName = mine.lastName || lastName || "";
-                  console.log(
-                     "[Header] matched instructor by userId:",
-                     user.id,
-                     mine
-                  );
+                  //console.log(
+                  //   "[Header] matched instructor by userId:",
+                  //   user.id,
+                  //   mine
+                  //);
                } else {
-                  console.warn(
-                     "[Header] no instructor found for userId:",
-                     user.id
-                  );
+                  //console.warn(
+                  //   "[Header] no instructor found for userId:",
+                  //   user.id
+                  //);
                }
             } catch (e) {
                console.error("[Header] getInstructors failed:", e);
@@ -87,7 +87,7 @@ const Header = ({ children, links }) => {
    }, [user]);
 
    const cols = 3;
-   const openRows = Math.max(1, Math.ceil((links?.length || 0) / cols));
+   const openRows = Math.max(1, Math.ceil((links?.length + 0.3 || 0) / cols));
 
    return (
       <>
@@ -117,7 +117,7 @@ const Header = ({ children, links }) => {
                      <div className="header__menu menu">
                         <nav className="menu__body" id="navbar">
                            <ul
-                              className="menu__list rows-4"
+                              className="menu__list "
                               style={{ "--openRows": openRows }}
                            >
                               {/* burger ca LI (HTML valid) */}
