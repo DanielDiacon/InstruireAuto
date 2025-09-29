@@ -11,6 +11,7 @@ import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
 import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
+import examIcon from "../../assets/svg/mdi--book-clock-outline.svg";
 
 import { getAllReservations } from "../../api/reservationsService";
 import { getUsers } from "../../api/usersService";
@@ -22,17 +23,18 @@ import { UserContext } from "../../UserContext";
 
 function MPHistory() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
-      { popup: "addProg", text: "Programare", icon: addIcon },
+      { link: "/manager", text: "Acasă", icon: homeIcon },
+      { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
       { link: "/manager/groups", text: "Grupe", icon: groupsIcon },
+      { popup: "startExam", text: "Examen", icon: examIcon },
       {
          link: "/manager/instr-groups",
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-      { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
-      { link: "/manager", text: "Acasă", icon: homeIcon },
+      { popup: "addProg", text: "Programare", icon: addIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
    const dispatch = useDispatch();
    const [reservations, setReservations] = useState([]);
@@ -46,7 +48,7 @@ function MPHistory() {
    }, []);
 
    useEffect(() => {
-      if (!user || user.role !== "ADMIN") return;
+      if (!user || user.role !== "MANAGER") return;
 
       dispatch(fetchInstructors());
 

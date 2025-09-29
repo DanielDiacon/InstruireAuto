@@ -12,7 +12,32 @@
    padding: 16px;
    position: relative;
    overflow: hidden;
-   min-height: calc(100vh - 48px);
+   &.exam {
+      min-height: calc(100vh - 48px);
+      &::after {
+         content: "";
+         position: absolute;
+         bottom: -180%;
+         left: 50%;
+         transform: translateX(-50%);
+         width: 300%;
+         height: 300%;
+         background: radial-gradient(
+            circle,
+            transparent,
+            transparent,
+            rgba(243, 252, 121, 0.2),
+            transparent,
+            transparent,
+            transparent,
+            transparent
+         );
+
+         filter: blur(10px);
+         pointer-events: none;
+         z-index: 0;
+      }
+   }
    &__header {
       display: flex;
       flex-direction: column;
@@ -33,12 +58,9 @@
    }
 
    &__error {
-      margin: 10px 0 14px;
       padding: 10px 12px;
       border-radius: 14px;
-      background: #2b1215;
       color: #ff6b6b;
-      border: 1px solid rgba(255, 107, 107, 0.35);
    }
 
    &__grid {
@@ -92,6 +114,8 @@
       justify-content: space-between;
       gap: 12px;
       margin-bottom: 12px;
+      position: relative;
+      z-index: 30;
    }
 
    &__back {
@@ -105,6 +129,10 @@
       padding: 14px 20px;
       transition: var(--classic-s);
       position: relative;
+      &.green {
+         background: #9cf680 !important;
+         color: #0d3700 !important;
+      }
       &:hover {
          transition: all var(--elastic-s), background var(--classic-s);
          border-radius: 16px;
@@ -138,6 +166,8 @@
       grid-template-columns: repeat(12, 1fr);
       margin-bottom: 12px;
       gap: 6px;
+      position: relative;
+      z-index: 30;
    }
 
    &__dot {
@@ -182,6 +212,7 @@
    /* — Card întrebare — */
    &__question {
       position: relative;
+      z-index: 30;
    }
    &__row {
       display: grid;
@@ -420,7 +451,9 @@
       gap: 6px;
    }
    .practice {
-      min-height: calc(100vh - 110px);
+      &.exam {
+         min-height: calc(100vh - 110px);
+      }
       &__grid {
          grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
       }
@@ -671,175 +704,223 @@
 .practice__qtext {
    scroll-margin-top: 0;
 }
-/* starea paginii */
-.practice.is-waiting {
-}
-.practice.is-test {
-}
-.practice.is-result {
-}
-
-/* card permisiune */
-.practice__permcard {
-   background: var(--black-p);
-   border: 1px solid #242938;
-   border-radius: 16px;
-   padding: 14px;
-   display: grid;
-   grid-template-columns: 1fr auto;
-   gap: 12px;
-   align-items: center;
-   margin-bottom: 12px;
+/* ========== COMPLETĂRI LIPSĂ (dark, fără var()) ========== */
+.practice {
+   overflow: hidden;
    position: relative;
-}
-.practice__permcard--ok {
-   box-shadow: 0 0 0 1px rgba(156, 246, 128, 0.16) inset;
-}
-.practice__permcard--wait {
-   box-shadow: 0 0 0 1px rgba(128, 209, 246, 0.16) inset;
-}
-.practice__permcard--checking::after {
-   content: "";
-   position: absolute;
-   inset: 0;
-   background: linear-gradient(
-      100deg,
-      transparent 30%,
-      rgba(255, 255, 255, 0.06) 50%,
-      transparent 70%
-   );
-   transform: translateX(-100%);
-   animation: permShimmer 1.15s infinite;
-}
-@keyframes permShimmer {
-   to {
-      transform: translateX(100%);
+   display: flex;
+   flex-direction: column;
+   z-index: 1;
+
+   > .card.top {
+      margin-bottom: 12px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      flex: 1 1 0;
+      min-height: 400px;
+
+      h2 {
+         font-size: 32px;
+         line-height: 1;
+         color: var(--white-p);
+         font-family: "Clash Display";
+         font-weight: 500;
+         position: relative;
+         z-index: 2;
+         flex-shrink: 0;
+         text-align: center;
+         white-space: nowrap;
+      }
+      p {
+         color: var(--white-s);
+         text-align: center;
+      }
+   }
+   .card {
+      position: relative;
+      z-index: 30;
+   }
+   > .card:first-of-type {
+      > div {
+         display: flex;
+         gap: 12px;
+         align-items: center;
+         flex-wrap: wrap;
+
+         > button:last-child {
+            margin-left: auto;
+         }
+
+         > div:nth-child(2) {
+            font-size: 12px;
+            opacity: 0.8;
+         }
+      }
+   }
+
+   /* cardul de istoric */
+   .card {
+      h4 {
+         font-size: 20px;
+         padding: 4px;
+      }
+      > p {
+         opacity: 0.8;
+      } /* loading / empty */
+      p {
+         color: inherit;
+      } /* opțional: păstrează culoarea */
+   }
+
+   /* istoric încercări */
+   &__history {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      @media only screen and (max-width: $mobile) {
+         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      }
+      gap: 6px;
+      &-item {
+         display: flex;
+         flex-direction: column;
+         background: var(--black-p);
+         border-radius: 16px;
+         padding: 8px 10px;
+         gap: 3px;
+         > div:first-child {
+            > div:first-child {
+               /* status */
+               font-weight: 600;
+               text-transform: capitalize;
+            }
+            > div:nth-child(2) {
+               /* dată/perioadă */
+               font-size: 12px;
+               opacity: 0.8;
+            }
+         }
+
+         > div:last-child {
+            text-align: right;
+
+            > div:first-child {
+               /* scor */
+               font-weight: 600;
+            }
+            > div:last-child {
+               /* total întrebări */
+               font-size: 12px;
+               opacity: 0.8;
+            }
+         }
+
+         &--finished {
+            background: #9cf680;
+            color: #0d3700;
+         }
+         &--in_progress,
+         &--inprogress,
+         &--running {
+            background: #80d1f6;
+            color: #002c41;
+         }
+         &--failed,
+         &--error {
+            background: #f68080;
+            color: #410000;
+         }
+      }
+   }
+
+   /* blocul de rezultat + rândul cu butoane */
+   &__done {
+      margin-top: 16px;
+
+      > div {
+         display: flex;
+         gap: 8px;
+         justify-content: center;
+      }
+   }
+
+   /* răspuns – stări lipsă */
+   &__answer {
+      &--locked {
+         cursor: default;
+         opacity: 0.9;
+      }
+      &--loading {
+         position: relative;
+         pointer-events: none;
+         opacity: 0.7;
+
+         &::before {
+            content: "";
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 2px solid rgba(207, 211, 220, 0.35);
+            border-top-color: #cfd3dc;
+            animation: spinSmall 0.8s linear infinite;
+         }
+      }
+   }
+
+   /* focus rings */
+   &__secondary {
+      &:focus-visible {
+         outline: 2px solid rgba(13, 55, 0, 0.6);
+         outline-offset: 2px;
+      }
+   }
+   &__secondary--primary {
+      &:focus-visible {
+         outline: 2px solid rgba(0, 44, 65, 0.6);
+         outline-offset: 2px;
+      }
+   }
+   &__back:focus-visible,
+   &__timer:focus-visible,
+   &__question-index:focus-visible,
+   &__dot:focus-visible {
+      outline: 2px solid rgba(128, 209, 246, 0.65);
+      outline-offset: 2px;
+   }
+
+   /* utilitare mici */
+   &__spacer {
+      flex: 1 1 auto;
    }
 }
 
-.practice__permcard-left {
-   display: grid;
-   gap: 8px;
-}
-.practice__permcard-right {
-   display: flex;
-   align-items: center;
-   gap: 8px;
-   margin-left: 8px;
-}
-
-.practice__permcard-title {
-   display: flex;
-   align-items: center;
-   gap: 8px;
-   font-weight: 700;
-   color: var(--white-p);
-}
-.practice__status-dot {
-   width: 10px;
-   height: 10px;
-   border-radius: 9999px;
-   display: inline-block;
-   background: #cfd3dc;
-   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25) inset;
-}
-.practice__status-dot--ok {
-   background: #86eb67;
-}
-.practice__status-dot--wait {
-   background: #80d1f6;
-}
-.practice__status-dot--spin {
-   background: #cfd3dc;
-   position: relative;
-}
-.practice__status-dot--spin::after {
-   content: "";
-   position: absolute;
-   inset: -3px;
-   border-radius: 9999px;
-   border: 2px solid transparent;
-   border-top-color: #cfd3dc;
-   animation: spin 1s linear infinite;
-}
-@keyframes spin {
-   to {
-      transform: rotate(360deg);
-   }
-}
-
-.practice__badge {
-   font-size: 12px;
-   font-weight: 800;
-   padding: 2px 6px;
-   border-radius: 12px;
-   border: 1px solid transparent;
-   line-height: 1;
-}
-.practice__badge--ok {
-   background: #9cf680;
-   color: #0d3700;
-   border-color: rgba(13, 55, 0, 0.25);
-}
-.practice__badge--wait {
-   background: #80d1f6;
-   color: #002c41;
-   border-color: rgba(0, 44, 65, 0.25);
-}
-
-.practice__permcard-meta {
-   display: flex;
-   flex-wrap: wrap;
-   gap: 10px;
-   color: var(--white-t);
-   font-size: 14px;
-}
-.practice__meta-item b {
-   color: var(--white-p);
-}
-.practice__hint {
-   color: var(--white-t);
-   opacity: 0.85;
-}
-
-.practice__next {
-   display: flex;
-   flex-wrap: wrap;
-   gap: 6px;
-}
-.practice__next-chip {
-   background: var(--black-s);
-   color: var(--white-t);
-   border: 1px solid #2a3146;
-   border-radius: 9999px;
-   padding: 6px 10px;
-   font-size: 12px;
-}
-.practice__next-chip b {
+/* === utilitare globale folosite în markup (fără clase noi) === */
+.card {
    color: var(--white-p);
 }
 
-/* utilitare */
-.tnum,
-.practice__timer,
-.practice__permcard-meta {
-   font-variant-numeric: tabular-nums;
-}
-
-.practice__pill {
-   border-radius: 9999px;
-   padding: 6px 10px;
-   font-size: 12px;
+.button {
    background: #0f1117;
-   border: 1px solid #2a3146;
    color: #cfd3dc;
-}
+   border: 1px solid #2a3146;
+   border-radius: 25px;
+   padding: 12px 16px;
+   transition: all 0.15s ease;
 
-@media (max-width: 720px) {
-   .practice__permcard {
-      grid-template-columns: 1fr;
+   &:hover {
+      background: #121722;
    }
-   .practice__permcard-right {
-      justify-content: flex-start;
+   &:active {
+      transform: scale(0.97);
+   }
+
+   @media (max-width: 720px) {
+      padding: 10px 14px;
    }
 }

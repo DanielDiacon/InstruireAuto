@@ -18,6 +18,7 @@ import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
 import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
+import examIcon from "../../assets/svg/mdi--book-clock-outline.svg";
 
 import { getAllReservations } from "../../api/reservationsService";
 import { getUsers } from "../../api/usersService";
@@ -41,19 +42,21 @@ const localizer = dateFnsLocalizer({
 
 function MPCalendar() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
+      { link: "/manager", text: "Acasă", icon: homeIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
+      { popup: "startExam", text: "Examen", icon: examIcon },
       { link: "/manager/groups", text: "Grupe", icon: groupsIcon },
       {
          link: "/manager/instr-groups",
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-      { link: "/manager", text: "Acasă", icon: homeIcon },
 
       { link: "/manager/history", text: "Istoric", icon: clockIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
+
    const dispatch = useDispatch();
 
    const [events, setEvents] = useState([]);

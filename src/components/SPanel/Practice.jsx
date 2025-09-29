@@ -11,10 +11,10 @@ const readEnv = (viteKey, craKey) =>
    "";
 
 const START_ID = Number(
-   readEnv("VITE_TICKETS_START", "REACT_APP_TICKETS_START") || 172
+   readEnv("VITE_TICKETS_START", "REACT_APP_TICKETS_START") || 246
 );
 const COUNT = Number(
-   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 195 - 172 + 1
+   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 269 - 246 + 1
 );
 
 /* Generează 130,131,132,... */

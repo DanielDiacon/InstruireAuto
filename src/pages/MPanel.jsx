@@ -19,6 +19,7 @@ import instrGroupsIcon from "../assets/svg/material-symbols--group-add-outline.s
 import instrIcon from "../assets/svg/mdi--account-cog-outline.svg";
 import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../assets/svg/mdi--account-star-outline.svg";
+import examIcon from "../assets/svg/mdi--book-clock-outline.svg";
 
 import { getAllReservations } from "../api/reservationsService";
 import { getUsers } from "../api/usersService";
@@ -51,19 +52,21 @@ const localizer = dateFnsLocalizer({
 
 function MPanel() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
+      { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
-      { popup: "addManager", text: "Manageri", icon: managerIcon },
+      { popup: "startExam", text: "Examen", icon: examIcon },
       { link: "/manager/groups", text: "Grupe", icon: groupsIcon },
       {
          link: "/manager/instr-groups",
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-      { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/manager/history", text: "Istoric", icon: clockIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
+
    ];
+
    const dispatch = useDispatch();
 
    const [events, setEvents] = useState([]);
@@ -81,7 +84,7 @@ function MPanel() {
    }, []);
 
    useEffect(() => {
-      if (!user || user.role !== "ADMIN") return;
+      if (!user || user.role !== "MANAGER") return;
 
       // fetch Redux instructors
       dispatch(fetchInstructors());
@@ -201,7 +204,6 @@ function MPanel() {
                   </div>
                </div>
             </section>
-            <ExamPermissionPanel></ExamPermissionPanel>
 
             <section className="modules">
                <ReservationHistory

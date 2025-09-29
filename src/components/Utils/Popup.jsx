@@ -18,6 +18,7 @@ import Profile from "../Popups/Profile";
 import EventInfoPopup from "../Popups/EventInfo";
 import InstrEventInfoPopup from "../Popups/InstrEventInfo";
 import AddManager from "../Popups/AddManager";
+import StudentsMultiSelectPopup from "../Popups/StudentsMultiSelectPopup";
 
 export default function Popup() {
    const [popupState, setPopupState] = useState({
@@ -172,6 +173,8 @@ export default function Popup() {
             return <InstrEventInfoPopup key={openKey} {...popupState.props} />;
          case "addManager":
             return <AddManager key={openKey} {...popupState.props} />;
+         case "startExam":
+            return <StudentsMultiSelectPopup key={openKey} {...popupState.props} />;
          default:
             return null;
       }

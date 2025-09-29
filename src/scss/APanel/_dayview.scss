@@ -98,6 +98,7 @@ body,
 .dayview {
    background: var(--black-s) !important;
    color: var(--white-p);
+   user-select: none;
    /* ---------- Header + Toolbar ---------- */
    &__header {
       display: flex;

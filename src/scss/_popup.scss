@@ -47,7 +47,7 @@
    }
    &__inner {
       z-index: 10000;
-      flex: 1;
+      flex: 1 1 0; 
       overflow: auto;
       &::-webkit-scrollbar {
          display: none !important;

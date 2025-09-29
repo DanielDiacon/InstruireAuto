@@ -634,7 +634,7 @@
 
       &-icon {
          background: var(--black-s);
-         //color: var(--white-s);
+         color: var(--white-s);
          border-radius: 16px;
          padding: 6px;
          //transition: var(--classic-s);
@@ -667,10 +667,10 @@
          //            --red-d: #410000;
          //         }
          //
-         //         &.pending {
-         //            color: hsl(35, 87%, 13%);
-         //            background: hsl(35, 94%, 73%);
-         //         }
+         &.pending {
+            color: #0d3700;
+            background: #9cf680;
+         }
          //         &.pending {
          //            color: hsl(35, 87%, 13%);
          //            background: hsl(35, 94%, 73%);

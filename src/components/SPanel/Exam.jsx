@@ -1,22 +1,31 @@
-// src/components/SPanel/Exam.jsx
-import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+   useContext,
+   useEffect,
+   useMemo,
+   useRef,
+   useState,
+   useCallback,
+} from "react";
 import { UserContext } from "../../UserContext";
-
 import {
    getMyPermissionStatus,
    grantExamPermissionExact,
    startExam,
    getExam,
-   submitExamAnswer, // trimitem direct la backend
+   submitExamAnswer,
    isoFromNowPlusMinutes,
    isoToSecondsUTC,
-   getTicketQuestions, // <— nou: ca să aflăm răspunsurile corecte din ticket (dacă există)
+   getTicketQuestions,
+   getStudentExamHistory,
+   failExam,
 } from "../../api/examService";
 import { rewriteImageUrl } from "../Utils/rewriteImageUrl";
-
 import { ReactSVG } from "react-svg";
 import heartFullIcon from "../../assets/svg/mingcute--heart-fill.svg";
 import heartCrackIcon from "../../assets/svg/mingcute--heart-crack-fill.svg";
+
+/** 👉 pentru confirm pe navigare internă (react-router v6) */
+import { UNSAFE_NavigationContext as NavigationContext } from "react-router-dom";
 
 /* ---------- helpers ---------- */
 const prettyTime = (sec) => {
@@ -44,45 +53,119 @@ const computeIsAllowed = (perm) => {
    return Boolean(isActive && untilOk && used < maxA);
 };
 
-/** ===== dev: arată răspunsurile corecte =====
- *  - setează la true pentru preview rapid
- *  - sau adaugă ?showCorrect=1 în URL
- */
-const SHOW_CORRECT_HINTS_DEFAULT = true;
+// normalizează indexul corect 0/1-based
+const normalizeCorrectIdx = (raw, answersLen) => {
+   const n = Number(raw);
+   if (!Number.isInteger(n) || answersLen <= 0) return null;
+   if (n >= 0 && n < answersLen) return n; // 0-based
+   if (n >= 1 && n <= answersLen) return n - 1; // 1-based
+   return null;
+};
+
+/* ===== helpers: istoric încercări ===== */
+const normalizeAttempt = (it) => ({
+   id:
+      it.id ??
+      `${it.examId || "exam"}-${it.startedAt || it.createdAt || Date.now()}`,
+   examId: it.examId ?? it.id ?? null,
+   startedAt: it.startedAt ?? it.createdAt ?? it.started ?? null,
+   finishedAt: it.finishedAt ?? it.completedAt ?? it.endedAt ?? null,
+   status: (
+      it.status ?? (it.finishedAt ? "FINISHED" : "IN_PROGRESS")
+   ).toUpperCase(),
+   total: it.total ?? it.totalQuestions ?? it.questionsTotal ?? null,
+   correct: it.correct ?? it.correctCount ?? it.right ?? null,
+   wrong: it.wrong ?? it.wrongCount ?? it.incorrect ?? null,
+   scorePct:
+      typeof it.scorePct === "number"
+         ? it.scorePct
+         : typeof it.percentage === "number"
+         ? it.percentage
+         : typeof it.score === "number"
+         ? it.score
+         : null,
+});
+
+/* ---------- config ---------- */
+const MAX_MISTAKES_TO_END = 3; // la a 3-a greșeală: FAIL
+const WRONG_FILL_SENTINEL = 99; // pedeapsă sigur greșit
+const LEAVE_WARNING_TEXT =
+   "Chiar dorești să părăsești pagina examenului? Întrebarea curentă va fi marcată greșit (penalizare).";
+
+const ROUTE_LEAVE_CONFIRM =
+   "Chiar dorești să părăsești /student/exam? Întrebarea curentă va fi marcată greșit (penalizare).";
+
+/** Hook simplu pt. confirm + side-effect la navigare internă (RR v6) */
+function useLeaveGuard(when, onConfirm) {
+   const nav = useContext(NavigationContext);
+   useEffect(() => {
+      if (!when || !nav?.navigator?.block) return;
+      const unblock = nav.navigator.block(async (tx) => {
+         const ok = window.confirm(ROUTE_LEAVE_CONFIRM);
+         if (ok) {
+            try {
+               await onConfirm?.("route-leave");
+            } finally {
+               unblock(); // deblochează
+               tx.retry(); // navighează
+            }
+         }
+         // altfel rămâne pe pagină
+      });
+      return unblock;
+   }, [when, nav, onConfirm]);
+}
 
 export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    const { user } = useContext(UserContext) || {};
 
-   // URL toggle (opțional)
-   const showCorrectFromUrl =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("showCorrect") === "1";
-   const SHOW_CORRECT_HINTS = showCorrectFromUrl || SHOW_CORRECT_HINTS_DEFAULT;
-
-   /* ---------- views ---------- */
    const [view, setView] = useState("waiting"); // waiting | test | result
-
-   /* ---------- permission ---------- */
    const [checkingPerm, setCheckingPerm] = useState(true);
    const [perm, setPerm] = useState(null);
    const [error, setError] = useState("");
 
-   /* ---------- exam ---------- */
    const [exam, setExam] = useState(null);
    const [questions, setQuestions] = useState([]);
    const [idx, setIdx] = useState(0);
-   const [answersMap, setAnswersMap] = useState({}); // { [qId]: { selected, correct: boolean|null } }
+   const [answersMap, setAnswersMap] = useState({});
    const [remaining, setRemaining] = useState(0);
+   const [answerLoading, setAnswerLoading] = useState(null);
 
-   const [answerLoading, setAnswerLoading] = useState(null); // questionId în curs (anti dublu-click)
-
-   // hărțuire corecte: { [qId]: correctIndex }
-   const [correctMap, setCorrectMap] = useState({}); // <— nou
+   const [correctMap, setCorrectMap] = useState({});
    const [correctMapLoaded, setCorrectMapLoaded] = useState(false);
+
+   const [attempts, setAttempts] = useState([]);
+   const [attemptsLoading, setAttemptsLoading] = useState(false);
+   const [attemptsError, setAttemptsError] = useState("");
 
    const qTextRef = useRef(null);
    const timerRef = useRef(null);
    const pollingRef = useRef(null);
+   const finishingRef = useRef(false);
+
+   // refs pentru listeners / penalizări
+   const answersMapRef = useRef(answersMap);
+   const questionsRef = useRef(questions);
+   const examRef = useRef(exam);
+   const viewRef = useRef(view);
+   const idxRef = useRef(idx);
+   const penaltyCooldownRef = useRef(0);
+
+   useEffect(() => {
+      answersMapRef.current = answersMap;
+   }, [answersMap]);
+   useEffect(() => {
+      questionsRef.current = questions;
+   }, [questions]);
+   useEffect(() => {
+      examRef.current = exam;
+   }, [exam]);
+   useEffect(() => {
+      viewRef.current = view;
+   }, [view]);
+   useEffect(() => {
+      idxRef.current = idx;
+   }, [idx]);
 
    const scrollToQText = () => {
       const el = qTextRef.current;
@@ -108,7 +191,92 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       );
    };
 
-   /* ---------- permission check ---------- */
+   // răspunde o singură întrebare ca GREȘIT (99) – folosit la penalizare
+   const answerOneAsWrong99 = useCallback(async (q, reason = "penalty") => {
+      if (!q || !examRef.current) return false;
+
+      const already = (answersMapRef.current || {})[q.id];
+      if (already && already.selected != null) {
+         // deja răspunsă – nu mai trimitem încă o dată
+         return false;
+      }
+
+      // local: marchează greșit cu 99
+      setAnswersMap((prev) => ({
+         ...prev,
+         [q.id]: {
+            selected: WRONG_FILL_SENTINEL,
+            correct: false,
+            at: new Date().toISOString(),
+            reason,
+         },
+      }));
+
+      // server: trimite “99”
+      try {
+         console.log("%c[UI →] penalty 99", "color:#a00;font-weight:bold", {
+            examId: Number(examRef.current.id),
+            questionId: Number(q.id),
+            selectedAnswer: WRONG_FILL_SENTINEL,
+         });
+
+         await submitExamAnswer(Number(examRef.current.id), {
+            questionId: Number(q.id),
+            selectedAnswer: WRONG_FILL_SENTINEL,
+         });
+
+         console.log("%c[UI ←] penalty 99 OK", "color:#0a0;font-weight:bold");
+      } catch (e) {
+         console.warn("[penalty 99] submit failed", e);
+      }
+
+      return true;
+   }, []);
+
+   // penalizare o singură dată per eveniment, fără FAIL automat
+   const penalizeOnceThenContinue = useCallback(
+      async (reason = "visibility") => {
+         if (
+            viewRef.current !== "test" ||
+            !examRef.current ||
+            finishingRef.current
+         )
+            return;
+
+         // cooldown anti dublare
+         const now = Date.now();
+         if (now - penaltyCooldownRef.current < 1200) return;
+         penaltyCooldownRef.current = now;
+
+         const curQ = (questionsRef.current || [])[idxRef.current];
+         if (curQ) {
+            const changed = await answerOneAsWrong99(curQ, reason);
+            if (changed) {
+               setError(
+                  "Ai părăsit fereastra. Întrebarea curentă a fost marcată greșit (penalizare). Poți continua examenul."
+               );
+            }
+         }
+
+         // re-evaluăm după ce state-ul s-a aplicat
+         setTimeout(() => {
+            const amap = answersMapRef.current || {};
+            const mistakes =
+               Object.values(amap).filter(
+                  (a) => a?.selected != null && a.correct === false
+               ).length || 0;
+
+            if (mistakes = MAX_MISTAKES_TO_END) {
+               endExamAsFailed(); // a 3-a greșeală => FAIL
+            } else {
+               // mergem mai departe la următoarea întrebare necompletată
+               autoNext(amap);
+            }
+         }, 0);
+      },
+      [answerOneAsWrong99]
+   );
+
    useEffect(() => {
       (async () => {
          try {
@@ -141,7 +309,97 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       };
    }, [checkingPerm, perm]);
 
-   /* ---------- start exam ---------- */
+   useEffect(() => {
+      if (view !== "waiting" || !user?.id) return;
+      let cancelled = false;
+
+      (async () => {
+         setAttemptsLoading(true);
+         setAttemptsError("");
+         try {
+            const pageSize = 50;
+            let page = 1;
+            const all = [];
+            for (;;) {
+               const batch = await getStudentExamHistory({
+                  page,
+                  limit: pageSize,
+               });
+               const items = Array.isArray(batch)
+                  ? batch
+                  : batch?.data || batch?.items || batch?.results || [];
+               if (!items?.length) break;
+               all.push(...items);
+
+               const totalPages =
+                  batch?.pagination?.totalPages ??
+                  batch?.meta?.totalPages ??
+                  batch?.totalPages ??
+                  null;
+
+               if (totalPages ? page >= totalPages : items.length < pageSize)
+                  break;
+               page += 1;
+            }
+
+            const normalized = all.map(normalizeAttempt).sort((a, b) => {
+               const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
+               const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
+               return tb - ta;
+            });
+
+            if (!cancelled) setAttempts(normalized);
+         } catch (e) {
+            if (!cancelled)
+               setAttemptsError(
+                  e?.message || "Nu am putut încărca încercările."
+               );
+         } finally {
+            if (!cancelled) setAttemptsLoading(false);
+         }
+      })();
+
+      return () => {
+         cancelled = true;
+      };
+   }, [view, user?.id]);
+
+   const buildCorrectMap = async (started) => {
+      try {
+         const tid =
+            Number(started?.ticketId) ||
+            Number(started?.ticket?.id) ||
+            Number(started?.ticketID) ||
+            null;
+         if (!Number.isInteger(tid) || tid <= 0) {
+            setCorrectMap({});
+            setCorrectMapLoaded(true);
+            return;
+         }
+         const qs = await getTicketQuestions(tid);
+         const m = {};
+         (qs || []).forEach((q) => {
+            const qid = Number(q?.id);
+            const ci = normalizeCorrectIdx(
+               q?.correctAnswer,
+               Number(q?.answers?.length || 0)
+            );
+            if (Number.isInteger(qid) && Number.isInteger(ci)) m[qid] = ci;
+         });
+         setCorrectMap(m);
+      } catch (e) {
+         console.warn("[Exam UI] Nu am putut încărca cheia ticketului:", e);
+         setCorrectMap({});
+      } finally {
+         setCorrectMapLoaded(true);
+      }
+   };
+
+   const verifyAnswerLocal = (qId, selectedIdx0) => {
+      if (!Object.prototype.hasOwnProperty.call(correctMap, qId)) return null;
+      return Number(correctMap[qId]) === Number(selectedIdx0);
+   };
+
    const handleStart = async () => {
       setError("");
       setCorrectMap({});
@@ -206,7 +464,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
 
          setQuestions(normalized);
 
-         // timer
          const limitMin = Number(started?.timeLimit ?? 30);
          const secs = secsRemainingFromServer(started?.startedAt, limitMin);
          startTimer(secs);
@@ -215,50 +472,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          setAnswersMap({});
          setView("test");
 
-         // === încărcăm răspunsurile corecte pentru preview (dacă activ) ===
-         if (SHOW_CORRECT_HINTS) {
-            try {
-               // încercăm să găsim ticketId în exam
-               const tid =
-                  Number(started?.ticketId) ||
-                  Number(started?.ticket?.id) ||
-                  Number(started?.ticketID) ||
-                  null;
-
-               if (tid) {
-                  const qs = await getTicketQuestions(tid); // trebuie să aibă correctAnswer
-                  const map = {};
-                  (qs || []).forEach((q) => {
-                     const qid = Number(q?.id);
-                     const ci = Number(q?.correctAnswer);
-                     if (Number.isInteger(qid) && Number.isInteger(ci))
-                        map[qid] = ci;
-                  });
-                  // fallback pentru întrebări lipsă
-                  normalized.forEach((q) => {
-                     if (!(q.id in map)) map[q.id] = 0; // dacă nu știm, marcăm prima opțiune pentru PREVIEW
-                  });
-                  setCorrectMap(map);
-               } else {
-                  // fără ticketId: punem prima opțiune ca „corectă” doar pentru preview
-                  const map = {};
-                  normalized.forEach((q) => (map[q.id] = 0));
-                  setCorrectMap(map);
-               }
-            } catch (e) {
-               // dacă pică, tot punem ceva ca să vezi UI-ul
-               const map = {};
-               normalized.forEach((q) => (map[q.id] = 0));
-               setCorrectMap(map);
-               console.warn(
-                  "[Exam UI] Nu am putut încărca răspunsurile corecte din ticket:",
-                  e
-               );
-            } finally {
-               setCorrectMapLoaded(true);
-            }
-         }
-
+         await buildCorrectMap(started);
          setTimeout(
             () =>
                requestAnimationFrame(() =>
@@ -271,7 +485,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       }
    };
 
-   /* ---------- derived ---------- */
    const current = questions[idx] || null;
    const total = questions.length;
    const passScore = Number(exam?.passScore ?? 22);
@@ -286,8 +499,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    );
    const livesLeft = Math.max(0, maxLives - mistakesMade);
 
-   /* ---------- status board (vechi) ---------- */
-   const STATUS_COLS = 12;
    const statusBoard = useMemo(() => {
       if (!questions.length) return [];
       return questions.map((q, i) => {
@@ -301,7 +512,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       });
    }, [questions, answersMap]);
 
-   /* ---------- nav ---------- */
    const jumpTo = (i) => {
       const clamped = Math.max(0, Math.min(i, total - 1));
       setIdx(clamped);
@@ -318,49 +528,127 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       return () => cancelAnimationFrame(raf);
    }, [idx, current]);
 
-   /* ---------- answer (trimite + verdict instant) ---------- */
-   const onChoose = async (i) => {
+   const autoNext = (nextMap) => {
+      if (!questions.length) return;
+
+      for (let i = idx + 1; i < questions.length; i++) {
+         const q = questions[i];
+         const a = nextMap[q.id];
+         if (!a || a.selected == null) {
+            jumpTo(i);
+            return;
+         }
+      }
+      for (let i = 0; i < idx; i++) {
+         const q = questions[i];
+         const a = nextMap[q.id];
+         if (!a || a.selected == null) {
+            jumpTo(i);
+            return;
+         }
+      }
+      setView("result");
+   };
+
+   // FAIL pe tot examenul
+   const endExamAsFailed = async () => {
+      if (finishingRef.current || !examRef.current) return;
+      finishingRef.current = true;
+      try {
+         const id = Number(examRef.current.id);
+         console.log("%c[UI →] failExam", "color:#a00;font-weight:bold", {
+            examId: id,
+         });
+         try {
+            await failExam(id);
+            console.log("%c[UI ←] failExam OK", "color:#0a0;font-weight:bold");
+         } catch (e) {
+            console.warn("[failExam] call failed:", e);
+         }
+         timerRef.current && clearInterval(timerRef.current);
+         try {
+            const fresh = await getExam(id);
+            setExam(fresh);
+         } catch {}
+         setView("result");
+      } finally {
+         finishingRef.current = false;
+      }
+   };
+
+   const onChoose = async (clientIdx0) => {
       if (!exam || !current) return;
       if (remaining <= 0) return;
 
       const existing = answersMap[current.id];
       if (existing && existing.selected != null) return;
-      if (answerLoading === current.id) return;
+      if (answerLoading === current.id || finishingRef.current) return;
       setAnswerLoading(current.id);
 
+      const payload = {
+         questionId: Number(current.id),
+         selectedAnswer: Number(clientIdx0) + 1,
+      };
+
+      const localVerdict = verifyAnswerLocal(current.id, Number(clientIdx0)); // true | false | null
+
+      let next = {
+         ...answersMap,
+         [current.id]: {
+            selected: Number(clientIdx0),
+            correct: localVerdict,
+            at: new Date().toISOString(),
+         },
+      };
+      setAnswersMap(next);
+
+      let badNow =
+         Object.values(next).filter(
+            (a) => a?.selected != null && a.correct === false
+         ).length || 0;
+
+      // a 3-a greșeală => FAIL
+      if (badNow >= MAX_MISTAKES_TO_END) {
+         setAnswerLoading(null);
+         await endExamAsFailed();
+         return;
+      }
+
+      setTimeout(() => autoNext(next), 250);
+
       try {
-         const resp = await submitExamAnswer(Number(exam.id), {
-            questionId: current.id,
-            selectedAnswer: i,
-         });
+         const resp = await submitExamAnswer(Number(exam.id), payload);
+         const serverCorrect =
+            typeof resp?.correct === "boolean" ? resp.correct : null;
+         const finalCorrect =
+            serverCorrect !== null ? serverCorrect : localVerdict;
 
-         const next = {
-            ...answersMap,
-            [current.id]: {
-               selected: Number(i),
-               correct: typeof resp.correct === "boolean" ? resp.correct : null,
-               at: new Date().toISOString(),
-            },
-         };
-         setAnswersMap(next);
+         if (finalCorrect !== next[current.id].correct) {
+            next = {
+               ...next,
+               [current.id]: { ...next[current.id], correct: finalCorrect },
+            };
+            setAnswersMap(next);
+         }
 
-         const badNow =
+         badNow =
             Object.values(next).filter(
                (a) => a?.selected != null && a.correct === false
             ).length || 0;
 
-         if (badNow >= maxLives || badNow > allowedWrongBackend) {
-            setView("result");
-            if (timerRef.current) clearInterval(timerRef.current);
+         if (badNow >= MAX_MISTAKES_TO_END) {
+            setAnswerLoading(null);
+            await endExamAsFailed();
             return;
          }
 
-         if (idx + 1 < questions.length) {
-            setIdx(idx + 1);
-            requestAnimationFrame(() => requestAnimationFrame(scrollToQText));
-         } else {
-            setView("result");
-            if (timerRef.current) clearInterval(timerRef.current);
+         // Dacă oricum nu mai poți atinge scorul de trecere, încheie ca FAIL
+         if (
+            badNow >
+            Math.max(0, questions.length - Number(exam?.passScore ?? 22))
+         ) {
+            await endExamAsFailed();
+            return;
          }
       } catch (e) {
          setError(e?.message || "Nu am putut trimite răspunsul.");
@@ -369,7 +657,48 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       }
    };
 
-   /* ---------- timer out => result ---------- */
+   /* ====== Protecții la părăsire ====== */
+
+   // 1) Navigare internă (Link / useNavigate) – confirm + penalizare (99) pe întrebarea curentă, dar NU FAIL
+   useLeaveGuard(view === "test", penalizeOnceThenContinue);
+
+   // 2) Tab switch/minimize – doar penalizare (99) și continuă; FAIL doar dacă devine greșeala a 3-a
+   useEffect(() => {
+      if (view !== "test") return;
+      let cooldown = false;
+      const onVis = () => {
+         if (document.hidden) {
+            if (cooldown) return;
+            cooldown = true;
+            penalizeOnceThenContinue("visibility");
+            setTimeout(() => (cooldown = false), 1500);
+         }
+      };
+      document.addEventListener("visibilitychange", onVis);
+      return () => document.removeEventListener("visibilitychange", onVis);
+   }, [view, penalizeOnceThenContinue]);
+
+   // 3) Reload/Close tab (beforeunload) + pagehide – penalizare (99) înainte de a ieși efectiv
+   useEffect(() => {
+      if (view !== "test") return;
+
+      const onBeforeUnload = (e) => {
+         e.preventDefault();
+         e.returnValue = LEAVE_WARNING_TEXT;
+         return LEAVE_WARNING_TEXT;
+      };
+      const onPageHide = () => penalizeOnceThenContinue("pagehide");
+
+      window.addEventListener("beforeunload", onBeforeUnload);
+      window.addEventListener("pagehide", onPageHide);
+
+      return () => {
+         window.removeEventListener("beforeunload", onBeforeUnload);
+         window.removeEventListener("pagehide", onPageHide);
+      };
+   }, [view, penalizeOnceThenContinue]);
+
+   // timer out => închide local (poți apela endExamAsFailed dacă vrei FAIL și aici)
    useEffect(() => {
       if (remaining === 0 && exam && view === "test") {
          setView("result");
@@ -377,81 +706,115 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       }
    }, [remaining, exam, view]);
 
-   /* ---------- verdict simplu ---------- */
    const verdict = useMemo(() => {
       const failedByLives = mistakesMade >= maxLives;
-      const failedByBackend = mistakesMade > allowedWrongBackend;
+      const failedByBackend =
+         mistakesMade >
+         Math.max(0, questions.length - Number(exam?.passScore ?? 22));
       const failed = failedByLives || failedByBackend || remaining === 0;
       return failed ? "FAILED" : "PASSED";
-   }, [mistakesMade, maxLives, allowedWrongBackend, remaining]);
+   }, [mistakesMade, maxLives, exam?.passScore, questions.length, remaining]);
 
-   /* ---------- UI ---------- */
    return (
-      <div className="practice">
-         {/* Banner dev */}
-         {SHOW_CORRECT_HINTS && view !== "waiting" && (
-            <div className="practice__dev-hint">
-               ⚠️ Mod test activ: răspunsurile corecte sunt evidențiate.
-            </div>
-         )}
-
+      <div className="practice exam">
          {error && <div className="practice__error">{error}</div>}
 
          {view === "waiting" && (
-            <div className="card" style={{ marginBottom: 12 }}>
-               {checkingPerm ? (
-                  <div>Se verifică permisiunea…</div>
-               ) : computeIsAllowed(perm) ? (
-                  <div
-                     style={{
-                        display: "flex",
-                        gap: 12,
-                        alignItems: "center",
-                        flexWrap: "wrap",
-                     }}
-                  >
-                     <div style={{ fontWeight: 600 }}>Permisiune activă ✅</div>
-                     {perm?.validUntil && (
-                        <div>
-                           Valabil până la:{" "}
-                           {new Date(perm.validUntil).toLocaleString()}
+            <>
+               <div className="card top">
+                  {checkingPerm ? (
+                     <p>Se verifică permisiunea…</p>
+                  ) : computeIsAllowed(perm) ? (
+                     <>
+                        <h2>Permisiune activă</h2>
+                        {perm?.validUntil && (
+                           <p>
+                              Valabil până la:{" "}
+                              {new Date(perm.validUntil).toLocaleString()}
+                           </p>
+                        )}
+                        <button
+                           className="practice__back bottom green "
+                           onClick={handleStart}
+                        >
+                           Începe examenul
+                        </button>
+                     </>
+                  ) : (
+                     <>
+                        <h2>Examen</h2>
+                        <p>
+                           Nu ai încă permisiune pentru examen. Apasă “Începe
+                           examenul”.
+                        </p>
+                        <button
+                           onClick={async () => {
+                              try {
+                                 const p = await getMyPermissionStatus();
+                                 setPerm(p);
+                              } catch {}
+                           }}
+                           className="practice__back bottom"
+                        >
+                           Re-verifică acum
+                        </button>
+                     </>
+                  )}
+               </div>
+
+               {/* ISTORIC ÎNCERCĂRI */}
+               <div className="card list">
+                  <h4>Încercările tale la examen</h4>
+                  {attemptsLoading && <p>Se încarcă încercările…</p>}
+                  {attemptsError && <p>{attemptsError}</p>}
+                  {!attemptsLoading &&
+                     !attemptsError &&
+                     attempts.length === 0 && <p>Nu există încercări.</p>}
+                  {!attemptsLoading &&
+                     !attemptsError &&
+                     attempts.length > 0 && (
+                        <div className="practice__history">
+                           {attempts.slice(0, 20).map((a) => {
+                              const status = a.status.toLowerCase();
+                              const started = a.startedAt
+                                 ? new Date(a.startedAt).toLocaleString()
+                                 : "–";
+                              const finished = a.finishedAt
+                                 ? new Date(a.finishedAt).toLocaleString()
+                                 : null;
+                              const lineLeft = finished
+                                 ? `${started} → ${finished}`
+                                 : `${started}`;
+                              const scoreText =
+                                 a.scorePct != null
+                                    ? `${Math.round(a.scorePct)}%`
+                                    : a.correct != null && a.total != null
+                                    ? `${a.correct}/${a.total}`
+                                    : a.correct != null && a.wrong != null
+                                    ? `${a.correct} corecte / ${a.wrong} greșite`
+                                    : "–";
+                              return (
+                                 <div
+                                    key={a.id}
+                                    className={`practice__history-item practice__history-item--${status}`}
+                                 >
+                                    <div>
+                                       <div>{status.toLowerCase()}</div>
+                                       <div>{lineLeft}</div>
+                                    </div>
+                                    <div>
+                                       <div>{scoreText}</div>
+                                       {a.total != null && (
+                                          <div>{a.total} întrebări</div>
+                                       )}
+                                    </div>
+                                 </div>
+                              );
+                           })}
                         </div>
                      )}
-                     {!!(perm?.usedAttempts >= 0) &&
-                        !!(perm?.maxAttempts >= 0) && (
-                           <div>
-                              Încercări: {perm.usedAttempts}/{perm.maxAttempts}
-                           </div>
-                        )}
-                     <button
-                        onClick={handleStart}
-                        style={{ marginLeft: "auto" }}
-                     >
-                        Începe examenul
-                     </button>
-                  </div>
-               ) : (
-                  <div style={{ display: "grid", gap: 8 }}>
-                     <div>
-                        Nu ai încă permisiune pentru examen. Apasă “Începe
-                        examenul”.
-                     </div>
-                     <div style={{ fontSize: 12, opacity: 0.8 }}>
-                        (Pagina verifică automat la fiecare 3 secunde.)
-                     </div>
-                     <button
-                        onClick={async () => {
-                           try {
-                              const p = await getMyPermissionStatus();
-                              setPerm(p);
-                           } catch {}
-                        }}
-                     >
-                        Re-verifică acum
-                     </button>
-                  </div>
-               )}
-            </div>
+               </div>
+            </>
          )}
 
          {view === "test" && exam && current && (
@@ -459,8 +822,10 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                {/* Toolbar */}
                <div className="practice__toolbar">
                   <button
-                     className="practice__back button"
-                     onClick={() => setView("result")}
+                     className="practice__back"
+                     onClick={() => {
+                        setView("result"); // dacă vrei FAIL la “Încheie”, înlocuiește cu: endExamAsFailed()
+                     }}
                   >
                      Încheie
                   </button>
@@ -470,7 +835,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                         Întrebarea {Math.min(idx + 1, total)}/{total}
                      </div>
 
-                     {/* Inimi în toolbar */}
                      {useHearts ? (
                         <div
                            className="lives__pill"
@@ -523,10 +887,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                </div>
 
                {/* Status board */}
-               <div
-                  className="practice__statusboard"
-                  style={{ gridTemplateColumns: `repeat(${STATUS_COLS}, 1fr)` }}
-               >
+               <div className="practice__statusboard">
                   {statusBoard.map(({ i, status }) => (
                      <button
                         key={i}
@@ -563,9 +924,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                  `v=${exam.id}-${current.id}-${idx}`
                               }
                               alt="Întrebare"
-                              onError={(e) =>
-                                 (e.currentTarget.style.display = "none")
-                              }
+                              onError={(e) => (e.currentTarget.hidden = true)}
                            />
                         )}
                      </div>
@@ -581,9 +940,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                  `v=${exam.id}-${current.id}-${idx}-m`
                               }
                               alt="Întrebare"
-                              onError={(e) =>
-                                 (e.currentTarget.style.display = "none")
-                              }
+                              onError={(e) => (e.currentTarget.hidden = true)}
                            />
                         </div>
                      )}
@@ -592,47 +949,42 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                         {(current.answers || []).map((ans, i) => {
                            const saved = answersMap[current.id];
                            const already = !!saved && saved.selected != null;
-                           const showCorrectSelected =
-                              already &&
-                              saved.correct === true &&
-                              saved.selected === i;
-                           const showWrongSelected =
-                              already &&
-                              saved.correct === false &&
-                              saved.selected === i;
-                           const isBusy = answerLoading === current.id;
+                           const selectedIdx = already
+                              ? Number(saved.selected)
+                              : null;
 
-                           // —— DEV: evidențiere corectă (dacă avem harta)
                            const correctIdx =
-                              correctMap &&
+                              already &&
                               Object.prototype.hasOwnProperty.call(
                                  correctMap,
                                  current.id
                               )
                                  ? Number(correctMap[current.id])
                                  : null;
+
                            const isCorrectOption =
-                              SHOW_CORRECT_HINTS &&
-                              correctIdx != null &&
+                              already &&
                               Number.isInteger(correctIdx) &&
                               i === correctIdx;
+                           const isWrongSelected =
+                              already &&
+                              selectedIdx === i &&
+                              Number.isInteger(correctIdx) &&
+                              selectedIdx !== correctIdx;
 
-                           // Afișăm „corect” și pentru opțiunea corectă (chiar dacă nu a fost aleasă),
-                           // ca să vezi vizual cum arată.
+                           const isBusy = answerLoading === current.id;
+
                            const className =
                               "practice__answer" +
-                              (showCorrectSelected
+                              (isCorrectOption
                                  ? " practice__answer--correct"
                                  : "") +
-                              (showWrongSelected
+                              (isWrongSelected
                                  ? " practice__answer--wrong-selected"
                                  : "") +
                               (already ? " practice__answer--locked" : "") +
                               (isBusy && !already
                                  ? " practice__answer--loading"
-                                 : "") +
-                              (isCorrectOption
-                                 ? " practice__answer--correct"
                                  : "");
 
                            return (
@@ -648,15 +1000,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                  }
                               >
                                  <span>{ans}</span>
-                                 {isCorrectOption && (
-                                    <span
-                                       className="practice__answer-badge"
-                                       aria-hidden="true"
-                                       style={{ marginLeft: 8 }}
-                                    >
-                                       ✅ Corect
-                                    </span>
-                                 )}
                               </button>
                            );
                         })}
@@ -666,7 +1009,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                   <div className="practice__actions">
                      <button
                         type="button"
-                        className="practice__back"
+                        className="practice__back bottom"
                         onClick={goPrev}
                         disabled={idx === 0}
                      >
@@ -687,48 +1030,34 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          )}
 
          {view === "result" && exam && (
-            <div className="practice__done" style={{ marginTop: 16 }}>
-               <h3>
+            <div className="card top">
+               <h2>
                   {verdict === "PASSED"
                      ? "Ai promovat ✅"
                      : "Nu ai promovat ❌"}
-               </h3>
+               </h2>
                <p>
+                  {" "}
                   Întrebări: <b>{total}</b> • Greșeli:{" "}
                   <b>
                      {mistakesMade}/{maxLives}
                   </b>{" "}
                   • Timp rămas: <b>{prettyTime(remaining)}</b>
                </p>
-               <div
-                  style={{ display: "flex", gap: 8, justifyContent: "center" }}
+               <button
+                  onClick={() => {
+                     setView("waiting");
+                     setExam(null);
+                     setQuestions([]);
+                     setAnswersMap({});
+                     setIdx(0);
+                     setRemaining(0);
+                     setError("");
+                  }}
+                  className="practice__back bottom"
                >
-                  <button
-                     onClick={async () => {
-                        try {
-                           const fresh = await getExam(exam.id);
-                           setExam(fresh);
-                        } catch {}
-                     }}
-                     className="practice__secondary"
-                  >
-                     Actualizează status server
-                  </button>
-                  <button
-                     className="practice__secondary practice__secondary--primary"
-                     onClick={() => {
-                        setView("waiting");
-                        setExam(null);
-                        setQuestions([]);
-                        setAnswersMap({});
-                        setIdx(0);
-                        setRemaining(0);
-                        setError("");
-                     }}
-                  >
-                     Înapoi la început
-                  </button>
-               </div>
+                  Înapoi la început
+               </button>
             </div>
          )}
       </div>

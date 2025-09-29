@@ -29,6 +29,9 @@ function MPGroups() {
       { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/manager/history", text: "Istoric", icon: clockIcon },
    ];
+
+
+   
    return (
       <>
          <Header links={links}>

@@ -1,3 +1,4 @@
+// src/components/Popups/StudentInfoPopup.jsx
 import React, { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { fetchUserReservations } from "../../store/reservationsSlice";
@@ -7,15 +8,17 @@ import successIcon from "../../assets/svg/success.svg";
 import cancelIcon from "../../assets/svg/cancel.svg";
 import clockIcon from "../../assets/svg/clock.svg";
 import emailIcon from "../../assets/svg/email.svg";
-import { ReactSVG } from "react-svg"; // sus, lângă celelalte importuri
+import { ReactSVG } from "react-svg";
 import {
    closePopup as closePopupStore,
    openSubPopup,
-   closeSubPopup,
+   // closeSubPopup,
 } from "../Utils/popupStore";
+import { getExamHistoryForUser } from "../../api/examService";
 
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
+
    const {
       list: reservations = [],
       loading,
@@ -36,16 +39,24 @@ export default function StudentInfoPopup({ student, onClose }) {
    const [noteValue, setNoteValue] = useState(student?.privateMessage || "");
    const [liveStudent, setLiveStudent] = useState(student || {});
 
-   // ✅ nou: confirmare pentru ștergere
+   // confirmare pentru ștergere
    const [confirmDelete, setConfirmDelete] = useState(false);
-   // sub useState-uri
+
+   // tab-uri: programări / încercări examen
+   const [tab, setTab] = useState("reservations"); // 'reservations' | 'attempts'
+
+   // încercări examen
+   const [attempts, setAttempts] = useState([]);
+   const [attemptsLoading, setAttemptsLoading] = useState(false);
+   const [attemptsError, setAttemptsError] = useState("");
+
    const safeClose = () => {
       if (typeof onClose === "function") {
-         onClose(); // dacă ți-l dă wrapperul Popup
+         onClose();
       } else {
          try {
             closePopupStore();
-         } catch (_) {} // fallback prin popupStore
+         } catch (_) {}
       }
    };
 
@@ -62,7 +73,8 @@ export default function StudentInfoPopup({ student, onClose }) {
       });
       setNoteValue(student?.privateMessage || "");
       setLiveStudent(student || {});
-      setConfirmDelete(false); // reset la schimbarea studentului
+      setConfirmDelete(false);
+      setTab("reservations"); // la schimbarea studentului, revino pe Programări
    }, [student, dispatch]);
 
    const handleEditToggle = () => setIsEditing(!isEditing);
@@ -106,16 +118,92 @@ export default function StudentInfoPopup({ student, onClose }) {
    const handleDelete = async () => {
       try {
          await dispatch(removeStudent(student.id)).unwrap();
-         // opțional: curățăm state-ul local, ca să nu mai „clipească” datele vechi
          setConfirmDelete(false);
          setIsEditing(false);
          setLiveStudent({});
-         safeClose(); // ⬅️ închide popup-ul ACUM
+         safeClose();
       } catch (err) {
          console.error("Eroare la ștergere:", err);
          alert(err?.message || "Ștergerea a eșuat!");
       }
    };
+
+   // normalizator pentru încercări
+   const normalizeAttempt = (it) => ({
+      id:
+         it.id ??
+         `${it.examId || "exam"}-${it.startedAt || it.createdAt || Date.now()}`,
+      examId: it.examId ?? it.id ?? null,
+      startedAt: it.startedAt ?? it.createdAt ?? it.started ?? null,
+      finishedAt: it.finishedAt ?? it.completedAt ?? it.endedAt ?? null,
+      status: (
+         it.status ?? (it.finishedAt ? "FINISHED" : "IN_PROGRESS")
+      ).toUpperCase(),
+      total: it.total ?? it.totalQuestions ?? it.questionsTotal ?? null,
+      correct: it.correct ?? it.correctCount ?? it.right ?? null,
+      wrong: it.wrong ?? it.wrongCount ?? it.incorrect ?? null,
+      scorePct:
+         (typeof it.scorePct === "number" && it.scorePct) ||
+         (typeof it.percentage === "number" && it.percentage) ||
+         (typeof it.score === "number" && it.score) ||
+         null,
+   });
+
+   // fetch încercări când intri pe tab
+   useEffect(() => {
+      let cancelled = false;
+      if (tab !== "attempts" || !student?.id) return;
+
+      (async () => {
+         setAttemptsLoading(true);
+         setAttemptsError("");
+         try {
+            const pageSize = 50;
+            let page = 1;
+            const all = [];
+            for (;;) {
+               const batch = await getExamHistoryForUser(student.id, {
+                  page,
+                  limit: pageSize,
+               });
+               const items = Array.isArray(batch)
+                  ? batch
+                  : batch?.data || batch?.items || batch?.results || [];
+               if (!items?.length) break;
+               all.push(...items);
+
+               const totalPages =
+                  batch?.pagination?.totalPages ??
+                  batch?.meta?.totalPages ??
+                  batch?.totalPages ??
+                  null;
+
+               if (totalPages ? page >= totalPages : items.length < pageSize)
+                  break;
+               page += 1;
+            }
+
+            const normalized = all.map(normalizeAttempt).sort((a, b) => {
+               const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
+               const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
+               return tb - ta;
+            });
+
+            if (!cancelled) setAttempts(normalized);
+         } catch (e) {
+            if (!cancelled)
+               setAttemptsError(
+                  e?.message || "Nu am putut încărca încercările."
+               );
+         } finally {
+            if (!cancelled) setAttemptsLoading(false);
+         }
+      })();
+
+      return () => {
+         cancelled = true;
+      };
+   }, [tab, student?.id]);
 
    if (!student) return null;
 
@@ -286,73 +374,170 @@ export default function StudentInfoPopup({ student, onClose }) {
                </>
             )}
 
-            <h4 className="students-info__subtitle">Programări:</h4>
+            {/* TABS */}
+            <div className="students-info__tabs">
+               <button
+                  className={
+                     "students-info__tab" +
+                     (tab === "reservations" ? " is-active" : "")
+                  }
+                  onClick={() => setTab("reservations")}
+               >
+                  Programări
+               </button>
+               <button
+                  className={
+                     "students-info__tab" +
+                     (tab === "attempts" ? " is-active" : "")
+                  }
+                  onClick={() => setTab("attempts")}
+               >
+                  Încercări examen
+               </button>
+            </div>
 
-            {loading && (
-               <p className="students-info__loading">
-                  Se încarcă programările...
-               </p>
-            )}
-            {error && <p className="students-info__error">{error}</p>}
-            {!loading && reservations.length === 0 && (
-               <p className="students-info__empty">Nu există programări.</p>
+            {/* TAB: PROGRAMĂRI */}
+            {tab === "reservations" && (
+               <>
+                  {loading && (
+                     <p className="students-info__loading">
+                        Se încarcă programările...
+                     </p>
+                  )}
+                  {error && <p className="students-info__error">{error}</p>}
+                  {!loading && reservations.length === 0 && (
+                     <p className="students-info__empty">
+                        Nu există programări.
+                     </p>
+                  )}
+
+                  {!loading && reservations.length > 0 && (
+                     <div className="students-info__list-wrapper">
+                        <div className="students-info__list">
+                           {reservations.map((res, index) => {
+                              const status = res.status || "pending";
+                              return (
+                                 <div
+                                    key={res.id + "-" + index}
+                                    onClick={() =>
+                                       openSubPopup("reservationEdit", {
+                                          reservationId: res.id,
+                                       })
+                                    }
+                                    className={`students-info__item students-info__item--${status}`}
+                                 >
+                                    <div className="students-info__item-left">
+                                       <h3>
+                                          {liveStudent.firstName
+                                             ? `${liveStudent.firstName} ${liveStudent.lastName}`
+                                             : res.student || "–"}
+                                       </h3>
+                                       <p>
+                                          {res.instructor?.firstName
+                                             ? `cu ${res.instructor.firstName} ${res.instructor.lastName}`
+                                             : "fără instructor"}
+                                       </p>
+                                       <span>
+                                          {new Date(
+                                             res.startTime
+                                          ).toLocaleString()}
+                                       </span>
+                                    </div>
+                                    <div className="students-info__item-right">
+                                       {status === "completed" && (
+                                          <ReactSVG
+                                             className="students-info__item-icon completed"
+                                             src={successIcon}
+                                          />
+                                       )}
+                                       {status === "cancelled" && (
+                                          <ReactSVG
+                                             className="students-info__item-icon cancelled"
+                                             src={cancelIcon}
+                                          />
+                                       )}
+                                       {status === "pending" && (
+                                          <ReactSVG
+                                             className="students-info__item-icon pending"
+                                             src={clockIcon}
+                                          />
+                                       )}
+                                    </div>
+                                 </div>
+                              );
+                           })}
+                        </div>
+                     </div>
+                  )}
+               </>
             )}
 
-            {!loading && reservations.length > 0 && (
-               <div className="students-info__list-wrapper">
-                  <div className="students-info__list">
-                     {reservations.map((res, index) => {
-                        const status = res.status || "pending";
-                        return (
-                           <div
-                              key={res.id + "-" + index}
-                              onClick={() =>
-                                 openSubPopup("reservationEdit", {
-                                    reservationId: res.id,
-                                    //onClose: () => closeSubPopup(), 
-                                 })
-                              }
-                              className={`students-info__item students-info__item--${status}`}
-                           >
-                              <div className="students-info__item-left">
-                                 <h3>
-                                    {liveStudent.firstName
-                                       ? `${liveStudent.firstName} ${liveStudent.lastName}`
-                                       : res.student || "–"}
-                                 </h3>
-                                 <p>
-                                    {res.instructor?.firstName
-                                       ? `cu ${res.instructor.firstName} ${res.instructor.lastName}`
-                                       : "fără instructor"}
-                                 </p>
-                                 <span>
-                                    {new Date(res.startTime).toLocaleString()}
-                                 </span>
-                              </div>
-                              <div className="students-info__item-right">
-                                 {status === "completed" && (
-                                    <ReactSVG
-                                       className="students-info__item-icon completed"
-                                       src={successIcon}
-                                    />
-                                 )}
-                                 {status === "cancelled" && (
-                                    <ReactSVG
-                                       className="students-info__item-icon cancelled"
-                                       src={cancelIcon}
-                                    />
-                                 )}
-                                 {status === "pending" && (
-                                    <ReactSVG
-                                       className="students-info__item-icon pending"
-                                       src={clockIcon}
-                                    />
-                                 )}
-                              </div>
-                           </div>
-                        );
-                     })}
-                  </div>
+            {/* TAB: ÎNCERCĂRI EXAMEN */}
+            {tab === "attempts" && (
+               <div className="students-info__attempts">
+                  {attemptsLoading && <p>Se încarcă încercările…</p>}
+                  {attemptsError && (
+                     <p className="students-info__error">{attemptsError}</p>
+                  )}
+
+                  {!attemptsLoading &&
+                     !attemptsError &&
+                     attempts.length === 0 && (
+                        <p className="students-info__empty">
+                           Nu există încercări.
+                        </p>
+                     )}
+
+                  {!attemptsLoading &&
+                     !attemptsError &&
+                     attempts.length > 0 && (
+                        <div className="students-info__list students-info__list--attempts">
+                           {attempts.slice(0, 50).map((a) => {
+                              const status = (
+                                 a.status || "UNKNOWN"
+                              ).toLowerCase();
+                              const started = a.startedAt
+                                 ? new Date(a.startedAt).toLocaleString()
+                                 : "–";
+                              const finished = a.finishedAt
+                                 ? new Date(a.finishedAt).toLocaleString()
+                                 : null;
+                              const lineLeft = finished
+                                 ? `${started} → ${finished}`
+                                 : `${started}`;
+                              const scoreText =
+                                 a.scorePct != null
+                                    ? `${Math.round(a.scorePct)}%`
+                                    : a.correct != null && a.total != null
+                                    ? `${a.correct}/${a.total}`
+                                    : a.correct != null && a.wrong != null
+                                    ? `${a.correct} corecte / ${a.wrong} greșite`
+                                    : "–";
+
+                              return (
+                                 <div
+                                    key={a.id}
+                                    className={`students-info__attempt students-info__attempt--${status}`}
+                                 >
+                                    <div>
+                                       <div className="students-info__attempt-status">
+                                          {status}
+                                       </div>
+                                       <div className="students-info__attempt-dates">
+                                          {lineLeft}
+                                       </div>
+                                    </div>
+                                    <div className="students-info__attempt-score">
+                                       <div>{scoreText}</div>
+                                       {a.total != null && (
+                                          <div>{a.total} întrebări</div>
+                                       )}
+                                    </div>
+                                 </div>
+                              );
+                           })}
+                        </div>
+                     )}
                </div>
             )}
          </div>

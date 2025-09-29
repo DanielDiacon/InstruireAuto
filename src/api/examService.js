@@ -243,21 +243,21 @@ export async function getExam(examId) {
 const __ticketCorrectCache = new Map(); // ticketId -> Map(questionId -> correctIndex)
 
 async function __getTicketCorrectMap(ticketId) {
-  const tid = Number(ticketId);
-  if (!Number.isInteger(tid) || tid <= 0) throw new Error("ticketId invalid.");
-  if (__ticketCorrectCache.has(tid)) return __ticketCorrectCache.get(tid);
+   const tid = Number(ticketId);
+   if (!Number.isInteger(tid) || tid <= 0) throw new Error("ticketId invalid.");
+   if (__ticketCorrectCache.has(tid)) return __ticketCorrectCache.get(tid);
 
-  const qs = await getTicketQuestions(tid); // are correctAnswer
-  const map = new Map();
-  (qs || []).forEach((q) => {
-    const qid = Number(q?.id);
-    const ci = Number(q?.correctAnswer);
-    if (Number.isInteger(qid) && q?.correctAnswer != null) {
-      map.set(qid, ci);
-    }
-  });
-  __ticketCorrectCache.set(tid, map);
-  return map;
+   const qs = await getTicketQuestions(tid); // are correctAnswer
+   const map = new Map();
+   (qs || []).forEach((q) => {
+      const qid = Number(q?.id);
+      const ci = Number(q?.correctAnswer);
+      if (Number.isInteger(qid) && q?.correctAnswer != null) {
+         map.set(qid, ci);
+      }
+   });
+   __ticketCorrectCache.set(tid, map);
+   return map;
 }
 
 /**
@@ -270,27 +270,27 @@ async function __getTicketCorrectMap(ticketId) {
  * @returns {Promise<{correct: boolean|null} & any>}
  */
 export async function verifyAndSubmitExamAnswer(examId, ticketId, payload) {
-  // 1) POST la backend (surse-of-truth)
-  const serverResp = await submitExamAnswer(examId, payload);
+   // 1) POST la backend (surse-of-truth)
+   const serverResp = await submitExamAnswer(examId, payload);
 
-  // 2) Dacă serverul spune explicit corect/greșit, ne oprim aici
-  if (typeof serverResp?.correct === "boolean") {
-    return { ...serverResp, correct: serverResp.correct };
-  }
+   // 2) Dacă serverul spune explicit corect/greșit, ne oprim aici
+   if (typeof serverResp?.correct === "boolean") {
+      return { ...serverResp, correct: serverResp.correct };
+   }
 
-  // 3) Altfel, fallback local: comparăm cu răspunsurile corecte din ticket
-  try {
-    const cmap = await __getTicketCorrectMap(ticketId);
-    const expected = cmap.get(Number(payload.questionId));
-    if (Number.isInteger(expected)) {
-      const isCorrect = Number(payload.selectedAnswer) === Number(expected);
-      return { ...serverResp, correct: isCorrect };
-    }
-  } catch (_) {
-    // ignorăm: în cel mai rău caz corect rămâne null
-  }
+   // 3) Altfel, fallback local: comparăm cu răspunsurile corecte din ticket
+   try {
+      const cmap = await __getTicketCorrectMap(ticketId);
+      const expected = cmap.get(Number(payload.questionId));
+      if (Number.isInteger(expected)) {
+         const isCorrect = Number(payload.selectedAnswer) === Number(expected);
+         return { ...serverResp, correct: isCorrect };
+      }
+   } catch (_) {
+      // ignorăm: în cel mai rău caz corect rămâne null
+   }
 
-  return { ...serverResp, correct: null };
+   return { ...serverResp, correct: null };
 }
 
 /** ==================== EXAMS (history) ==================== **/
@@ -348,46 +348,60 @@ export async function reactivateExam() {
 
 // Normalizează diverse forme în { correct: boolean|null }
 function normalizeCorrectFromServer(raw) {
-  if (!raw || typeof raw !== "object") return { correct: null, _raw: raw };
+   if (!raw || typeof raw !== "object") return { correct: null, _raw: raw };
 
-  // cele mai comune
-  if (typeof raw.correct === "boolean") return { correct: raw.correct, _raw: raw };
-  if (typeof raw.isCorrect === "boolean") return { correct: raw.isCorrect, _raw: raw };
-  if (typeof raw.right === "boolean") return { correct: raw.right, _raw: raw };
+   // cele mai comune
+   if (typeof raw.correct === "boolean")
+      return { correct: raw.correct, _raw: raw };
+   if (typeof raw.isCorrect === "boolean")
+      return { correct: raw.isCorrect, _raw: raw };
+   if (typeof raw.right === "boolean") return { correct: raw.right, _raw: raw };
 
-  // stringy
-  const r = String(raw.result || raw.status || "").toUpperCase();
-  if (r === "CORRECT" || r === "RIGHT" || r === "OK" || r === "TRUE") {
-    return { correct: true, _raw: raw };
-  }
-  if (r === "WRONG" || r === "INCORRECT" || r === "FALSE") {
-    return { correct: false, _raw: raw };
-  }
+   // stringy
+   const r = String(raw.result || raw.status || "").toUpperCase();
+   if (r === "CORRECT" || r === "RIGHT" || r === "OK" || r === "TRUE") {
+      return { correct: true, _raw: raw };
+   }
+   if (r === "WRONG" || r === "INCORRECT" || r === "FALSE") {
+      return { correct: false, _raw: raw };
+   }
 
-  return { correct: null, _raw: raw };
+   return { correct: null, _raw: raw };
 }
 
 // POST /exams/:id/answers – TRIMITE la backend la fiecare întrebare și întoarce {correct}
-export async function submitExamAnswer(examId, { questionId, selectedAnswer, image }) {
-  const id = encodeURIComponent(String(examId));
-  const body = JSON.stringify({
-    questionId: Number(questionId),
-    selectedAnswer: Number(selectedAnswer),
-    ...(image ? { image } : {}),
-  });
+export async function submitExamAnswer(
+   examId,
+   { questionId, selectedAnswer, image }
+) {
+   const id = encodeURIComponent(String(examId));
+   const body = JSON.stringify({
+      questionId: Number(questionId),
+      selectedAnswer: Number(selectedAnswer),
+      ...(image ? { image } : {}),
+   });
 
-  const res = await apiClientService.post(`/exams/${id}/answers`, body, "application/json; charset=UTF-8");
-  const text = await res.text().catch(() => "");
-  let data; try { data = text ? JSON.parse(text) : undefined; } catch { data = text; }
+   const res = await apiClientService.post(
+      `/exams/${id}/answers`,
+      body,
+      "application/json; charset=UTF-8"
+   );
+   const text = await res.text().catch(() => "");
+   let data;
+   try {
+      data = text ? JSON.parse(text) : undefined;
+   } catch {
+      data = text;
+   }
 
-  if (!res.ok) {
-    if (res.status === 401) throw new Error("AUTH_401");
-    if (res.status === 403) throw new Error("AUTH_403");
-    throw new Error(`submitExamAnswer ${res.status}: ${text}`);
-  }
+   if (!res.ok) {
+      if (res.status === 401) throw new Error("AUTH_401");
+      if (res.status === 403) throw new Error("AUTH_403");
+      throw new Error(`submitExamAnswer ${res.status}: ${text}`);
+   }
 
-  const norm = normalizeCorrectFromServer(data);
-  return { ...data, correct: norm.correct };
+   const norm = normalizeCorrectFromServer(data);
+   return { ...data, correct: norm.correct };
 }
 
 /* ... restul fișierului tău rămâne la fel ... */
@@ -439,95 +453,172 @@ export function isoToSecondsUTC(dateIso) {
 }
 
 // înlocuiește întreaga funcție exportată grantExamPermissionExact cu aceasta
+// POST /api/exams/{id}/fail – marchează examenul ca failed
+export async function failExam(examId) {
+   const id = encodeURIComponent(String(examId));
+
+   // LOG: request
+   console.log(
+      "%c[API →] POST /api/exams/%s/fail",
+      "color:#0a0;font-weight:bold",
+      id
+   );
+
+   const res = await apiClientService.post(
+      `/exams/${id}/fail`,
+      "{}", // fără payload
+      "application/json; charset=UTF-8"
+   );
+
+   const text = await res.text().catch(() => "");
+   let data;
+   try {
+      data = text ? JSON.parse(text) : undefined;
+   } catch {
+      data = text;
+   }
+
+   // LOG: response
+   console.log("%c[API ←] failExam", "color:#06c;font-weight:bold", {
+      status: res.status,
+      data,
+   });
+
+   // succesul poate veni ca 200/201, păstrăm și 201
+   if (!res.ok && res.status !== 201) {
+      if (res.status === 401) throw new Error("AUTH_401");
+      if (res.status === 403) throw new Error("AUTH_403");
+      if (res.status === 409) {
+         console.warn("[failExam] Exam already finalized (409).");
+         return { status: 409, data };
+      }
+      throw new Error(`failExam ${res.status}: ${text}`);
+   }
+
+   return { status: res.status || 201, data };
+}
 
 // înlocuiește întreaga funcție exportată cu cea de mai jos
 export async function grantExamPermissionExact({
-  userId,
-  validUntil,
-  maxAttempts = 1,
-  grantedById,      // opțional; dacă nu e INT valid, NU îl trimitem deloc
-  // compat ignorat intenționat; serverul cere numbers
+   userId,
+   validUntil,
+   maxAttempts = 1,
+   grantedById, // opțional; dacă nu e INT valid, NU îl trimitem deloc
+   // compat ignorat intenționat; serverul cere numbers
 }) {
-  // — coerce strict la INT —
-  const uid = Number.parseInt(String(userId), 10);
-  if (!Number.isInteger(uid) || uid <= 0) {
-    throw new Error("userId invalid (trebuie INT > 0).");
-  }
+   // — coerce strict la INT —
+   const uid = Number.parseInt(String(userId), 10);
+   if (!Number.isInteger(uid) || uid <= 0) {
+      throw new Error("userId invalid (trebuie INT > 0).");
+   }
 
-  let attempts = Number.parseInt(String(maxAttempts), 10);
-  if (!Number.isInteger(attempts) || attempts < 1) attempts = 1;
+   let attempts = Number.parseInt(String(maxAttempts), 10);
+   if (!Number.isInteger(attempts) || attempts < 1) attempts = 1;
 
-  if (!validUntil) throw new Error("validUntil lipsă (ISO).");
+   if (!validUntil) throw new Error("validUntil lipsă (ISO).");
 
-  // grantedById: trimite DOAR dacă e INT; altfel omite câmpul
-  let gby = Number.parseInt(String(grantedById), 10);
-  if (!Number.isInteger(gby) || gby <= 0) {
-    try {
-      const me = await getMe();
-      const id = Number.parseInt(String(me?.id), 10);
-      if (Number.isInteger(id) && id > 0) gby = id;
-      else gby = undefined;
-    } catch {
-      gby = undefined;
-    }
-  }
+   // grantedById: trimite DOAR dacă e INT; altfel omite câmpul
+   let gby = Number.parseInt(String(grantedById), 10);
+   if (!Number.isInteger(gby) || gby <= 0) {
+      try {
+         const me = await getMe();
+         const id = Number.parseInt(String(me?.id), 10);
+         if (Number.isInteger(id) && id > 0) gby = id;
+         else gby = undefined;
+      } catch {
+         gby = undefined;
+      }
+   }
 
-  const payload = {
-    userId: uid,                        // number
-    validUntil: String(validUntil),     // ISO string e OK
-    maxAttempts: attempts,              // number
-    ...(Number.isInteger(gby) && gby > 0 ? { grantedById: gby } : {}),
-  };
+   const payload = {
+      userId: uid, // number
+      validUntil: String(validUntil), // ISO string e OK
+      maxAttempts: attempts, // number
+      ...(Number.isInteger(gby) && gby > 0 ? { grantedById: gby } : {}),
+   };
 
-  // trimite NUMAI numere pentru câmpurile numerice
-  const res = await apiClientService.post(
-    "/exams/permissions/student",
-    JSON.stringify(payload),
-    "application/json; charset=UTF-8"
-  );
-  const text = await res.text().catch(() => "");
-  let data; try { data = text ? JSON.parse(text) : undefined; } catch { data = text; }
+   // trimite NUMAI numere pentru câmpurile numerice
+   const res = await apiClientService.post(
+      "/exams/permissions/student",
+      JSON.stringify(payload),
+      "application/json; charset=UTF-8"
+   );
+   const text = await res.text().catch(() => "");
+   let data;
+   try {
+      data = text ? JSON.parse(text) : undefined;
+   } catch {
+      data = text;
+   }
 
-  if (!res.ok) {
-    if (res.status === 401) throw new Error("AUTH_401");
-    if (res.status === 403) throw new Error("AUTH_403");
-    // vezi exact ce-a răspuns serverul
-    throw new Error(`grantExamPermissionExact ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
-  }
-  return data;
+   if (!res.ok) {
+      if (res.status === 401) throw new Error("AUTH_401");
+      if (res.status === 403) throw new Error("AUTH_403");
+      // vezi exact ce-a răspuns serverul
+      throw new Error(
+         `grantExamPermissionExact ${res.status}: ${
+            typeof data === "string" ? data : JSON.stringify(data)
+         }`
+      );
+   }
+   return data;
 }
 
 // POST /exams/permissions/students/bulk
 export async function grantExamPermissionBulk({
-   userIds = [],
-   validUntil,
-   maxAttempts = 1,
-   skipRoleCheck = false,
+  userIds = [],
+  validUntil,            // ISO (UTC). Dacă lipsește, pun +60m acum.
+  maxAttempts = 1,
+  grantedById,           // ← singura cheie acceptată
+  skipRoleCheck = false,
 }) {
-   if (!skipRoleCheck) await assertAdminOrManager();
+  if (!skipRoleCheck) await assertAdminOrManager();
 
-   const ids = (userIds || [])
-      .map(Number)
-      .filter((n) => Number.isInteger(n) && n > 0);
-   if (!ids.length) throw new Error("Lista userIds este goală.");
+  const ids = (userIds || [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) throw new Error("Lista userIds este goală.");
 
-   const body = JSON.stringify({
-      userIds: ids,
-      validUntil: validUntil || isoFromNowPlusMinutes(60),
-      maxAttempts: Number(maxAttempts),
-   });
-   const res = await apiClientService.post(
-      "/exams/permissions/students/bulk",
-      body
-   );
-   if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      if (res.status === 401) throw new Error("AUTH_401");
-      if (res.status === 403) throw new Error("AUTH_403");
-      throw new Error(`grantExamPermissionBulk ${res.status}: ${text}`);
-   }
-   return await res.json();
+  // determină actorul
+  let actorId = Number(grantedById);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    try {
+      const me = await getMe();
+      const maybe = Number(me?.id);
+      if (Number.isInteger(maybe) && maybe > 0) actorId = maybe;
+    } catch (_) {}
+  }
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    throw new Error("Lipsește grantedById valid.");
+  }
+
+  // normalizează la „YYYY-MM-DDTHH:mm:ssZ” (fără milisecunde)
+  const valid = isoToSecondsUTC(
+    (validUntil ? new Date(validUntil) : new Date(Date.now() + 60 * 60 * 1000)).toISOString()
+  );
+
+  const body = JSON.stringify({
+    userIds: ids,
+    grantedById: actorId,     // ← doar asta
+    validUntil: valid,
+    maxAttempts: Number(maxAttempts),
+  });
+
+  const res = await apiClientService.post(
+    "/exams/permissions/students/bulk",
+    body,
+    "application/json; charset=UTF-8"
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    if (res.status === 401) throw new Error("AUTH_401");
+    if (res.status === 403) throw new Error("AUTH_403");
+    throw new Error(`grantExamPermissionBulk ${res.status}: ${text}`);
+  }
+  return await res.json().catch(() => ({}));
 }
+
 
 /** ==================== PRACTICE (compat pentru PracticeStatistics) ==================== **/
 export async function getMyPracticeHistory({ page = 1, limit = 10 } = {}) {
@@ -642,6 +733,115 @@ export function normalizePracticeHistoryItem(item) {
       raw: item,
    };
 }
+// GET /exams/history/student?userId=&page=&limit=
+// GET (smart) – încearcă mai multe variante ca să obțină istoricul unui elev
+export async function getExamHistoryForUser(
+  userId,
+  { page = 1, limit = 20 } = {}
+) {
+  const uid = Number(userId);
+  if (!Number.isInteger(uid) || uid <= 0) throw new Error("userId invalid.");
+
+  const buildQS = (extra = {}) => {
+    const p = new URLSearchParams();
+    p.set("page", String(page));
+    p.set("limit", String(limit));
+    Object.entries(extra).forEach(([k, v]) => p.set(k, String(v)));
+    return `?${p.toString()}`;
+  };
+
+  async function tryGet(url) {
+    const res = await apiClientService.get(url);
+    const text = await res.text().catch(() => "");
+    let data;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      data = text;
+    }
+    return { ok: res.ok, status: res.status, data, text };
+  }
+
+  // 1) Poate backend-ul acceptă userId pe /exams/history/student (unele versiuni)
+  const attempts = [
+    // [eticheta, url, filtrareClientSide]
+    ["student?userId", `/exams/history/student${buildQS({ userId: uid })}`, true],
+    ["instructor?studentId", `/exams/history/instructor${buildQS({ studentId: uid })}`, false],
+    ["instructor?userId", `/exams/history/instructor${buildQS({ userId: uid })}`, false],
+    ["instructor?student", `/exams/history/instructor${buildQS({ student: uid })}`, false],
+    // fallback final: self (va funcționa doar dacă ești autentificat chiar ca elevul respectiv)
+    ["student(self)", `/exams/history/student${buildQS()}`, true],
+  ];
+
+  for (const [label, url, mustFilter] of attempts) {
+    try {
+      const r = await tryGet(url);
+      if (!r.ok) {
+        if ([400, 404, 405].includes(r.status)) continue;
+        if (r.status === 401) throw new Error("AUTH_401");
+        if (r.status === 403) throw new Error("AUTH_403");
+        continue;
+      }
+
+      const itemsRaw = Array.isArray(r.data)
+        ? r.data
+        : r.data?.data || r.data?.items || r.data?.results || [];
+
+      const filtered = mustFilter
+        ? (itemsRaw || []).filter((it) => {
+            const ids = [
+              it.userId,
+              it.studentId,
+              it.user?.id,
+              it.student?.id,
+              it.userID,
+              it.studentID,
+            ];
+            return ids.some((x) => Number(x) === uid);
+          })
+        : itemsRaw;
+
+      if (filtered && filtered.length) {
+        return {
+          items: filtered,
+          pagination: r.data?.pagination || r.data?.meta || { totalPages: 1 },
+        };
+      }
+      // dacă nu e nimic, încearcă următoarea variantă
+    } catch (_) {
+      // încearcă următoarea variantă
+    }
+  }
+
+  // Ultima șansă: ia /instructor paginat și filtrează client-side (cost moderat)
+  try {
+    const r = await tryGet(`/exams/history/instructor${buildQS()}`);
+    if (r.ok) {
+      const itemsRaw = Array.isArray(r.data)
+        ? r.data
+        : r.data?.data || r.data?.items || r.data?.results || [];
+      const filtered =
+        (itemsRaw || []).filter((it) => {
+          const ids = [
+            it.userId,
+            it.studentId,
+            it.user?.id,
+            it.student?.id,
+            it.userID,
+            it.studentID,
+          ];
+          return ids.some((x) => Number(x) === uid);
+        }) || [];
+      return {
+        items: filtered,
+        pagination: r.data?.pagination || r.data?.meta || { totalPages: 1 },
+      };
+    }
+  } catch (_) {}
+
+  return { items: [], pagination: { totalPages: 1 } };
+}
+
 
 export function loadLocalPracticeResults() {
    const out = [];

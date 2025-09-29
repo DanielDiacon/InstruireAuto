@@ -4,8 +4,6 @@ import { useDispatch, useSelector } from "react-redux";
 import { UserContext } from "../../UserContext";
 import { fetchUserReservations } from "../../store/reservationsSlice";
 import { getInstructors } from "../../api/instructorsService";
-import { getStudentExamHistory } from "../../api/examService";
-
 import Cookies from "js-cookie";
 import { useNavigate } from "react-router-dom";
 
@@ -45,15 +43,17 @@ const formatMDPhone = (p) => {
    if (!p) return "–";
    const digits = String(p).replace(/\D/g, "");
    if (digits.length === 8) {
+      // 22 123 456 -> +373 22 123 456
       return `+373 ${digits.replace(/(\d{2})(\d{3})(\d{3})/, "$1 $2 $3")}`;
    }
    if (digits.startsWith("373") && digits.length === 11) {
+      // 373 22 123 456 -> +373 22 123 456
       return `+${digits.replace(
          /(\d{3})(\d{2})(\d{3})(\d{3})/,
          "$1 $2 $3 $4"
       )}`;
    }
-   return p;
+   return String(p);
 };
 
 const isDateLike = (v) =>
@@ -81,7 +81,7 @@ const HIDE_KEYS_BASE = new Set([
    "avatar",
    "avatarUrl",
    "reservations",
-   "privateMessage",
+   "privateMessage", // ✖️ nu afișăm această notiță
 ]);
 
 // ascundem tot ce ține de grup/instructor indiferent de rol
@@ -127,7 +127,6 @@ export default function Profile() {
 
    // === Prefer numele din profilul de instructor pentru titlu (dacă e INSTRUCTOR) ===
    const [myInstructor, setMyInstructor] = useState(null);
-
    useEffect(() => {
       let cancelled = false;
       (async () => {
@@ -137,9 +136,9 @@ export default function Profile() {
          }
          try {
             const all = await getInstructors();
-            const mine = all.find(
-               (i) => String(i.userId) === String(entity.id)
-            );
+            const mine = Array.isArray(all)
+               ? all.find((i) => String(i.userId) === String(entity.id))
+               : null;
             if (!cancelled) setMyInstructor(mine || null);
          } catch (e) {
             console.error("[Profile] getInstructors failed:", e);
@@ -167,6 +166,9 @@ export default function Profile() {
       [entity?.lastName, entityRole, myInstructor]
    );
 
+   const fullName =
+      `${displayFirstName || ""} ${displayLastName || ""}`.trim() || "—";
+
    // programări doar pentru STUDENT (USER)
    const showReservations = entityRole === "USER" && !!entity?.id;
 
@@ -190,108 +192,11 @@ export default function Profile() {
       return true;
    });
 
-   /* ===================== EXAMS: încercări student ===================== */
-   const [examAttempts, setExamAttempts] = useState([]);
-   const [examAttemptsLoading, setExamAttemptsLoading] = useState(false);
-   const [examAttemptsError, setExamAttemptsError] = useState("");
-   const showExamAttempts = entityRole === "USER" && !!entity?.id;
-
-   const normalizeAttempt = (it) => ({
-      id:
-         it.id ??
-         `${it.examId || "exam"}-${it.startedAt || it.createdAt || Date.now()}`,
-      examId: it.examId ?? it.id ?? null,
-      startedAt: it.startedAt ?? it.createdAt ?? it.started ?? null,
-      finishedAt: it.finishedAt ?? it.completedAt ?? it.endedAt ?? null,
-      status: (
-         it.status ?? (it.finishedAt ? "FINISHED" : "IN_PROGRESS")
-      ).toUpperCase(),
-      total: it.total ?? it.totalQuestions ?? it.questionsTotal ?? null,
-      correct: it.correct ?? it.correctCount ?? it.right ?? null,
-      wrong: it.wrong ?? it.wrongCount ?? it.incorrect ?? null,
-      scorePct:
-         typeof it.scorePct === "number"
-            ? it.scorePct
-            : typeof it.percentage === "number"
-            ? it.percentage
-            : typeof it.score === "number"
-            ? it.score
-            : null,
-   });
-
-   useEffect(() => {
-      if (!showExamAttempts) return;
-      let cancelled = false;
-
-      (async () => {
-         setExamAttemptsLoading(true);
-         setExamAttemptsError("");
-         try {
-            const pageSize = 50;
-            let page = 1;
-            const all = [];
-
-            for (;;) {
-               const batch = await getStudentExamHistory({
-                  page,
-                  limit: pageSize,
-               });
-               const items = Array.isArray(batch)
-                  ? batch
-                  : batch?.data || batch?.items || batch?.results || [];
-               if (!items?.length) break;
-               all.push(...items);
-
-               const totalPages =
-                  batch?.pagination?.totalPages ??
-                  batch?.meta?.totalPages ??
-                  batch?.totalPages ??
-                  null;
-
-               if (totalPages ? page >= totalPages : items.length < pageSize)
-                  break;
-               page += 1;
-            }
-
-            const normalized = all.map(normalizeAttempt).sort((a, b) => {
-               const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
-               const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
-               return tb - ta;
-            });
-
-            if (!cancelled) {
-               setExamAttempts(normalized);
-               // log în consolă
-               console.groupCollapsed(
-                  "%c[EXAMS] Încercări student (" + normalized.length + ")",
-                  "color:#06c;font-weight:700"
-               );
-               normalized.forEach((row, i) =>
-                  console.log(`#${String(i + 1).padStart(3, "0")}`, row)
-               );
-               console.groupEnd();
-            }
-         } catch (e) {
-            if (!cancelled)
-               setExamAttemptsError(
-                  e?.message || "Nu am putut încărca încercările."
-               );
-         } finally {
-            if (!cancelled) setExamAttemptsLoading(false);
-         }
-      })();
-
-      return () => {
-         cancelled = true;
-      };
-   }, [showExamAttempts]);
-
    return (
       <div className="students-info">
          <div className="popup-panel__header">
             <h3 className="popup-panel__title students-info__title">
-               <span>Profil</span>{" "}
-               {`${displayFirstName} ${displayLastName}`.trim() || "—"}
+               <span>Profil</span> {fullName}
             </h3>
          </div>
 
@@ -325,73 +230,24 @@ export default function Profile() {
             </div>
 
             {/* DETALII DINAMICE (fără groupId/instructor etc.) */}
-            {/* {dynamicDetails.length > 0 && (
+            {/*
+        {dynamicDetails.length > 0 && (
           <>
             <h4 className="students-info__subtitle">Detalii:</h4>
             {dynamicDetails.map(([key, value]) => (
               <div key={key} className="students-info__field">
                 <strong style={{ marginRight: 8 }}>
-                  {key.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase())}:
+                  {key
+                    .replace(/([A-Z])/g, " $1")
+                    .replace(/^./, (c) => c.toUpperCase())}
+                  :
                 </strong>
                 <span>{renderValue(value)}</span>
               </div>
             ))}
           </>
-        )} */}
-
-            {/* ÎNCERCĂRI EXAMEN – doar pentru studenți */}
-            {showExamAttempts && (
-               <>
-                  <h4 className="students-info__subtitle">Încercări examen:</h4>
-
-                  {examAttemptsLoading && (
-                     <p className="students-info__loading">
-                        Se încarcă încercările...
-                     </p>
-                  )}
-                  {examAttemptsError && (
-                     <p className="students-info__error">{examAttemptsError}</p>
-                  )}
-                  {!examAttemptsLoading &&
-                     examAttempts.length === 0 &&
-                     !examAttemptsError && (
-                        <p className="students-info__empty">
-                           Nu există încercări.
-                        </p>
-                     )}
-
-                  {!examAttemptsLoading && examAttempts.length > 0 && (
-                     <div className="students-info__list-wrapper">
-                        <div className="students-info__list">
-                           {examAttempts.map((a) => {
-                              console.log(a);
-
-                              const status = a.status.toLowerCase();
-                              const started = a.startedAt
-                                 ? new Date(a.startedAt).toLocaleString()
-                                 : "–";
-
-                              return (
-                                 <div
-                                    key={a.id}
-                                    className={`students-info__item students-info__item--${status}`}
-                                 >
-                                    <div className="students-info__item-left">
-                                       <h3>Examen #{a.examId ?? "–"}</h3>
-                                       <p>
-                                          Scor:{" "}
-                                          <b className="tnum">{status}</b>
-                                       </p>
-                                       <span>{started}</span>
-                                    </div>
-                                 </div>
-                              );
-                           })}
-                        </div>
-                     </div>
-                  )}
-               </>
-            )}
+        )}
+        */}
 
             {/* PROGRAMĂRI – doar pentru studenți (USER) */}
             {showReservations && (
@@ -403,7 +259,9 @@ export default function Profile() {
                         Se încarcă programările...
                      </p>
                   )}
+
                   {error && <p className="students-info__error">{error}</p>}
+
                   {!loading && reservations.length === 0 && (
                      <p className="students-info__empty">
                         Nu există programări.
@@ -415,28 +273,34 @@ export default function Profile() {
                         <div className="students-info__list">
                            {reservations.map((res, index) => {
                               const status = res.status || "pending";
+                              const studentName = liveEntity.firstName
+                                 ? `${liveEntity.firstName} ${
+                                      liveEntity.lastName || ""
+                                   }`.trim()
+                                 : res.student || "–";
+                              const instructorName = res.instructor?.firstName
+                                 ? `cu ${res.instructor.firstName} ${
+                                      res.instructor.lastName || ""
+                                   }`.trim()
+                                 : "fără instructor";
+
                               return (
                                  <div
-                                    key={res.id + "-" + index}
+                                    key={`${res.id}-${index}`}
                                     className={`students-info__item students-info__item--${status}`}
                                  >
                                     <div className="students-info__item-left">
-                                       <h3>
-                                          {liveEntity.firstName
-                                             ? `${liveEntity.firstName} ${liveEntity.lastName}`
-                                             : res.student || "–"}
-                                       </h3>
-                                       <p>
-                                          {res.instructor?.firstName
-                                             ? `cu ${res.instructor.firstName} ${res.instructor.lastName}`
-                                             : "fără instructor"}
-                                       </p>
+                                       <h3>{studentName}</h3>
+                                       <p>{instructorName}</p>
                                        <span>
-                                          {new Date(
-                                             res.startTime
-                                          ).toLocaleString()}
+                                          {res.startTime
+                                             ? new Date(
+                                                  res.startTime
+                                               ).toLocaleString()
+                                             : "–"}
                                        </span>
                                     </div>
+
                                     <div className="students-info__item-right">
                                        {status === "completed" && (
                                           <ReactSVG

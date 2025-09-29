@@ -65,6 +65,17 @@
       margin-top: -16px;
       flex-grow: 1;
    }
+   &__list-exam {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 12px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scroll-snap-type: x proximity;
+      padding-bottom: 8px;
+      touch-action: pan-x;
+   }
    &__list {
       mask-image: linear-gradient(
          to top,
@@ -144,6 +155,7 @@
          border-radius: 16px;
          padding: 14px 20px;
          background: var(--black-p);
+         color: var(--white-p);
          flex: 1;
       }
    }
@@ -262,6 +274,102 @@
       }
    }
 }
+
+/* ---------- Tabs (Programări / Încercări examen) ---------- */
+.students-info__tabs {
+   display: flex;
+   gap: 6px;
+   padding: 8px 0;
+}
+
+.students-info__tab {
+   flex: 1;
+   appearance: none;
+   background: var(--black-p);
+   color: var(--white-p);
+   padding: 14px 20px;
+   border-radius: 24px;
+   transition: all 0.18s ease;
+   cursor: pointer;
+}
+
+.students-info__tab.is-active {
+   background: var(--accent-l);
+   color: var(--accent-d);
+   border-color: var(--si-primary);
+}
+
+//&__list-exam {
+//   display: flex;
+//   flex-wrap: nowrap;
+//   gap: 12px;
+//   overflow-x: auto;
+//   overflow-y: hidden;
+//   -webkit-overflow-scrolling: touch;
+//   scroll-snap-type: x proximity;
+//   padding-bottom: 8px;
+//   touch-action: pan-x;
+//}
+.students-info__list--attempts {
+   z-index: 2;
+   position: relative;
+   flex: 1;
+   overflow: hidden;
+   position: relative;
+   margin-top: -16px;
+   flex-grow: 1;
+}
+.students-info__attempt {
+   display: flex;
+   flex-direction: column;
+   background: var(--black-p);
+   border-radius: 22px;
+   padding: 12px 14px;
+   gap: 3px;
+   > div:first-child {
+      > div:first-child {
+         /* status */
+         font-weight: 600;
+         text-transform: capitalize;
+      }
+      > div:nth-child(2) {
+         /* dată/perioadă */
+         font-size: 12px;
+         opacity: 0.8;
+      }
+   }
+
+   > div:last-child {
+      text-align: right;
+
+      > div:first-child {
+         /* scor */
+         font-weight: 600;
+      }
+      > div:last-child {
+         /* total întrebări */
+         font-size: 12px;
+         opacity: 0.8;
+      }
+   }
+
+   &--finished {
+      background: #9cf680;
+      color: #0d3700;
+   }
+   &--in_progress,
+   &--inprogress,
+   &--running {
+      background: #80d1f6;
+      color: #002c41;
+   }
+   &--failed,
+   &--error {
+      background: #f68080;
+      color: #410000;
+   }
+}
+
 @media only screen and (max-width: $mobile) {
    .students-info {
       &__note-section {
@@ -273,6 +381,7 @@
             border-radius: 16px;
             padding: 14px 20px;
             background: var(--black-p);
+            color: var(--white-p);
             min-width: 100%;
             flex: 1;
          }
