@@ -19,6 +19,7 @@ import { getReservations } from "../../api/reservationsService";
 import accIcon from "../../assets/svg/acc.svg";
 import addIcon from "../../assets/svg/mdi--calendar-plus-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
+import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import testIcon from "../../assets/svg/material-symbols--book-outline.svg";
 import examIcon from "../../assets/svg/mdi--book-clock-outline.svg";
 import { openPopup } from "../../components/Utils/popupStore";
@@ -96,11 +97,11 @@ const messagesRO = {
 
 function SPExam() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
-      { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student", text: "Acasă", icon: homeIcon },
-      { link: "/student", text: "Testare", icon: testIcon },
-      { link: "/student", text: "Examen", icon: examIcon },
+      { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
+      { popup: "sAddProg", text: "Programare", icon: addIcon },
+      { link: "/student/test", text: "Testare", icon: testIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    return (

@@ -46,21 +46,21 @@
          color: var(--white-s);
       }
       position: relative;
-      &::after {
-         content: "";
-         position: absolute;
-         bottom: -80%;
-         left: -160%;
-         width: 300%;
-         height: 150%;
-         background: radial-gradient(
-            circle,
-            rgba(243, 252, 121, 0.2),
-            transparent
-         );
-         filter: blur(40px);
-         pointer-events: none;
-      }
+      //&::after {
+      //   content: "";
+      //   position: absolute;
+      //   bottom: -80%;
+      //   left: -160%;
+      //   width: 300%;
+      //   height: 150%;
+      //   background: radial-gradient(
+      //      circle,
+      //      rgba(243, 252, 121, 0.2),
+      //      transparent
+      //   );
+      //   filter: blur(40px);
+      //   pointer-events: none;
+      //}
    }
    &__statut {
       position: absolute;
@@ -446,7 +446,7 @@
       &__nav-text {
          width: 100%;
          text-align: center;
-         line-height: 0;
+         height: 0;
          opacity: 0;
          transition: 0.5s cubic-bezier(0.2, 0.885, 0.32, 1.1);
       }
@@ -504,7 +504,7 @@
          height: 100px;
       }
       .menu__nav-text {
-         line-height: 1.4;
+         height: 18px;
          opacity: 1;
       }
       .settings {

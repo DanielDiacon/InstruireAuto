@@ -181,7 +181,6 @@
       margin-left: -6px;
       color: var(--black-s);
    }
-
    &__links {
       display: flex;
       justify-content: center;
@@ -192,7 +191,7 @@
       min-height: 266px;
       transition: var(--elastic-s);
       &.active {
-         min-height: 356px;
+         min-height: 394px;
       }
       &.reset {
          min-height: 350px;
@@ -280,8 +279,75 @@
          }
       }
    }
-}
 
+   &__terms {
+   }
+   &__checkbox {
+      display: flex;
+      align-items: flex-start;
+      font-size: 14px;
+      line-height: 1.35;
+      user-select: none;
+      gap: 6px;
+      color: var(--white-s);
+      padding: 6px 12px;
+   }
+
+   /* checkbox custom */
+   &__checkbox input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      flex: 0 0 20px;
+      border: 2px solid var(--accent-l);
+      border-radius: 16px;
+      background: var(--black-s);
+      display: grid;
+      place-content: center;
+      transition: 0.2s ease;
+      cursor: pointer;
+   }
+
+   /* hover / active / focus */
+   &__checkbox input[type="checkbox"]:hover {
+      scale: 1.1;
+   }
+   &__checkbox input[type="checkbox"]:active {
+      scale: 0.9;
+   }
+
+   /* checked — bifa albă SVG centrată */
+   &__checkbox input[type="checkbox"]:checked {
+      background-color: var(--accent-l);
+      border-color: var(--accent-l);
+      background-image: var(--background-image);
+      color: var(--accent-d);
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: 14px 14px;
+   }
+
+   /* link-urile din text */
+   &__checkbox a {
+      color: var(--accent-l);
+      text-decoration: underline;
+   }
+
+   /* butonul de submit când e dezactivat */
+   &__button[disabled] {
+      opacity: 0.5;
+      filter: grayscale(100%);
+      pointer-events: none;
+      cursor: not-allowed;
+   }
+}
+:root {
+   --background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='4,11 8,15 16,6'/></svg>");
+}
+.darkmode {
+   --background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 20 20' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='4,11 8,15 16,6'/></svg>");
+}
 .M3Link {
    background: var(--black-s);
    padding: 8px;
@@ -385,7 +451,7 @@
          min-height: 266px;
          transition: var(--elastic-s);
          &.active {
-            min-height: 330px;
+            min-height: 380px;
          }
          &.reset {
             min-height: 310px;
@@ -452,7 +518,7 @@
          min-height: 250px;
 
          &.active {
-            min-height: 360px;
+            min-height: 420px;
             .sign__subtitle {
                display: none;
             }
@@ -554,7 +620,7 @@
       &__switcher {
          min-height: 260px;
          &.active {
-            min-height: 360px;
+            min-height: 440px;
          }
          &.reset {
             min-height: 350px;

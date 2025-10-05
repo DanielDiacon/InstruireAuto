@@ -37,6 +37,7 @@ import { UserContext } from "../UserContext";
 import InstructorsGroupManager from "../components/APanel/InstructorsGroupManager";
 import SubPopup from "../components/Utils/SubPopup";
 import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
+import PreloadAppData from "../components/Utils/PreloadAppData";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -199,6 +200,7 @@ function APanel() {
                   </div>
                </div>
             </section>
+            <PreloadAppData />
 
             <section className="modules">
                <ReservationHistory

@@ -93,11 +93,11 @@ const messagesRO = {
 
 function SPanel() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
-      { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
+      { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student/test", text: "Testare", icon: testIcon },
       { link: "/student/exam", text: "Examen", icon: examIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    const { user } = useContext(UserContext);

@@ -98,10 +98,10 @@ const messagesRO = {
 
 function IPToday() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
       { link: "/instructor", text: "Acasă", icon: homeIcon },
       { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/instructor/groups", text: "Grupe", icon: groupsIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    return (

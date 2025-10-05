@@ -1,3 +1,4 @@
+// src/components/.../ExamPracticeUI.jsx
 import React, {
    useContext,
    useEffect,
@@ -19,12 +20,12 @@ import {
    getStudentExamHistory,
    failExam,
 } from "../../api/examService";
+import { updateUser } from "../../api/usersService";
 import { rewriteImageUrl } from "../Utils/rewriteImageUrl";
 import { ReactSVG } from "react-svg";
 import heartFullIcon from "../../assets/svg/mingcute--heart-fill.svg";
 import heartCrackIcon from "../../assets/svg/mingcute--heart-crack-fill.svg";
-
-/** 👉 pentru confirm pe navigare internă (react-router v6) */
+import addIcon from "../../assets/svg/add-s.svg";
 import { UNSAFE_NavigationContext as NavigationContext } from "react-router-dom";
 
 /* ---------- helpers ---------- */
@@ -41,16 +42,28 @@ const secsRemainingFromServer = (startedAtIso, timeLimitMin) => {
    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
    return clamp(timeLimitMin * 60 - elapsed, 0, timeLimitMin * 60);
 };
+
+const onlyDigits13 = (v) =>
+   String(v || "")
+      .replace(/\D/g, "")
+      .slice(0, 13);
+const isIdnp13 = (v) => /^\d{13}$/.test(String(v || ""));
+
+/** ✅ permisiune “activă” doar când avem fereastră validă & încadrări */
 const computeIsAllowed = (perm) => {
    if (!perm) return false;
    if (perm.allowed === true) return true;
-   const isActive = perm.isActive ?? true;
-   const untilOk = perm.validUntil
-      ? Date.parse(perm.validUntil) > Date.now()
-      : true;
+   const isActive = perm.isActive !== false;
+   const hasValidUntil =
+      typeof perm.validUntil === "string" &&
+      !Number.isNaN(Date.parse(perm.validUntil));
+   const stillValid = hasValidUntil && Date.parse(perm.validUntil) > Date.now();
+   const hasMax =
+      perm.maxAttempts != null && !Number.isNaN(Number(perm.maxAttempts));
    const used = Number(perm.usedAttempts ?? 0);
-   const maxA = Number(perm.maxAttempts ?? 1);
-   return Boolean(isActive && untilOk && used < maxA);
+   const maxA = Number(perm.maxAttempts ?? 0);
+   const attemptsOk = hasMax && used < maxA;
+   return Boolean(isActive && stillValid && attemptsOk);
 };
 
 // normalizează indexul corect 0/1-based
@@ -87,11 +100,10 @@ const normalizeAttempt = (it) => ({
 });
 
 /* ---------- config ---------- */
-const MAX_MISTAKES_TO_END = 3; // la a 3-a greșeală: FAIL
-const WRONG_FILL_SENTINEL = 99; // pedeapsă sigur greșit
+const PASS_SCORE_DEFAULT = 46; // ✅ prag de promovare
+const WRONG_FILL_SENTINEL = 99;
 const LEAVE_WARNING_TEXT =
    "Chiar dorești să părăsești pagina examenului? Întrebarea curentă va fi marcată greșit (penalizare).";
-
 const ROUTE_LEAVE_CONFIRM =
    "Chiar dorești să părăsești /student/exam? Întrebarea curentă va fi marcată greșit (penalizare).";
 
@@ -106,21 +118,34 @@ function useLeaveGuard(when, onConfirm) {
             try {
                await onConfirm?.("route-leave");
             } finally {
-               unblock(); // deblochează
-               tx.retry(); // navighează
+               unblock();
+               tx.retry();
             }
          }
-         // altfel rămâne pe pagină
       });
       return unblock;
    }, [when, nav, onConfirm]);
 }
 
+/** Traduceri status -> RO */
+const roStatus = (s) => {
+   const k = String(s || "").toLowerCase();
+   if (k.includes("failed") || k === "fail") return "respins";
+   if (k.includes("completed") || k === "finished" || k === "done")
+      return "admis";
+   if (
+      k.includes("in_progress") ||
+      k.includes("in-progress") ||
+      k === "inprogress"
+   )
+      return "în desfășurare";
+   return s || "—";
+};
+
 export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
-   const { user } = useContext(UserContext) || {};
+   const { user, setUser } = useContext(UserContext) || {};
 
    const [view, setView] = useState("waiting"); // waiting | test | result
-   const [checkingPerm, setCheckingPerm] = useState(true);
    const [perm, setPerm] = useState(null);
    const [error, setError] = useState("");
 
@@ -138,9 +163,20 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    const [attemptsLoading, setAttemptsLoading] = useState(false);
    const [attemptsError, setAttemptsError] = useState("");
 
+   /* ---------- UI: tranziție spre rezultat ---------- */
+   const FADE_MS = 380;
+   const [resultTransitioning, setResultTransitioning] = useState(false);
+   const [resultAnimOn, setResultAnimOn] = useState(false);
+
+   /* ---------- IDNP gate state ---------- */
+   const hasIdnp = useMemo(() => isIdnp13(user?.idnp), [user?.idnp]);
+   const [idnp, setIdnp] = useState(hasIdnp ? String(user?.idnp) : "");
+   const [idnpBusy, setIdnpBusy] = useState(false);
+   const [idnpMsg, setIdnpMsg] = useState(null);
+   const [manualIdnpEditor, setManualIdnpEditor] = useState(false); // ✅ buton "Modifică IDNP"
+
    const qTextRef = useRef(null);
    const timerRef = useRef(null);
-   const pollingRef = useRef(null);
    const finishingRef = useRef(false);
 
    // refs pentru listeners / penalizări
@@ -167,6 +203,11 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       idxRef.current = idx;
    }, [idx]);
 
+   // ținem inputul sincron când user.idnp se schimbă
+   useEffect(() => {
+      if (hasIdnp) setIdnp(String(user?.idnp || ""));
+   }, [hasIdnp, user?.idnp]);
+
    const scrollToQText = () => {
       const el = qTextRef.current;
       if (!el) return;
@@ -178,7 +219,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    useEffect(() => {
       return () => {
          timerRef.current && clearInterval(timerRef.current);
-         pollingRef.current && clearInterval(pollingRef.current);
       };
    }, []);
 
@@ -191,17 +231,12 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       );
    };
 
-   // răspunde o singură întrebare ca GREȘIT (99) – folosit la penalizare
+   /* ---------- penalizări ---------- */
    const answerOneAsWrong99 = useCallback(async (q, reason = "penalty") => {
       if (!q || !examRef.current) return false;
-
       const already = (answersMapRef.current || {})[q.id];
-      if (already && already.selected != null) {
-         // deja răspunsă – nu mai trimitem încă o dată
-         return false;
-      }
+      if (already && already.selected != null) return false;
 
-      // local: marchează greșit cu 99
       setAnswersMap((prev) => ({
          ...prev,
          [q.id]: {
@@ -212,28 +247,24 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          },
       }));
 
-      // server: trimite “99”
       try {
-         console.log("%c[UI →] penalty 99", "color:#a00;font-weight:bold", {
-            examId: Number(examRef.current.id),
-            questionId: Number(q.id),
-            selectedAnswer: WRONG_FILL_SENTINEL,
-         });
-
          await submitExamAnswer(Number(examRef.current.id), {
             questionId: Number(q.id),
             selectedAnswer: WRONG_FILL_SENTINEL,
          });
-
-         console.log("%c[UI ←] penalty 99 OK", "color:#0a0;font-weight:bold");
       } catch (e) {
          console.warn("[penalty 99] submit failed", e);
       }
-
       return true;
    }, []);
 
-   // penalizare o singură dată per eveniment, fără FAIL automat
+   // helper: câte greșeli sunt permise ca să mai poți atinge passScore
+   const getAllowedWrong = useCallback(() => {
+      const totalQ = (questionsRef.current || []).length || 0;
+      const pass = Number(examRef.current?.passScore ?? PASS_SCORE_DEFAULT);
+      return Math.max(0, totalQ - pass);
+   }, []);
+
    const penalizeOnceThenContinue = useCallback(
       async (reason = "visibility") => {
          if (
@@ -242,8 +273,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
             finishingRef.current
          )
             return;
-
-         // cooldown anti dublare
          const now = Date.now();
          if (now - penaltyCooldownRef.current < 1200) return;
          penaltyCooldownRef.current = now;
@@ -251,68 +280,51 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          const curQ = (questionsRef.current || [])[idxRef.current];
          if (curQ) {
             const changed = await answerOneAsWrong99(curQ, reason);
-            if (changed) {
+            if (changed)
                setError(
                   "Ai părăsit fereastra. Întrebarea curentă a fost marcată greșit (penalizare). Poți continua examenul."
                );
-            }
          }
 
-         // re-evaluăm după ce state-ul s-a aplicat
          setTimeout(() => {
             const amap = answersMapRef.current || {};
             const mistakes =
                Object.values(amap).filter(
                   (a) => a?.selected != null && a.correct === false
                ).length || 0;
-
-            if (mistakes = MAX_MISTAKES_TO_END) {
-               endExamAsFailed(); // a 3-a greșeală => FAIL
-            } else {
-               // mergem mai departe la următoarea întrebare necompletată
-               autoNext(amap);
-            }
+            const allowedWrong = getAllowedWrong();
+            if (mistakes > allowedWrong) endExamAsFailed();
+            else autoNext(amap);
          }, 0);
       },
-      [answerOneAsWrong99]
+      [answerOneAsWrong99, getAllowedWrong]
    );
 
+   /* ---------- permisiune: polling continuu la 3s ---------- */
    useEffect(() => {
-      (async () => {
+      let cancelled = false;
+      let t;
+      const tick = async () => {
          try {
             const p = await getMyPermissionStatus();
-            setPerm(p);
-         } catch (e) {
-            setError(e?.message || "Nu am putut verifica permisiunea.");
+            if (!cancelled) setPerm(p);
+         } catch {
+            // nu stricăm UI dacă e eroare la fetch
          } finally {
-            setCheckingPerm(false);
+            if (!cancelled) t = setTimeout(tick, 3000);
          }
-      })();
+      };
+      tick();
+      return () => {
+         cancelled = true;
+         if (t) clearTimeout(t);
+      };
    }, []);
 
-   useEffect(() => {
-      if (checkingPerm) return;
-      if (computeIsAllowed(perm)) {
-         if (pollingRef.current) clearInterval(pollingRef.current);
-         pollingRef.current = null;
-         return;
-      }
-      pollingRef.current = setInterval(async () => {
-         try {
-            const p = await getMyPermissionStatus();
-            setPerm(p);
-         } catch {}
-      }, 3000);
-      return () => {
-         pollingRef.current && clearInterval(pollingRef.current);
-         pollingRef.current = null;
-      };
-   }, [checkingPerm, perm]);
-
+   /* ---------- istoric ---------- */
    useEffect(() => {
       if (view !== "waiting" || !user?.id) return;
       let cancelled = false;
-
       (async () => {
          setAttemptsLoading(true);
          setAttemptsError("");
@@ -336,18 +348,15 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                   batch?.meta?.totalPages ??
                   batch?.totalPages ??
                   null;
-
                if (totalPages ? page >= totalPages : items.length < pageSize)
                   break;
                page += 1;
             }
-
             const normalized = all.map(normalizeAttempt).sort((a, b) => {
                const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
                const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
                return tb - ta;
             });
-
             if (!cancelled) setAttempts(normalized);
          } catch (e) {
             if (!cancelled)
@@ -358,12 +367,21 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
             if (!cancelled) setAttemptsLoading(false);
          }
       })();
-
       return () => {
          cancelled = true;
       };
    }, [view, user?.id]);
 
+   /* === gate logic: input IDNP doar când NU există încercări; dar se poate deschide manual === */
+   const hasAnyAttempt = attempts.length > 0;
+   const baseShowIdnpGate = useMemo(() => {
+      if (attemptsLoading) return false; // așteptăm încărcarea
+      if (attemptsError) return true; // conservator: cerem IDNP
+      return !hasAnyAttempt; // fără încercări → arătăm inputul
+   }, [attemptsLoading, attemptsError, hasAnyAttempt]);
+   const showIdnpGate = baseShowIdnpGate || manualIdnpEditor; // ✅ poate fi forțat din buton
+
+   /* ---------- cheie corectă ---------- */
    const buildCorrectMap = async (started) => {
       try {
          const tid =
@@ -400,13 +418,24 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       return Number(correctMap[qId]) === Number(selectedIdx0);
    };
 
+   /* ---------- START exam (passScore = 46) ---------- */
    const handleStart = async () => {
       setError("");
+
+      if (showIdnpGate && !isIdnp13(user?.idnp)) {
+         setError(
+            "Completează și salvează IDNP (13 cifre) înainte de a începe examenul."
+         );
+         return;
+      }
+
       setCorrectMap({});
       setCorrectMapLoaded(false);
       try {
+         // re-check permisiune chiar la start
          let p = await getMyPermissionStatus();
-         if (!computeIsAllowed(p)) {
+         const allowedNow = computeIsAllowed(p);
+         if (!allowedNow) {
             if (!user?.id)
                throw new Error("Nu știu ID-ul utilizatorului curent.");
             await grantExamPermissionExact({
@@ -414,23 +443,23 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                validUntil: isoToSecondsUTC(isoFromNowPlusMinutes(90)),
                maxAttempts: 3,
             });
+            // mică așteptare până devine activ
             const t0 = Date.now();
             do {
                await new Promise((r) => setTimeout(r, 400));
                p = await getMyPermissionStatus();
             } while (!computeIsAllowed(p) && Date.now() - t0 < 6000);
-            if (!computeIsAllowed(p)) {
+            if (!computeIsAllowed(p))
                throw new Error(
                   "Permisiunea nu a devenit activă încă. Reîncearcă în câteva secunde."
                );
-            }
-            setPerm(p);
          }
+         setPerm(p);
 
          const started = await startExam({
             userId: Number(user.id),
-            timeLimit: 30,
-            passScore: 22,
+            timeLimit: 60,
+            passScore: PASS_SCORE_DEFAULT, // ✅ prag corect
          });
          setExam(started);
 
@@ -487,8 +516,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
 
    const current = questions[idx] || null;
    const total = questions.length;
-   const passScore = Number(exam?.passScore ?? 22);
-   const allowedWrongBackend = Math.max(0, total - passScore);
+   const passScore = Number(exam?.passScore ?? PASS_SCORE_DEFAULT);
 
    const mistakesMade = useMemo(
       () =>
@@ -499,15 +527,28 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    );
    const livesLeft = Math.max(0, maxLives - mistakesMade);
 
+   // ✅ scor corect: fiecare răspuns corect = +1
+   const correctAnsweredRaw = useMemo(
+      () =>
+         Object.values(answersMap).filter(
+            (a) => a?.selected != null && a.correct === true
+         ).length,
+      [answersMap]
+   );
+   // Dacă a atins pragul (>=46), restul se consideră corecte la AFIȘARE
+   const correctAnsweredForDisplay =
+      total > 0 && correctAnsweredRaw >= passScore ? total : correctAnsweredRaw;
+   const resultPct =
+      total > 0 ? Math.round((correctAnsweredForDisplay / total) * 100) : 0;
+
    const statusBoard = useMemo(() => {
       if (!questions.length) return [];
       return questions.map((q, i) => {
          const a = answersMap[q.id];
          let status = "none";
-         if (a?.selected != null) {
-            if (a.correct === true) status = "ok";
-            else if (a.correct === false) status = "bad";
-         }
+         if (a?.selected != null)
+            status =
+               a.correct === true ? "ok" : a.correct === false ? "bad" : "none";
          return { i, status };
       });
    }, [questions, answersMap]);
@@ -528,9 +569,20 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       return () => cancelAnimationFrame(raf);
    }, [idx, current]);
 
+   const goToResult = useCallback(() => {
+      if (viewRef.current === "result") return;
+      setResultTransitioning(true); // fade-out test
+      setTimeout(() => {
+         setView("result");
+         setResultTransitioning(false);
+         setResultAnimOn(false);
+         // mic pop-in la rezultat
+         setTimeout(() => setResultAnimOn(true), 30);
+      }, FADE_MS);
+   }, []);
+
    const autoNext = (nextMap) => {
       if (!questions.length) return;
-
       for (let i = idx + 1; i < questions.length; i++) {
          const q = questions[i];
          const a = nextMap[q.id];
@@ -547,38 +599,45 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
             return;
          }
       }
-      setView("result");
+      goToResult(); // 🔄 tranziție spre rezultat
    };
 
-   // FAIL pe tot examenul
-   const endExamAsFailed = async () => {
+   const endExamAsFailed = useCallback(() => {
       if (finishingRef.current || !examRef.current) return;
       finishingRef.current = true;
-      try {
-         const id = Number(examRef.current.id);
-         console.log("%c[UI →] failExam", "color:#a00;font-weight:bold", {
-            examId: id,
-         });
+      const id = Number(examRef.current.id);
+      timerRef.current && clearInterval(timerRef.current);
+      goToResult(); // 🔄 tranziție
+      (async () => {
          try {
-            await failExam(id);
-            console.log("%c[UI ←] failExam OK", "color:#0a0;font-weight:bold");
-         } catch (e) {
-            console.warn("[failExam] call failed:", e);
+            try {
+               await failExam(id);
+            } catch (e) {
+               console.warn("[failExam] call failed:", e);
+            }
+            try {
+               const fresh = await getExam(id);
+               setExam(fresh);
+            } catch (e) {}
+         } finally {
+            finishingRef.current = false;
          }
-         timerRef.current && clearInterval(timerRef.current);
-         try {
-            const fresh = await getExam(id);
-            setExam(fresh);
-         } catch {}
-         setView("result");
-      } finally {
-         finishingRef.current = false;
-      }
+      })();
+   }, [goToResult]);
+
+   const getEffectiveCorrectIdx = (qId) => {
+      if (Object.prototype.hasOwnProperty.call(correctMap, qId))
+         return Number(correctMap[qId]);
+      const saved = answersMap[qId];
+      if (saved?.serverCorrectIdx != null)
+         return Number(saved.serverCorrectIdx);
+      return null;
    };
 
    const onChoose = async (clientIdx0) => {
       if (!exam || !current) return;
       if (remaining <= 0) return;
+      if (viewRef.current !== "test") return;
 
       const existing = answersMap[current.id];
       if (existing && existing.selected != null) return;
@@ -587,10 +646,9 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
 
       const payload = {
          questionId: Number(current.id),
-         selectedAnswer: Number(clientIdx0) + 1,
+         selectedAnswer: Number(clientIdx0),
       };
-
-      const localVerdict = verifyAnswerLocal(current.id, Number(clientIdx0)); // true | false | null
+      const localVerdict = verifyAnswerLocal(current.id, Number(clientIdx0));
 
       let next = {
          ...answersMap,
@@ -606,27 +664,44 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          Object.values(next).filter(
             (a) => a?.selected != null && a.correct === false
          ).length || 0;
-
-      // a 3-a greșeală => FAIL
-      if (badNow >= MAX_MISTAKES_TO_END) {
+      // ❗️terminăm dacă nu mai putem atinge passScore
+      if (badNow > Math.max(0, questions.length - passScore)) {
          setAnswerLoading(null);
-         await endExamAsFailed();
+         endExamAsFailed();
          return;
       }
-
       setTimeout(() => autoNext(next), 250);
 
       try {
          const resp = await submitExamAnswer(Number(exam.id), payload);
          const serverCorrect =
             typeof resp?.correct === "boolean" ? resp.correct : null;
+         const serverCorrectIdx = normalizeCorrectIdx(
+            resp?.correctAnswer,
+            (current.answers || []).length
+         );
+         const explanation = (resp?.explanation ?? "").trim() || null;
+
+         if (Number.isInteger(serverCorrectIdx))
+            setCorrectMap((m) => ({ ...m, [current.id]: serverCorrectIdx }));
          const finalCorrect =
             serverCorrect !== null ? serverCorrect : localVerdict;
 
-         if (finalCorrect !== next[current.id].correct) {
+         if (
+            finalCorrect !== next[current.id].correct ||
+            explanation != null ||
+            Number.isInteger(serverCorrectIdx)
+         ) {
             next = {
                ...next,
-               [current.id]: { ...next[current.id], correct: finalCorrect },
+               [current.id]: {
+                  ...next[current.id],
+                  correct: finalCorrect,
+                  serverCorrectIdx: Number.isInteger(serverCorrectIdx)
+                     ? serverCorrectIdx
+                     : next[current.id]?.serverCorrectIdx ?? null,
+                  explanation,
+               },
             };
             setAnswersMap(next);
          }
@@ -635,19 +710,9 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
             Object.values(next).filter(
                (a) => a?.selected != null && a.correct === false
             ).length || 0;
-
-         if (badNow >= MAX_MISTAKES_TO_END) {
+         if (badNow > Math.max(0, questions.length - passScore)) {
             setAnswerLoading(null);
-            await endExamAsFailed();
-            return;
-         }
-
-         // Dacă oricum nu mai poți atinge scorul de trecere, încheie ca FAIL
-         if (
-            badNow >
-            Math.max(0, questions.length - Number(exam?.passScore ?? 22))
-         ) {
-            await endExamAsFailed();
+            endExamAsFailed();
             return;
          }
       } catch (e) {
@@ -658,11 +723,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    };
 
    /* ====== Protecții la părăsire ====== */
-
-   // 1) Navigare internă (Link / useNavigate) – confirm + penalizare (99) pe întrebarea curentă, dar NU FAIL
    useLeaveGuard(view === "test", penalizeOnceThenContinue);
-
-   // 2) Tab switch/minimize – doar penalizare (99) și continuă; FAIL doar dacă devine greșeala a 3-a
    useEffect(() => {
       if (view !== "test") return;
       let cooldown = false;
@@ -678,75 +739,227 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       return () => document.removeEventListener("visibilitychange", onVis);
    }, [view, penalizeOnceThenContinue]);
 
-   // 3) Reload/Close tab (beforeunload) + pagehide – penalizare (99) înainte de a ieși efectiv
    useEffect(() => {
       if (view !== "test") return;
-
       const onBeforeUnload = (e) => {
          e.preventDefault();
          e.returnValue = LEAVE_WARNING_TEXT;
          return LEAVE_WARNING_TEXT;
       };
       const onPageHide = () => penalizeOnceThenContinue("pagehide");
-
       window.addEventListener("beforeunload", onBeforeUnload);
       window.addEventListener("pagehide", onPageHide);
-
       return () => {
          window.removeEventListener("beforeunload", onBeforeUnload);
          window.removeEventListener("pagehide", onPageHide);
       };
    }, [view, penalizeOnceThenContinue]);
 
-   // timer out => închide local (poți apela endExamAsFailed dacă vrei FAIL și aici)
    useEffect(() => {
       if (remaining === 0 && exam && view === "test") {
-         setView("result");
          timerRef.current && clearInterval(timerRef.current);
+         goToResult(); // 🔄 tranziție când expiră timpul
       }
-   }, [remaining, exam, view]);
+   }, [remaining, exam, view, goToResult]);
 
    const verdict = useMemo(() => {
-      const failedByLives = mistakesMade >= maxLives;
+      // ✅ dacă ai atins passScore, e PASS
+      const passed = correctAnsweredRaw >= passScore;
       const failedByBackend =
-         mistakesMade >
-         Math.max(0, questions.length - Number(exam?.passScore ?? 22));
-      const failed = failedByLives || failedByBackend || remaining === 0;
-      return failed ? "FAILED" : "PASSED";
-   }, [mistakesMade, maxLives, exam?.passScore, questions.length, remaining]);
+         mistakesMade > Math.max(0, questions.length - passScore);
+      const failedByTime = remaining === 0 && !passed;
+      return passed
+         ? "PASSED"
+         : failedByBackend || failedByTime
+         ? "FAILED"
+         : "PASSED";
+   }, [
+      correctAnsweredRaw,
+      mistakesMade,
+      passScore,
+      questions.length,
+      remaining,
+   ]);
+
+   /* ===================== RENDER ===================== */
+   // sus, lângă alte hooks:
+   const fmtRO = React.useMemo(
+      () =>
+         new Intl.DateTimeFormat("ro-MD", {
+            timeZone: "Europe/Chisinau",
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false, // 24h
+         }),
+      []
+   );
+
+   const allowed = computeIsAllowed(perm);
+
+   const startDisabled = attemptsLoading || (baseShowIdnpGate && !hasIdnp);
+   const startTitle = attemptsLoading
+      ? "Se verifică istoricul…"
+      : baseShowIdnpGate && !hasIdnp
+      ? "Salvează mai întâi IDNP-ul"
+      : "Începe examenul";
 
    return (
       <div className="practice exam">
-         {error && <div className="practice__error">{error}</div>}
-
+         {/* ===== WAITING ===== */}
          {view === "waiting" && (
             <>
                <div className="card top">
-                  {checkingPerm ? (
-                     <p>Se verifică permisiunea…</p>
-                  ) : computeIsAllowed(perm) ? (
+                  {allowed ? (
                      <>
                         <h2>Permisiune activă</h2>
+
+                        {/* === IDNP Gate (NUMAI dacă NU ai încercări) sau deschis manual === */}
+                        {showIdnpGate && (
+                           <div
+                              className="exam-idnp"
+                              style={{ margin: "6px 0 6px" }}
+                           >
+                              <div
+                                 style={{
+                                    display: "flex",
+                                    gap: 6,
+                                    alignItems: "center",
+                                    flexWrap: "wrap",
+                                 }}
+                              >
+                                 {manualIdnpEditor && (
+                                    <button
+                                       className="practice__back bottom"
+                                       onClick={() =>
+                                          setManualIdnpEditor(false)
+                                       }
+                                       title="Închide editor IDNP"
+                                    >
+                                       <ReactSVG
+                                          src={addIcon}
+                                          className="practice__icon react-icon rotate45"
+                                       />
+                                    </button>
+                                 )}
+                                 <input
+                                    id="idnp"
+                                    type="tel"
+                                    inputMode="numeric"
+                                    autoComplete="off"
+                                    placeholder="IDNP-2001234567890"
+                                    className="practice__input"
+                                    value={idnp}
+                                    onChange={(e) =>
+                                       setIdnp(onlyDigits13(e.target.value))
+                                    }
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    disabled={idnpBusy}
+                                 />
+                                 <button
+                                    className="practice__back bottom green"
+                                    onClick={async () => {
+                                       setIdnpMsg(null);
+                                       const clean = onlyDigits13(idnp);
+                                       try {
+                                          setIdnpBusy(true);
+                                          const updated = await updateUser(
+                                             Number(user.id),
+                                             { idnp: clean }
+                                          );
+                                          if (typeof setUser === "function") {
+                                             setUser({
+                                                ...user,
+                                                ...updated,
+                                                idnp: updated?.idnp ?? clean,
+                                             });
+                                          }
+                                          setIdnpMsg({
+                                             type: "success",
+                                             text: "IDNP salvat.",
+                                          });
+                                          if (manualIdnpEditor)
+                                             setManualIdnpEditor(false);
+                                       } catch (e) {
+                                          let t = "Eroare la salvare.";
+                                          try {
+                                             const parsed = JSON.parse(
+                                                String(e?.message || "{}")
+                                             );
+                                             if (parsed?.message)
+                                                t = Array.isArray(
+                                                   parsed.message
+                                                )
+                                                   ? parsed.message.join(" ")
+                                                   : parsed.message;
+                                          } catch {}
+                                          setIdnpMsg({
+                                             type: "error",
+                                             text: t,
+                                          });
+                                       } finally {
+                                          setIdnpBusy(false);
+                                       }
+                                    }}
+                                    disabled={idnpBusy || !isIdnp13(idnp)}
+                                    title={
+                                       !isIdnp13(idnp)
+                                          ? "IDNP trebuie să fie 13 cifre"
+                                          : "Salvează"
+                                    }
+                                 >
+                                    {idnpBusy ? "Se salvează…" : "Salvează"}
+                                 </button>
+                              </div>
+                           </div>
+                        )}
+
                         {perm?.validUntil && (
                            <p>
-                              Valabil până la:{" "}
-                              {new Date(perm.validUntil).toLocaleString()}
+                              Acces acordat. Când ești pregătit, apasă „Începe
+                              examenul”.
                            </p>
                         )}
-                        <button
-                           className="practice__back bottom green "
-                           onClick={handleStart}
+
+                        <div
+                           style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                              marginTop: 8,
+                           }}
                         >
-                           Începe examenul
-                        </button>
+                           <button
+                              className="practice__back bottom green"
+                              onClick={handleStart}
+                              disabled={startDisabled}
+                              title={startTitle}
+                           >
+                              Începe examenul
+                           </button>
+
+                           {/* ✅ vizibil mereu, chiar dacă inputul este ascuns */}
+                           {!showIdnpGate && (
+                              <button
+                                 className="practice__back bottom"
+                                 onClick={() => {
+                                    setManualIdnpEditor((v) => !v);
+                                    setIdnpMsg(null);
+                                 }}
+                                 title="Modifică IDNP"
+                              >
+                                 Modifică IDNP
+                              </button>
+                           )}
+                        </div>
                      </>
                   ) : (
                      <>
-                        <h2>Examen</h2>
-                        <p>
-                           Nu ai încă permisiune pentru examen. Apasă “Începe
-                           examenul”.
-                        </p>
+                        <h2>Nu ai permisiunea</h2>
+                        <p>Nu ai permisiunea pentru test în acest moment.</p>
                         <button
                            onClick={async () => {
                               try {
@@ -756,8 +969,92 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                            }}
                            className="practice__back bottom"
                         >
-                           Re-verifică acum
+                           Verifică din nou
                         </button>
+
+                        {showIdnpGate && (
+                           <div className="exam-idnp" style={{ marginTop: 8 }}>
+                              <input
+                                 id="idnp2"
+                                 type="tel"
+                                 inputMode="numeric"
+                                 autoComplete="off"
+                                 placeholder="IDNP-2001234567890"
+                                 className="practice__input"
+                                 value={idnp}
+                                 onChange={(e) =>
+                                    setIdnp(onlyDigits13(e.target.value))
+                                 }
+                                 onWheel={(e) => e.currentTarget.blur()}
+                                 disabled={idnpBusy}
+                                 style={{ minWidth: 260 }}
+                              />
+                              <button
+                                 className="practice__back bottom green"
+                                 onClick={async () => {
+                                    setIdnpMsg(null);
+                                    const clean = onlyDigits13(idnp);
+                                    try {
+                                       setIdnpBusy(true);
+                                       const updated = await updateUser(
+                                          Number(user.id),
+                                          { idnp: clean }
+                                       );
+                                       if (typeof setUser === "function") {
+                                          setUser({
+                                             ...user,
+                                             ...updated,
+                                             idnp: updated?.idnp ?? clean,
+                                          });
+                                       }
+                                       setIdnpMsg({
+                                          type: "success",
+                                          text: "IDNP salvat.",
+                                       });
+                                       if (manualIdnpEditor)
+                                          setManualIdnpEditor(false);
+                                    } catch (e) {
+                                       let t = "Eroare la salvare.";
+                                       try {
+                                          const parsed = JSON.parse(
+                                             String(e?.message || "{}")
+                                          );
+                                          if (parsed?.message)
+                                             t = Array.isArray(parsed.message)
+                                                ? parsed.message.join(" ")
+                                                : parsed.message;
+                                       } catch {}
+                                       setIdnpMsg({ type: "error", text: t });
+                                    } finally {
+                                       setIdnpBusy(false);
+                                    }
+                                 }}
+                                 disabled={idnpBusy || !isIdnp13(idnp)}
+                                 title={
+                                    !isIdnp13(idnp)
+                                       ? "IDNP trebuie să fie 13 cifre"
+                                       : "Salvează"
+                                 }
+                                 style={{ marginLeft: 6 }}
+                              >
+                                 {idnpBusy ? "Se salvează…" : "Salvează"}
+                              </button>
+                              {idnpMsg && (
+                                 <div
+                                    style={{
+                                       marginTop: 6,
+                                       fontSize: 14,
+                                       color:
+                                          idnpMsg.type === "error"
+                                             ? "#c00"
+                                             : "#0a0",
+                                    }}
+                                 >
+                                    {idnpMsg.text}
+                                 </div>
+                              )}
+                           </div>
+                        )}
                      </>
                   )}
                </div>
@@ -775,32 +1072,63 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                      attempts.length > 0 && (
                         <div className="practice__history">
                            {attempts.slice(0, 20).map((a) => {
-                              const status = a.status.toLowerCase();
+                              const statusKey = String(
+                                 a.status || ""
+                              ).toLowerCase();
+                              const statusText = roStatus(statusKey);
+
                               const started = a.startedAt
-                                 ? new Date(a.startedAt).toLocaleString()
+                                 ? fmtRO.format(new Date(a.startedAt))
                                  : "–";
                               const finished = a.finishedAt
-                                 ? new Date(a.finishedAt).toLocaleString()
+                                 ? fmtRO.format(new Date(a.finishedAt))
                                  : null;
-                              const lineLeft = finished
-                                 ? `${started} → ${finished}`
-                                 : `${started}`;
+
+                              const totalQ = Number(
+                                 a.total ?? a.totalQuestions ?? 0
+                              );
+                              const correctQRaw = Number(
+                                 a.correct ?? a.correctCount ?? 0
+                              );
+
+                              // dacă a atins pragul (46), la AFIȘARE considerăm restul corecte
+                              const effectiveCorrect =
+                                 totalQ > 0 && correctQRaw >= PASS_SCORE_DEFAULT
+                                    ? totalQ
+                                    : correctQRaw;
+
+                              // procent: backend (0–1 sau 0–100) ori calcul local (corecte/total)
+                              let pct = null;
+                              if (
+                                 a.scorePct != null &&
+                                 !Number.isNaN(Number(a.scorePct))
+                              ) {
+                                 const p = Number(a.scorePct);
+                                 pct = Math.round(p <= 1 ? p * 100 : p);
+                              } else if (totalQ > 0) {
+                                 pct = Math.round(
+                                    (effectiveCorrect / totalQ) * 100
+                                 );
+                              }
+                              if (pct != null)
+                                 pct = Math.max(0, Math.min(100, pct));
+
                               const scoreText =
-                                 a.scorePct != null
-                                    ? `${Math.round(a.scorePct)}%`
-                                    : a.correct != null && a.total != null
-                                    ? `${a.correct}/${a.total}`
-                                    : a.correct != null && a.wrong != null
-                                    ? `${a.correct} corecte / ${a.wrong} greșite`
+                                 totalQ > 0
+                                    ? `${Math.round( (a.scorePct * 100) / totalQ )}%`
+                                    : pct != null
+                                    ? `Scor: ${pct}%`
                                     : "–";
                               return (
                                  <div
                                     key={a.id}
-                                    className={`practice__history-item practice__history-item--${status}`}
+                                    className={`practice__history-item practice__history-item--${statusKey}`}
                                  >
                                     <div>
-                                       <div>{status.toLowerCase()}</div>
-                                       <div>{lineLeft}</div>
+                                       <div>{statusText}</div>
+                                       <div>
+                                          {started} → <br /> {finished || "—"}
+                                       </div>
                                     </div>
                                     <div>
                                        <div>{scoreText}</div>
@@ -817,14 +1145,19 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
             </>
          )}
 
+         {/* ===== TEST (cu fade out spre rezultat) ===== */}
          {view === "test" && exam && current && (
-            <>
-               {/* Toolbar */}
+            <div
+               style={{
+                  opacity: resultTransitioning ? 0 : 1,
+                  transition: `opacity ${FADE_MS}ms ease`,
+               }}
+            >
                <div className="practice__toolbar">
                   <button
                      className="practice__back"
                      onClick={() => {
-                        setView("result"); // dacă vrei FAIL la “Încheie”, înlocuiește cu: endExamAsFailed()
+                        goToResult(); // 🔄 tranziție
                      }}
                   >
                      Încheie
@@ -886,7 +1219,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                   <div className="practice__timer">{prettyTime(remaining)}</div>
                </div>
 
-               {/* Status board */}
                <div className="practice__statusboard">
                   {statusBoard.map(({ i, status }) => (
                      <button
@@ -906,7 +1238,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                   ))}
                </div>
 
-               {/* Card întrebare */}
                <div className="practice__question">
                   <div className="practice__qtext" ref={qTextRef}>
                      {current.text}
@@ -953,24 +1284,18 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                               ? Number(saved.selected)
                               : null;
 
-                           const correctIdx =
-                              already &&
-                              Object.prototype.hasOwnProperty.call(
-                                 correctMap,
-                                 current.id
-                              )
-                                 ? Number(correctMap[current.id])
-                                 : null;
-
+                           const effectiveCorrectIdx = already
+                              ? getEffectiveCorrectIdx(current.id)
+                              : null;
                            const isCorrectOption =
                               already &&
-                              Number.isInteger(correctIdx) &&
-                              i === correctIdx;
+                              Number.isInteger(effectiveCorrectIdx) &&
+                              i === effectiveCorrectIdx;
                            const isWrongSelected =
                               already &&
                               selectedIdx === i &&
-                              Number.isInteger(correctIdx) &&
-                              selectedIdx !== correctIdx;
+                              Number.isInteger(effectiveCorrectIdx) &&
+                              selectedIdx !== effectiveCorrectIdx;
 
                            const isBusy = answerLoading === current.id;
 
@@ -1026,24 +1351,60 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                      </button>
                   </div>
                </div>
-            </>
+            </div>
          )}
 
+         {/* ===== RESULT (cu inimi crăpate = greșeli + pop-in ușor) ===== */}
          {view === "result" && exam && (
-            <div className="card top">
+            <div
+               className="card top"
+               style={{
+                  transform: resultAnimOn ? "scale(1)" : "scale(0.96)",
+                  opacity: resultAnimOn ? 1 : 0,
+                  transition: "transform 360ms ease, opacity 360ms ease",
+               }}
+            >
                <h2>
-                  {verdict === "PASSED"
-                     ? "Ai promovat ✅"
-                     : "Nu ai promovat ❌"}
+                  {verdict === "PASSED" ? "Ai promovat" : "Nu ai promovat"}
                </h2>
-               <p>
-                  {" "}
-                  Întrebări: <b>{total}</b> • Greșeli:{" "}
-                  <b>
-                     {mistakesMade}/{maxLives}
-                  </b>{" "}
-                  • Timp rămas: <b>{prettyTime(remaining)}</b>
+
+               <div
+                  className="result__hearts"
+                  aria-label={`Greșeli: ${mistakesMade}/${maxLives}`}
+                  style={{
+                     display: "flex",
+                     gap: 8,
+                     alignItems: "center",
+                     margin: "8px 0 4px",
+                  }}
+               >
+                  {Array.from({ length: maxLives }).map((_, i) => {
+                     const cracked = i < mistakesMade; // ✅ atâtea inimi crapate câte greșeli
+                     return (
+                        <ReactSVG
+                           key={i}
+                           src={cracked ? heartCrackIcon : heartFullIcon}
+                           className={
+                              "lives__icon rezult" +
+                              (cracked
+                                 ? " lives__icon--lost"
+                                 : " lives__icon--full")
+                           }
+                           beforeInjection={(svg) => {
+                              svg.setAttribute("aria-hidden", "true");
+                              svg.setAttribute("focusable", "false");
+                           }}
+                        />
+                     );
+                  })}
+               </div>
+
+               <p style={{ marginTop: 6 }}>
+                  Întrebări: <b>{total}</b> • Greșeli făcute:{" "}
+                  <b>{mistakesMade}</b> • Timp rămas:{" "}
+                  <b>{prettyTime(remaining)}</b>
                </p>
+
                <button
                   onClick={() => {
                      setView("waiting");
@@ -1055,6 +1416,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                      setError("");
                   }}
                   className="practice__back bottom"
+                  style={{ marginTop: 8 }}
                >
                   Înapoi la început
                </button>

@@ -1,9 +1,16 @@
 // src/components/SPanel/PracticeStatistics.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { getPracticeStats } from "../../api/examService";
+import {
+   getAllMyPracticeHistory,
+   getTicketQuestions,
+} from "../../api/examService";
 import AlertPills from "../Utils/AlertPills";
 
-/* ===== Config din .env (aceeași logică ca în Practice) ===== */
+/* ===== Config din .env =====
+   - VITE_TICKETS_START (ex: 246)
+   - VITE_TICKETS_COUNT (ex: 14)  ← câte bilete vrei să contezi
+   - opțional: VITE_TICKETS_LIST = "P1,P2,P5" (dacă vrei să alegi exact biletele după P#)
+*/
 const readEnv = (viteKey, craKey) =>
    (typeof import.meta !== "undefined" &&
       import.meta?.env &&
@@ -12,126 +19,40 @@ const readEnv = (viteKey, craKey) =>
    "";
 
 const START_ID = Number(
-   readEnv("VITE_TICKETS_START", "REACT_APP_TICKETS_START") || 130
+   readEnv("VITE_TICKETS_START", "REACT_APP_TICKETS_START") || 246
 );
 const COUNT = Number(
-   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 171 - 130 + 1
+   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 24
 );
-// dacă e alt număr real, schimbă-l din .env
-const QUESTIONS_PER_TICKET = Number(
-   readEnv("VITE_QUESTIONS_PER_TICKET", "REACT_APP_QUESTIONS_PER_TICKET") || 24
-);
+const TICKETS_LIST_RAW = readEnv("VITE_TICKETS_LIST", "REACT_APP_TICKETS_LIST"); // ex: "P1,P3,P7"
 
+/* ——— Helpers ——— */
 const percent = (num, den) =>
    den > 0 ? Math.round((num * 10000) / den) / 100 : 0;
 const ts = (x) => (x ? Date.parse(x) || 0 : 0);
+const DISPLAY_BASE = START_ID - 1;
+const pToId = (pNum) => DISPLAY_BASE + Number(pNum || 0);
 
-/* === Helpers pentru citirea “ultimei tentative” per bilet din localStorage === */
-const attemptResultKey = (tid, aid) => `practice_attempt_result_${tid}_${aid}`;
-const answersKey = (tid, aid) => `practice_answers_${tid}_${aid}`;
+/** extrage P# din "Practice P2" => 2 */
+const parsePIndex = (ticketName) => {
+   const m = String(ticketName || "").match(/P\s*(\d+)/i);
+   return m ? Number(m[1]) : null;
+};
 
-function readLatestLocalByTicket() {
-   const byTicket = new Map();
+/** "Practice P2" -> ticketId (ex: 246 + (2-1)) */
+const idFromTicketName = (ticketName) => {
+   const p = parsePIndex(ticketName);
+   return Number.isFinite(p) ? pToId(p) : null;
+};
 
-   // 1) rezultate finalizate
-   for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      const m = k && k.match(/^practice_attempt_result_(\d+)_(\d+)$/);
-      if (!m) continue;
-      const tid = Number(m[1]);
-      const aid = Number(m[2]);
-      let obj = null;
-      try {
-         obj = JSON.parse(localStorage.getItem(k) || "{}");
-      } catch {}
-      const prev = byTicket.get(tid);
-      const prevAid = prev?.aid ?? -1;
-      if (!obj) continue;
-
-      if (aid > prevAid) {
-         const correct = Number(obj.ok || 0);
-         const wrong = Number(obj.bad || 0);
-         const total =
-            Number(obj.total) ||
-            (typeof obj.ok === "number" &&
-            typeof obj.bad === "number" &&
-            typeof obj.skip === "number"
-               ? obj.ok + obj.bad + obj.skip
-               : QUESTIONS_PER_TICKET);
-         byTicket.set(tid, {
-            source: "result",
-            aid,
-            correct,
-            wrong,
-            total,
-            when: obj.finishedAt || null,
-         });
-      }
-   }
-
-   // 2) tentative în curs (answers), doar dacă nu avem rezultat finalizat
-   const answersByTicket = new Map();
-   for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      const m = k && k.match(/^practice_answers_(\d+)_(\d+)$/);
-      if (!m) continue;
-      const tid = Number(m[1]);
-      const aid = Number(m[2]);
-      if (byTicket.has(tid) && byTicket.get(tid).source === "result") continue;
-
-      let obj = null;
-      try {
-         obj = JSON.parse(localStorage.getItem(k) || "{}");
-      } catch {}
-      if (!obj || typeof obj !== "object") continue;
-
-      let correct = 0,
-         wrong = 0,
-         when = null;
-      for (const a of Object.values(obj)) {
-         if (!a || a.selected == null) continue;
-         if (a.correct === true) correct++;
-         else if (a.correct === false) wrong++;
-         if (a.at && (!when || Date.parse(a.at) > Date.parse(when)))
-            when = a.at;
-      }
-
-      const prev = answersByTicket.get(tid);
-      if (
-         !prev ||
-         aid > prev.aid ||
-         (aid === prev.aid && ts(when) > ts(prev.when))
-      ) {
-         answersByTicket.set(tid, {
-            source: "answers",
-            aid,
-            correct,
-            wrong,
-            total: QUESTIONS_PER_TICKET,
-            when,
-         });
-      }
-   }
-
-   for (const [tid, info] of answersByTicket.entries()) {
-      if (!byTicket.has(tid)) byTicket.set(tid, info);
-   }
-
-   return byTicket;
-}
-
-/* ============ Bară cu animație (Corecte + Greșite cresc, Necompletate scade) ============ */
-/* ============ Bară cu animație + min 32px per segment ============ */
+/* ============ Bară (Corecte / Greșite / Necompletate) ============ */
 function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32 }) {
-   // folosim share-uri în [0..1]
+   const [ok, setOk] = useState(0);
+   const [bad, setBad] = useState(0);
+   const [skip, setSkip] = useState(1);
    const shareOk = Math.max(0, Math.min(1, (pctCorrect ?? 0) / 100));
    const shareBad = Math.max(0, Math.min(1, (pctWrong ?? 0) / 100));
    const shareSkip = Math.max(0, Math.min(1, (pctUnanswered ?? 0) / 100));
-
-   // pentru animație (de la 32px + 0% → către valoarea finală)
-   const [ok, setOk] = useState(0);
-   const [bad, setBad] = useState(0);
-   const [skip, setSkip] = useState(1); // începe plin, apoi scade
 
    useEffect(() => {
       const raf = requestAnimationFrame(() => {
@@ -147,14 +68,12 @@ function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32 }) {
          <div
             className="practice-stats__bar-inner"
             style={{
-               // variabile CSS pt. formula: width = base + (100% - 3*base) * share
                "--base": `${basePx}px`,
                "--basesum": `calc(3 * ${basePx}px)`,
             }}
          >
             <div
                className="practice-stats__bar-seg practice-stats__bar-seg--ok"
-               // calc(32px + (100% - 96px) * share)
                style={{
                   width: `calc(var(--base) + (100% - var(--basesum)) * ${ok})`,
                }}
@@ -182,8 +101,8 @@ function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32 }) {
 export default function PracticeStatistics() {
    const [loading, setLoading] = useState(true);
    const [pillMsgs, setPillMsgs] = useState([]);
-   const [items, setItems] = useState([]);
-   const [source, setSource] = useState("server");
+   const [historyItems, setHistoryItems] = useState([]);
+   const [ticketQuestionCount, setTicketQuestionCount] = useState({}); // { [ticketId]: number }
 
    const pushError = (text) =>
       setPillMsgs((arr) => [
@@ -197,91 +116,179 @@ export default function PracticeStatistics() {
       return () => clearTimeout(t);
    }, [pillMsgs]);
 
+   /* ——— lista de bilete selectate ——— */
+   const selectedTicketIds = useMemo(() => {
+      if (TICKETS_LIST_RAW) {
+         // Acceptă "P1,P3, P7" sau direct "246,247"
+         const parts = String(TICKETS_LIST_RAW)
+            .split(/[,\s]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+         const ids = [];
+         for (const p of parts) {
+            const m = p.match(/^P\s*(\d+)$/i);
+            if (m) ids.push(pToId(Number(m[1])));
+            else if (/^\d+$/.test(p)) ids.push(Number(p));
+         }
+         return Array.from(new Set(ids.filter((x) => Number.isFinite(x))));
+      }
+      // fallback: interval continuu din .env
+      return Array.from({ length: COUNT }, (_, i) => START_ID + i);
+   }, []);
+
+   /* ——— 1) istoric din server ——— */
    useEffect(() => {
       (async () => {
-         setLoading(true);
          try {
-            const { items, source } = await getPracticeStats({
-               pageSize: 200,
+            setLoading(true);
+            const all = await getAllMyPracticeHistory({
+               pageSize: 500,
                maxPages: 10,
             });
-            setItems(items || []);
-            setSource(source || "server");
+            const norm = (all || []).map((it) => ({
+               id: it.id,
+               ticketName: it.ticketName ?? null, // "Practice P2"
+               status: String(it.status || "").toUpperCase(), // IN_PROGRESS / FAILED / FINISHED / PASSED
+               score: Number.isFinite(Number(it.score))
+                  ? Number(it.score)
+                  : null, // corecte
+               totalFromServer: Number.isFinite(Number(it.totalQuestions))
+                  ? Number(it.totalQuestions)
+                  : null,
+               startedAt: it.startedAt ?? it.createdAt ?? null,
+               finishedAt: it.completedAt ?? it.finishedAt ?? null,
+            }));
+            setHistoryItems(norm);
          } catch (e) {
-            pushError(e?.message || "Nu am putut încărca statisticile.");
+            pushError(e?.message || "Nu am putut încărca istoricul.");
          } finally {
             setLoading(false);
          }
       })();
    }, []);
 
-   /* ========= REZUMAT GLOBAL (ultima tentativă per bilet) ========= */
-   const latestByTicket = useMemo(() => readLatestLocalByTicket(), [items]);
-   const global = useMemo(() => {
-      const totalUniverse = COUNT * QUESTIONS_PER_TICKET;
+   /* ——— 2) număr real de întrebări pentru fiecare bilet selectat ——— */
+   useEffect(() => {
+      let alive = true;
+      (async () => {
+         try {
+            const entries = await Promise.all(
+               selectedTicketIds.map(async (tid) => {
+                  try {
+                     const q = await getTicketQuestions(tid);
+                     // suportă {questions: []} sau [] direct
+                     const count = Array.isArray(q)
+                        ? q.length
+                        : Array.isArray(q?.questions)
+                        ? q.questions.length
+                        : 0;
+                     return [tid, count];
+                  } catch {
+                     return [tid, 0];
+                  }
+               })
+            );
+            if (!alive) return;
+            const map = {};
+            for (const [tid, cnt] of entries) map[tid] = cnt;
+            setTicketQuestionCount(map);
+         } catch (e) {
+            pushError(
+               "Nu am putut încărca numărul de întrebări pentru unele bilete."
+            );
+         }
+      })();
+      return () => {
+         alive = false;
+      };
+   }, [selectedTicketIds]);
+
+   /* ——— 3) ultima încercare FINALIZATĂ per bilet (după ticketName -> P# -> ticketId) ——— */
+   const lastFinishedByTicketId = useMemo(() => {
+      const map = new Map(); // ticketId -> attempt
+      for (const it of historyItems) {
+         if (it.status === "IN_PROGRESS") continue; // ignorăm cele în curs
+         const tid = idFromTicketName(it.ticketName);
+         if (!tid) continue;
+         if (!selectedTicketIds.includes(tid)) continue; // doar biletele alese
+         if (it.score == null) continue;
+         const prev = map.get(tid);
+         const curTs = ts(it.finishedAt || it.startedAt);
+         const prevTs = prev ? ts(prev.finishedAt || prev.startedAt) : -1;
+         if (!prev || curTs > prevTs) map.set(tid, it);
+      }
+      return map;
+   }, [historyItems, selectedTicketIds]);
+
+   /* ——— 4) univers = suma întrebărilor reale din biletele alese ——— */
+   const universeTotal = useMemo(() => {
+      return selectedTicketIds.reduce(
+         (s, tid) => s + (ticketQuestionCount[tid] || 0),
+         0
+      );
+   }, [selectedTicketIds, ticketQuestionCount]);
+
+   /* ——— 5) agregare: corecte / greșite / necompletate ———
+        - Pentru fiecare bilet selectat:
+            dacă are o încercare finalizată:  corecte += scor; greșite += (întrebări_bilet - scor)
+            altfel:                          necompletate += întrebări_bilet
+  */
+   const aggregates = useMemo(() => {
       let correct = 0;
       let wrong = 0;
+      let unanswered = 0;
 
-      for (const info of latestByTicket.values()) {
-         correct += Number(info.correct || 0);
-         wrong += Number(info.wrong || 0);
+      for (const tid of selectedTicketIds) {
+         const totalQ = ticketQuestionCount[tid] || 0;
+         const att = lastFinishedByTicketId.get(tid);
+         if (att) {
+            const c = Math.max(0, Math.min(totalQ, Number(att.score || 0)));
+            correct += c;
+            wrong += Math.max(0, totalQ - c);
+         } else {
+            unanswered += totalQ;
+         }
       }
-      const unanswered = Math.max(0, totalUniverse - correct - wrong);
 
       return {
-         total: totalUniverse,
+         selectedTicketsCount: selectedTicketIds.length,
+         totalUniverse: universeTotal,
          correct,
          wrong,
          unanswered,
-         accuracy: percent(correct, correct + wrong),
-         pctCorrect: percent(correct, totalUniverse),
-         pctWrong: percent(wrong, totalUniverse),
-         pctUnanswered: percent(unanswered, totalUniverse),
+         pctCorrect: percent(correct, universeTotal),
+         pctWrong: percent(wrong, universeTotal),
+         pctUnanswered: percent(unanswered, universeTotal),
       };
-   }, [latestByTicket]);
+   }, [
+      selectedTicketIds,
+      lastFinishedByTicketId,
+      ticketQuestionCount,
+      universeTotal,
+   ]);
 
-   // ===== Ultima stare per bilet (din istoricul server/local) =====
-   const lastByTicketFromHistory = useMemo(() => {
-      const map = new Map();
-      for (const it of items) {
-         const key = it.ticketId ?? it.ticketName ?? it.id;
-         const prev = map.get(key);
-         const t = ts(it.finishedAt || it.startedAt);
-         const pt = prev ? ts(prev.finishedAt || prev.startedAt) : -1;
-         if (!prev || t > pt) map.set(key, it);
-      }
-      return map;
-   }, [items]);
-
-   const badgeFor = (it) => {
-      if (!it) return { label: "Neînceput", cls: "none" };
-      if (it.status === "IN_PROGRESS")
-         return { label: "În progres", cls: "prog" };
-      if (it.correct === it.total && it.total > 0)
-         return { label: "Perfect", cls: "ok" };
-      if (it.correct === 0 && it.wrong > 0)
-         return { label: "Greșit", cls: "bad" };
-      if (it.wrong > 0) return { label: "Parțial", cls: "warn" };
-      if (it.total > 0 && it.correct > 0 && it.wrong === 0)
-         return { label: "Corect", cls: "ok" };
-      return { label: "Neînceput", cls: "none" };
-   };
-
-   // ===== Tentative recente =====
+   /* ——— recent (informativ) ——— */
    const recent = useMemo(() => {
-      const arr = [...items].sort(
-         (a, b) =>
-            ts(b.finishedAt || b.startedAt) - ts(a.finishedAt || a.startedAt)
-      );
+      const arr = [...(historyItems || [])]
+         .filter((a) => {
+            const tid = idFromTicketName(a.ticketName);
+            return tid && selectedTicketIds.includes(tid);
+         })
+         .sort(
+            (a, b) =>
+               ts(b.finishedAt || b.startedAt) - ts(a.finishedAt || a.startedAt)
+         );
       return arr.slice(0, 10);
-   }, [items]);
+   }, [historyItems, selectedTicketIds]);
 
    return (
       <div className="practice-stats">
          <AlertPills messages={pillMsgs} onDismiss={dismissLastPill} />
 
          <div className="practice-stats__head">
-            <h2>Statistici Practică</h2>
+            <h2>
+               Statistici Practică 
+            </h2>
          </div>
 
          {loading && <div className="practice-stats__loading">Se încarcă…</div>}
@@ -293,31 +300,31 @@ export default function PracticeStatistics() {
                   <div className="practice-stats__table">
                      <div className="practice-stats__col">
                         <div className="practice-stats__item">
-                           <p>Total întrebări</p>
-                           <span>{global.total}</span>
+                           <p>Total întrebări </p>
+                           <span>{aggregates.totalUniverse}</span>
                         </div>
                         <div className="practice-stats__item">
-                           <p>Răspunsuri corecte</p>
-                           <span>{global.correct}</span>
+                           <p>Răspunsuri corecte (sumă scoruri)</p>
+                           <span>{aggregates.correct}</span>
                         </div>
                         <div className="practice-stats__item">
                            <p>Răspunsuri greșite</p>
-                           <span>{global.wrong}</span>
+                           <span>{aggregates.wrong}</span>
                         </div>
                         <div className="practice-stats__item">
-                           <p>Necompletate</p>
-                           <span>{global.unanswered}</span>
+                           <p>Întrebări necompletate</p>
+                           <span>{aggregates.unanswered}</span>
                         </div>
                      </div>
                   </div>
                </div>
 
-               {/* ——— BARĂ (procente) ——— */}
+               {/* ——— BARĂ PROCENTE ——— */}
                <div className="practice-stats__section">
                   <SegmentedBar
-                     pctCorrect={global.pctCorrect}
-                     pctWrong={global.pctWrong}
-                     pctUnanswered={global.pctUnanswered}
+                     pctCorrect={aggregates.pctCorrect}
+                     pctWrong={aggregates.pctWrong}
+                     pctUnanswered={aggregates.pctUnanswered}
                   />
                </div>
             </>

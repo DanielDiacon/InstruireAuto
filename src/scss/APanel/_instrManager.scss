@@ -7,29 +7,29 @@
    position: relative;
    overflow: hidden;
    padding: 12px;
-   &::after {
-      content: "";
-      position: absolute;
-      bottom: -180%;
-      left: 50%; // ← în loc de right
-      transform: translateX(-50%);
-      width: 300%;
-      height: 300%;
-      background: radial-gradient(
-         circle,
-         transparent,
-         transparent,
-         rgba(243, 252, 121, 0.2),
-         transparent,
-         transparent,
-         transparent,
-         transparent
-      );
-
-      filter: blur(10px);
-      pointer-events: none;
-      z-index: 0;
-   }
+//   &::after {
+//      content: "";
+//      position: absolute;
+//      bottom: -180%;
+//      left: 50%; // ← în loc de right
+//      transform: translateX(-50%);
+//      width: 300%;
+//      height: 300%;
+//      background: radial-gradient(
+//         circle,
+//         transparent,
+//         transparent,
+//         rgba(243, 252, 121, 0.2),
+//         transparent,
+//         transparent,
+//         transparent,
+//         transparent
+//      );
+//
+//      filter: blur(10px);
+//      pointer-events: none;
+//      z-index: 0;
+//   }
    &__info {
       padding: 12px;
    }

@@ -33,6 +33,7 @@ export default function PreloadAppData() {
                dispatch(fetchInstructorsGroups()),
                // ia toate rezervările (ajustează param. după API-ul tău)
                dispatch(fetchAllReservations({ scope: "all", pageSize: 5000 })),
+               dispatch(fetchAllReservations({ scope: "all", pageSize: 5000 })),
             ]);
             // console.info("[Bootstrap] Date globale încărcate.");
          } catch (e) {

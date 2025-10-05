@@ -1,4 +1,4 @@
-// src/components/Student/SAddProg.jsx
+// src/components/Popups/SAddProg.jsx
 import React, { useState, useContext, useEffect, useMemo } from "react";
 import DatePicker, { registerLocale } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -9,7 +9,6 @@ import trashIcon from "../../assets/svg/trash.svg";
 import { ReactSVG } from "react-svg";
 import {
    createReservations,
-   getUserReservations,
    getBusyForInstructor,
    getBusyForInstructorsGroup,
 } from "../../api/reservationsService";
@@ -21,7 +20,7 @@ import {
 } from "../../store/reservationsSlice";
 import AlertPills from "../Utils/AlertPills";
 
-/* ===== Locale RO ca în componenta A ===== */
+/* ===== Locale RO ===== */
 registerLocale("ro", ro);
 
 /* ————— Utilitare ————— */
@@ -76,7 +75,7 @@ const nextNDays = (n, fromDate = new Date()) => {
    return out;
 };
 
-/** Construiește ISO (UTC "Z") din data LOCALĂ + HH:mm (ex: 07:00 ora RO) fără să folosim Date.UTC */
+/** Construiește ISO (UTC "Z") din data LOCALĂ + HH:mm (ex: 07:00 ora RO) */
 const toUtcIsoFromLocal = (localDateObj, timeStrHHMM) => {
    const [hh, mm] = timeStrHHMM.split(":").map(Number);
    const d = new Date(localDateObj); // 00:00 local
@@ -116,9 +115,6 @@ const getEndFromReservation = (r) => {
    return end.toISOString();
 };
 
-const overlaps = (aStart, aEnd, bStart, bEnd) =>
-   new Date(aStart) < new Date(bEnd) && new Date(aEnd) > new Date(bStart);
-
 /** grilă completă (ISO corect), pornind de mâine — azi este blocat */
 function buildFullGridISO(daysWindow = 120) {
    const startFrom = addDays(new Date(), 1);
@@ -134,12 +130,7 @@ function buildFullGridISO(daysWindow = 120) {
 }
 const uniq = (arr) => Array.from(new Set(arr));
 
-/* ===== Praguri „ancoră dominantă” ===== */
-const MIN_FOR_LOCK = 15;
-const DOMINANCE = 0.8;
-const SMALL_MANAGER_MAX = 2;
-
-/* ===== Helpers ancoră dominantă ===== */
+/* ===== Helpers „ancoră dominantă” (după ultimele 15 rezervări) ===== */
 const keyForReservation = (r) => {
    const gid = r?.instructorsGroupId ?? r?.groupId ?? r?.group?.id ?? null;
    const iid =
@@ -154,54 +145,93 @@ const keyForReservation = (r) => {
 };
 
 function findDominantAnchor(resList = []) {
-   if (!resList.length) return null;
+   // 1) sortăm desc după start
+   const withStart = (resList || [])
+      .map((r) => ({ r, st: getStartFromReservation(r) }))
+      .filter((x) => !!x.st)
+      .map((x) => ({ ...x, iso: new Date(x.st).toISOString() }))
+      .sort((a, b) => (a.iso < b.iso ? 1 : a.iso > b.iso ? -1 : 0));
 
-   const counts = new Map(); // `${type}:${id}` -> { type, id, count }
-   for (const r of resList) {
-      const { type, id } = keyForReservation(r);
-      if (!type || !id) continue;
-      const k = `${type}:${id}`;
-      const cur = counts.get(k) || { type, id, count: 0 };
+   // 2) ultimele 15
+   const recent = withStart.slice(0, 15);
+   const n = recent.length;
+   if (n === 0) return null;
+
+   // 3) grupăm după entitate (group/instructor)
+   const counts = new Map(); // key -> { type, id, count, sample }
+   const keyFor = (r) => {
+      const gid = r?.instructorsGroupId ?? r?.groupId ?? r?.group?.id ?? null;
+      const iid =
+         r?.instructorId ??
+         r?.teacherId ??
+         r?.instructor?.id ??
+         r?.teacher?.id ??
+         null;
+      if (gid != null) return { type: "group", id: String(gid) };
+      if (iid != null) return { type: "instructor", id: String(iid) };
+      return { type: null, id: null };
+   };
+
+   for (const { r } of recent) {
+      const k = keyFor(r);
+      if (!k.type || !k.id) continue;
+      const key = `${k.type}:${k.id}`;
+      const cur = counts.get(key) || { ...k, count: 0, sample: r };
       cur.count += 1;
-      counts.set(k, cur);
+      if (!counts.has(key)) cur.sample = r; // cel mai recent e deja în față
+      counts.set(key, cur);
    }
 
-   const total = resList.length;
-   if (total <= SMALL_MANAGER_MAX) return null;
+   if (counts.size === 0) return null;
 
+   // 4) majoritate (>50%) sau fallback: cea mai recentă
    let best = null;
    for (const v of counts.values()) if (!best || v.count > best.count) best = v;
-   if (!best) return null;
+   const majority = best.count > Math.floor(n / 2);
 
-   const dominance = best.count / total;
-   if (total >= MIN_FOR_LOCK && dominance >= DOMINANCE) {
-      const same = resList.find((r) => {
-         const { type, id } = keyForReservation(r);
-         return type === best.type && String(id) === String(best.id);
-      });
-      const sectorRaw = same?.sector ?? "Botanica";
-      const sector =
-         String(sectorRaw).toLowerCase() === "ciocana" ? "Ciocana" : "Botanica";
-      const gearboxRaw = same?.gearbox ?? "Manual";
-      const gearbox = String(gearboxRaw).toLowerCase().includes("auto")
-         ? "automat"
-         : "manual";
-
-      return {
-         tip: best.type === "group" ? "group" : "single",
-         entityId: best.id,
-         sector,
-         gearbox,
-      };
+   let chosen = best;
+   if (!majority) {
+      const first = recent[0]?.r;
+      const fk = first ? keyFor(first) : null;
+      if (fk?.type && fk?.id) {
+         const key = `${fk.type}:${fk.id}`;
+         chosen = counts.get(key) || { ...fk, count: 1, sample: first };
+      }
    }
-   return null;
+
+   // 5) sector/cutie din sample
+   const same = chosen.sample;
+   const sectorRaw = same?.sector ?? "Botanica";
+   const sector =
+      String(sectorRaw).toLowerCase() === "ciocana" ? "Ciocana" : "Botanica";
+   const gearboxRaw = same?.gearbox ?? "Manual";
+   const gearbox = String(gearboxRaw).toLowerCase().includes("auto")
+      ? "automat"
+      : "manual";
+
+   return {
+      tip: chosen.type === "group" ? "group" : "single",
+      entityId: chosen.id,
+      sector,
+      gearbox,
+   };
 }
 
-/** busy pentru o entitate: întoarce atât setul de start-uri, cât și intervalele */
-/** busy pentru o entitate: întoarce set start-uri, intervale și capacitatea (total_instructors pt. grup) */
+/**
+ * Busy pentru o entitate: întoarce
+ * - busySet: set de start-uri ISO
+ * - startCount: Map(isoStart -> număr programări EXACT la acea oră)
+ * - busyIntervals: păstrat pentru compatibilitate
+ * - capacity: 1 pt instructor; la group luăm total_instructors (fallback 1)
+ */
 async function fetchBusyForEntity(entityType, entityId) {
    if (!entityType || !entityId)
-      return { busySet: new Set(), busyIntervals: [], capacity: 1 };
+      return {
+         busySet: new Set(),
+         busyIntervals: [],
+         startCount: new Map(),
+         capacity: 1,
+      };
 
    const payload =
       entityType === "group"
@@ -216,18 +246,42 @@ async function fetchBusyForEntity(entityType, entityId) {
 
    const starts = [];
    const intervals = [];
+   const startCount = new Map();
    for (const r of src) {
       const st = getStartFromReservation(r);
       const en = getEndFromReservation(r);
-      if (st) starts.push(new Date(st).toISOString());
+      if (st) {
+         const iso = new Date(st).toISOString();
+         starts.push(iso);
+         startCount.set(iso, (startCount.get(iso) || 0) + 1);
+      }
       if (st && en) intervals.push([new Date(st), new Date(en)]);
    }
 
-   // capacitate: 1 pentru instructor; pentru group luăm total_instructors (fallback 1)
    const capacity =
-      entityType === "group" ? Number(payload?.total_instructors) || 1 : 1;
+      entityType === "group"
+         ? Number(
+              payload?.total_instructors ??
+                 payload?.total_instrucors ?? // fallback typo
+                 payload?.totalInstructors ??
+                 payload?.instructorsCount ??
+                 payload?.capacity ??
+                 1
+           ) || 1
+         : 1;
 
-   return { busySet: new Set(starts), busyIntervals: intervals, capacity };
+   return {
+      busySet: new Set(starts),
+      busyIntervals: intervals,
+      startCount,
+      capacity,
+   };
+}
+
+// verificare strictă „ACEEAȘI ORĂ” (nu suprapuneri pe 90min)
+function isStartFull(isoStart, startCountMap, capacity = 1) {
+   const used = startCountMap?.get(isoStart) || 0;
+   return used >= capacity;
 }
 
 /* ————— Componentă ————— */
@@ -252,6 +306,13 @@ export default function SAddProg({ onClose }) {
    const WINDOW_DAYS = 120;
    const [anchor, setAnchor] = useState(null); // { tip, entityId, sector, gearbox }
    const [hardLock30, setHardLock30] = useState(false);
+
+   /* AUTOSWITCH: Ciocana => single (și rămâne blocat pe single) */
+   useEffect(() => {
+      if (sector === "Ciocana" && tip !== "single") {
+         setTip("single");
+      }
+   }, [sector, tip]);
 
    /* Etapa 2 */
    const [stage, setStage] = useState("setup"); // setup | pick
@@ -301,8 +362,8 @@ export default function SAddProg({ onClose }) {
       for (const iso of freeSlotsForAssigned) {
          const d = new Date(iso);
          if (localDateStr(d) === dayLocal) {
-            const hh = String(d.getHours()).padStart(2, "0"); // LOCAL, nu UTC
-            const mm = String(d.getMinutes()).padStart(2, "0"); // LOCAL, nu UTC
+            const hh = String(d.getHours()).padStart(2, "0"); // LOCAL
+            const mm = String(d.getMinutes()).padStart(2, "0");
             set.add(`${hh}:${mm}`);
          }
       }
@@ -315,8 +376,8 @@ export default function SAddProg({ onClose }) {
       for (const iso of selectedDates) {
          const d = new Date(iso);
          if (localDateStr(d) === dayLocal) {
-            const hh = String(d.getHours()).padStart(2, "0"); // LOCAL
-            const mm = String(d.getMinutes()).padStart(2, "0"); // LOCAL
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mm = String(d.getMinutes()).padStart(2, "0");
             set.add(`${hh}:${mm}`);
          }
       }
@@ -360,22 +421,26 @@ export default function SAddProg({ onClose }) {
                }
 
                const fullGrid = buildFullGridISO(WINDOW_DAYS);
-               const { busyIntervals, capacity } = await fetchBusyForEntity(
+
+               // Regula 1-per-zi: determinăm zilele deja rezervate de utilizator
+               const userBookedDaySet = new Set();
+               for (const r of existing || []) {
+                  const st = getStartFromReservation(r);
+                  if (st) userBookedDaySet.add(localDateStr(new Date(st)));
+               }
+               for (const iso of selectedDates) {
+                  userBookedDaySet.add(localDateStr(new Date(iso)));
+               }
+
+               const { startCount, capacity } = await fetchBusyForEntity(
                   dom.tip,
                   dom.entityId
                );
 
                const free = fullGrid.filter((iso) => {
-                  const start = new Date(iso);
-                  const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
-                  let overlaps = 0;
-                  for (const [s, e] of busyIntervals) {
-                     if (start < e && end > s) {
-                        overlaps++;
-                        if (overlaps >= capacity) return false; // slot plin
-                     }
-                  }
-                  return true; // încă sub capacitate
+                  const day = localDateStr(new Date(iso));
+                  if (userBookedDaySet.has(day)) return false; // 1-per-zi
+                  return !isStartFull(iso, startCount, capacity);
                });
 
                setFreeSlotsForAssigned(free);
@@ -406,7 +471,7 @@ export default function SAddProg({ onClose }) {
       return () => {
          alive = false;
       };
-   }, [user?.id, dispatch]);
+   }, [user?.id, dispatch, selectedDates]);
 
    // reset UI dacă nu avem ancoră
    useEffect(() => {
@@ -427,15 +492,27 @@ export default function SAddProg({ onClose }) {
    }, [showList]);
 
    const isLocked = !!anchor;
+
+   /* === Câte trebuie trimise ACUM, exact === */
+   const remainingTo30 = useMemo(
+      () => Math.max(0, 30 - lectiiExistente),
+      [lectiiExistente]
+   );
+   const requiredSubmitCount = useMemo(
+      () => Math.min(numarLectii, remainingTo30),
+      [numarLectii, remainingTo30]
+   );
+
    const reachedMax30 = useMemo(
       () => lectiiExistente + selectedDates.length >= 30,
       [lectiiExistente, selectedDates.length]
    );
    const reachedPackLimit = useMemo(
-      () => numarLectii === 15 && selectedDates.length >= 15,
-      [numarLectii, selectedDates.length]
+      () => selectedDates.length >= requiredSubmitCount,
+      [requiredSubmitCount, selectedDates.length]
    );
 
+   // zile deja ocupate (UI: dezactivează ziua)
    const bookedDaySet = useMemo(() => {
       const set = new Set();
       for (const iso of selectedDates) set.add(localDateStr(new Date(iso)));
@@ -451,7 +528,7 @@ export default function SAddProg({ onClose }) {
       await continuaEtapa2();
    };
 
-   /** încarcă grila liberă pentru entitatea aleasă/ancoră (cu SUPRAPUNERE 90min) */
+   /** încarcă grila liberă pentru entitatea aleasă/ancoră folosind REGULA "ACEEAȘI ORĂ" + CAPACITATE + O-zi-pe-zi */
    const continuaEtapa2 = async () => {
       if (hardLock30 || lectiiExistente >= 30) {
          notify("warn", "Ai deja 30 de lecții programate.");
@@ -461,18 +538,26 @@ export default function SAddProg({ onClose }) {
       try {
          const fullGrid = buildFullGridISO(WINDOW_DAYS);
 
-         // 1) avem ancoră → doar busy + filtrare pe suprapunere
+         // Zile deja ocupate de utilizator (din server + selecțiile curente)
+         const userBookedDaySet = new Set();
+         for (const r of rezervariExistente || []) {
+            const st = getStartFromReservation(r);
+            if (st) userBookedDaySet.add(localDateStr(new Date(st)));
+         }
+         for (const iso of selectedDates) {
+            userBookedDaySet.add(localDateStr(new Date(iso)));
+         }
+
+         // 1) avem ancoră → busy + filtrare
          if (anchor?.tip && anchor?.entityId) {
-            const { busyIntervals } = await fetchBusyForEntity(
+            const { startCount, capacity } = await fetchBusyForEntity(
                anchor.tip,
                anchor.entityId
             );
             const free = fullGrid.filter((iso) => {
-               const start = new Date(iso);
-               const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
-               for (const [s, e] of busyIntervals)
-                  if (start < e && end > s) return false;
-               return true;
+               const day = localDateStr(new Date(iso));
+               if (userBookedDaySet.has(day)) return false; // 1-per-zi
+               return !isStartFull(iso, startCount, capacity); // capacitate
             });
             if (!free.length) {
                notify("warn", "Nu există sloturi libere pentru entitatea ta.");
@@ -491,7 +576,7 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         // 2) altfel: agregare disponibilitate din backend și scorare
+         // 2) fără ancoră: agregare + scorare
          const query = {
             days: asStr(numarLectii),
             gearbox: asStrLower(cutie),
@@ -499,8 +584,8 @@ export default function SAddProg({ onClose }) {
             type: asStrLower(tip),
          };
          const res = await dispatch(fetchBusy(query)).unwrap();
-         //console.log("busy info taken:", res);
-         // normalizează: listă de { entityType, entityId, busyIntervals[] }
+
+         // normalizează: listă de { entityType, entityId, startCount, capacity }
          const normalizeBusy = (raw) => {
             const out = [];
             const pushVariant = (
@@ -509,16 +594,18 @@ export default function SAddProg({ onClose }) {
                reservations,
                total_instructors
             ) => {
-               const intervals = [];
+               const startCount = new Map();
                for (const r of reservations || []) {
                   const st = getStartFromReservation(r);
-                  const en = getEndFromReservation(r);
-                  if (st && en) intervals.push([new Date(st), new Date(en)]);
+                  if (st) {
+                     const iso = new Date(st).toISOString();
+                     startCount.set(iso, (startCount.get(iso) || 0) + 1);
+                  }
                }
                out.push({
                   entityType,
                   entityId: entityId != null ? String(entityId) : null,
-                  intervals,
+                  startCount,
                   capacity:
                      entityType === "group"
                         ? Number(total_instructors) || 1
@@ -534,7 +621,11 @@ export default function SAddProg({ onClose }) {
                            "group",
                            item.groupId,
                            item.reservations,
-                           item.total_instructors
+                           item.total_instructors ??
+                              item.total_instrucors ??
+                              item.totalInstructors ??
+                              item.instructorsCount ??
+                              item.capacity
                         );
                      else if (item.instructorId != null)
                         pushVariant(
@@ -553,7 +644,16 @@ export default function SAddProg({ onClose }) {
                      ? "instructor"
                      : null;
                const id = raw.groupId ?? raw.instructorId ?? null;
-               pushVariant(t, id, raw.reservations, raw.total_instructors);
+               pushVariant(
+                  t,
+                  id,
+                  raw.reservations,
+                  raw.total_instructors ??
+                     raw.total_instrucors ??
+                     raw.totalInstructors ??
+                     raw.instructorsCount ??
+                     raw.capacity
+               );
             }
             return out;
          };
@@ -571,16 +671,9 @@ export default function SAddProg({ onClose }) {
          const scored = list
             .map((v) => {
                const free = fullGrid.filter((iso) => {
-                  const start = new Date(iso);
-                  const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
-                  let overlaps = 0;
-                  for (const [s, e] of v.intervals) {
-                     if (start < e && end > s) {
-                        overlaps++;
-                        if (overlaps >= (v.capacity || 1)) return false;
-                     }
-                  }
-                  return true;
+                  const day = localDateStr(new Date(iso));
+                  if (userBookedDaySet.has(day)) return false; // 1-per-zi
+                  return !isStartFull(iso, v.startCount, v.capacity);
                });
                return { ...v, free };
             })
@@ -627,6 +720,13 @@ export default function SAddProg({ onClose }) {
          notify("warn", "Nu poți programa pentru AZI.", { force: true });
          return;
       }
+
+      // Regula 1-per-zi: dacă ai deja o programare în acea zi, ziua e inactivă
+      if (bookedDaySet.has(dayLocalStr)) {
+         notify("warn", "Ai deja o programare în această zi.", { force: true });
+         return;
+      }
+
       if (reachedMax30) {
          notify("warn", "Ai atins limita maximă de 30 lecții!", {
             force: true,
@@ -634,9 +734,11 @@ export default function SAddProg({ onClose }) {
          return;
       }
       if (reachedPackLimit) {
-         notify("warn", `Ai atins limita pachetului (${numarLectii}).`, {
-            force: true,
-         });
+         notify(
+            "warn",
+            `Ai atins limita pachetului curent (${requiredSubmitCount}).`,
+            { force: true }
+         );
          return;
       }
 
@@ -666,6 +768,47 @@ export default function SAddProg({ onClose }) {
       setOraSelectata(null);
    };
 
+   /** preflight: EXACT ACEEAȘI ORĂ + CAPACITATE + o singură lecție/zi */
+   const preflightConflicts = async (datesISO) => {
+      const entityType =
+         anchor?.tip || (assignedGroupId ? "group" : "instructor");
+      const entityId =
+         anchor?.entityId || assignedGroupId || assignedInstructorId;
+      if (!entityType || !entityId) return { free: datesISO, conflicts: [] };
+
+      const { startCount, capacity } = await fetchBusyForEntity(
+         entityType,
+         entityId
+      );
+      const cap = capacity || 1;
+
+      // Zile deja rezervate de utilizator (server)
+      const userBookedDaySet = new Set();
+      for (const r of rezervariExistente || []) {
+         const st = getStartFromReservation(r);
+         if (st) userBookedDaySet.add(localDateStr(new Date(st)));
+      }
+      // În același batch, per zi acceptăm o singură intrare
+      const daysInBatch = new Set();
+
+      const conflicts = [];
+      const free = [];
+      for (const iso of datesISO) {
+         const day = localDateStr(new Date(iso));
+         if (userBookedDaySet.has(day) || daysInBatch.has(day)) {
+            conflicts.push(iso);
+            continue;
+         }
+         if (isStartFull(iso, startCount, cap)) {
+            conflicts.push(iso);
+         } else {
+            free.push(iso);
+            daysInBatch.add(day);
+         }
+      }
+      return { free, conflicts };
+   };
+
    const stergeProgramare = (iso) => {
       setSelectedDates((prev) => prev.filter((p) => p !== iso));
       setRejectedDates((prev) => prev.filter((p) => p !== iso));
@@ -674,48 +817,6 @@ export default function SAddProg({ onClose }) {
          force: true,
       });
    };
-
-   /** preflight: verifică SUPRAPUNERE (nu doar egalitate) cu ocupațiile curente */
-   const preflightConflicts = async (datesISO) => {
-      const entityType =
-         anchor?.tip || (assignedGroupId ? "group" : "instructor");
-      const entityId =
-         anchor?.entityId || assignedGroupId || assignedInstructorId;
-      if (!entityType || !entityId) return { free: datesISO, conflicts: [] };
-
-      const { busyIntervals, capacity } = await fetchBusyForEntity(
-         entityType,
-         entityId
-      );
-      const cap = capacity || 1;
-
-      const conflicts = [];
-      const free = [];
-      for (const iso of datesISO) {
-         const start = new Date(iso);
-         const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
-         let overlaps = 0;
-         for (const [s, e] of busyIntervals) {
-            if (start < e && end > s) {
-               overlaps++;
-               if (overlaps >= cap) break;
-            }
-         }
-         (overlaps >= cap ? conflicts : free).push(iso);
-      }
-      return { free, conflicts };
-   };
-
-   /* ===================== „prima oară” ===================== */
-   const mustReachMin15 = useMemo(
-      () => lectiiExistente < 15,
-      [lectiiExistente]
-   );
-   const requiredSubmitCount = useMemo(
-      () => (mustReachMin15 ? 15 : 1),
-      [mustReachMin15]
-   );
-   /* ======================================================== */
 
    const trimiteProgramari = async () => {
       setLoading(true);
@@ -741,23 +842,17 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         if (mustReachMin15 && selectedDates.length < 15) {
+         // EXACT câte trebuie acum
+         const remain = Math.max(0, 30 - existingCount);
+         const mustSubmitExactly = Math.min(numarLectii, remain);
+
+         if (selectedDates.length !== mustSubmitExactly) {
             notify(
                "warn",
-               `Trebuie să selectezi minim 15 lecții (mai ai nevoie de ${
-                  15 - selectedDates.length
-               }).`,
+               `Trebuie să selectezi exact ${mustSubmitExactly} lecții înainte de trimitere.`,
                { force: true }
             );
             setShowList(true);
-            return;
-         }
-
-         const poateAdauga = 30 - existingCount;
-         if (selectedDates.length > poateAdauga) {
-            notify("warn", `Poți adăuga cel mult ${poateAdauga} lecții acum.`, {
-               force: true,
-            });
             return;
          }
 
@@ -777,7 +872,7 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         // ==== PRE-FLIGHT cu SUPRAPUNERE ====
+         // ==== PRE-FLIGHT exact-oră + capacitate + 1-per-zi ====
          const { free: preflightFree, conflicts: preflightTaken } =
             await preflightConflicts(selectedDates);
 
@@ -788,25 +883,23 @@ export default function SAddProg({ onClose }) {
             setShowList(true);
             notify(
                "warn",
-               `Am scos ${preflightTaken.length} sloturi deja ocupate.`,
+               `Am scos ${preflightTaken.length} sloturi nevalide.`,
                {
                   force: true,
                }
             );
          }
 
-         if (mustReachMin15 && preflightFree.length < 15) {
+         // trebuie să rămână EXACT câte trebuie
+         if (preflightFree.length !== mustSubmitExactly) {
+            if (preflightFree.length === 0) return;
             notify(
                "error",
-               `Au rămas doar ${preflightFree.length}/15 libere. Adaugă încă ${
-                  15 - preflightFree.length
-               } și reîncearcă.`,
+               `După verificare au rămas ${preflightFree.length}/${mustSubmitExactly}. Ajustează selecția și reîncearcă.`,
                { force: true }
             );
             return;
          }
-
-         if (preflightFree.length === 0) return;
 
          const normalizedGearbox =
             (cutie || "").toLowerCase() === "automat" ? "Automat" : "Manual";
@@ -828,6 +921,9 @@ export default function SAddProg({ onClose }) {
          try {
             notify("info", "Trimit programările...", { force: true });
             await createReservations(payload);
+            try {
+               await dispatch(fetchUserReservations(user.id)).unwrap();
+            } catch {}
             notify("success", `Trimis ${preflightFree.length} programări.`, {
                force: true,
             });
@@ -835,22 +931,17 @@ export default function SAddProg({ onClose }) {
             else setShowList(true);
             setSelectedDates([]);
          } catch (e) {
-            // concurență: revalidăm acum pe SUPRAPUNERE
-            const { busyIntervals: busy2 } = await fetchBusyForEntity(
-               type,
-               chosenId
-            );
-            const nowConflicts = preflightFree.filter((iso) => {
-               const start = new Date(iso);
-               const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
-               for (const [s, e] of busy2)
-                  if (start < e && end > s) return true;
-               return false;
-            });
+            // concurență: revalidăm acum pe REGULA exact-oră + capacitate
+            const { startCount: startCount2, capacity: cap2Raw } =
+               await fetchBusyForEntity(type, chosenId);
+            const cap2 = cap2Raw || 1;
 
-            const stillOk = preflightFree.filter(
-               (iso) => !nowConflicts.includes(iso)
-            );
+            const nowConflicts = [];
+            const stillOk = [];
+            for (const iso of preflightFree) {
+               if (isStartFull(iso, startCount2, cap2)) nowConflicts.push(iso);
+               else stillOk.push(iso);
+            }
 
             if (nowConflicts.length) {
                dropFromFreeSlots(nowConflicts);
@@ -858,12 +949,22 @@ export default function SAddProg({ onClose }) {
                notify(
                   "warn",
                   `Unele sloturi s-au ocupat între timp (${nowConflicts.length}).`,
-                  {
-                     force: true,
-                  }
+                  { force: true }
                );
             }
+
             if (stillOk.length) {
+               if (stillOk.length !== mustSubmitExactly) {
+                  notify(
+                     "warn",
+                     `Au rămas ${stillOk.length}/${mustSubmitExactly}. Ajustează și reîncearcă.`,
+                     { force: true }
+                  );
+                  setSelectedDates(stillOk);
+                  setShowList(true);
+                  return;
+               }
+
                const retryPayload = {
                   ...topLevel,
                   reservations: stillOk.map((isoDate) => ({
@@ -875,15 +976,12 @@ export default function SAddProg({ onClose }) {
                   })),
                };
                await createReservations(retryPayload);
-               notify(
-                  "success",
-                  `Trimis ${stillOk.length} programări.${
-                     mustReachMin15 && stillOk.length < 15
-                        ? " Atenție: <15 au rămas libere în timpul trimiterii."
-                        : ""
-                  }`,
-                  { force: true }
-               );
+               try {
+                  await dispatch(fetchUserReservations(user.id)).unwrap();
+               } catch {}
+               notify("success", `Trimis ${stillOk.length} programări.`, {
+                  force: true,
+               });
                setSelectedDates([]);
                setShowList(true);
             }
@@ -928,13 +1026,7 @@ export default function SAddProg({ onClose }) {
                      <b>Ai deja 30 de lecții programate.</b> Nu mai poți adăuga
                      alte programări.
                   </div>
-                  <button
-                     onClick={onClose}
-                     className="saddprogramari__add-btn"
-                     type="button"
-                  >
-                     Închide
-                  </button>
+              
                </div>
             ) : showLoadingScreen ? (
                <div className="saddprogramari__loading">
@@ -962,7 +1054,7 @@ export default function SAddProg({ onClose }) {
                               value="15"
                               checked={numarLectii === 15}
                               onChange={() => setNumarLectii(15)}
-                              disabled={isLocked || lectiiExistente >= 15}
+                              disabled={isLocked || lectiiExistente >= 30}
                            />
                            15 lecții
                         </label>
@@ -1125,7 +1217,7 @@ export default function SAddProg({ onClose }) {
                                        .substring(0, 2)
                                        .replace(/^./, (c) => c.toUpperCase())
                                  }
-                                 minDate={addDays(new Date(), 1)} // NU permite azi
+                                 minDate={addDays(new Date(), 1)}
                                  maxDate={maxSelectableDate}
                                  dayClassName={(date) => {
                                     const day = localDateStr(date);
@@ -1203,7 +1295,7 @@ export default function SAddProg({ onClose }) {
                               disabled={
                                  !data ||
                                  !oraSelectata ||
-                                 selectedDates.length >= numarLectii
+                                 selectedDates.length >= requiredSubmitCount
                               }
                               className="saddprogramari__add-btn"
                               type="button"
@@ -1238,7 +1330,7 @@ export default function SAddProg({ onClose }) {
                            <div className="saddprogramari__header-row">
                               <h3 className="saddprogramari__title saddprogramari__title--mt-12">
                                  Lecții selectate: {selectedDates.length} /{" "}
-                                 {numarLectii}
+                                 {requiredSubmitCount}
                                  {rejectedDates.length > 0 && (
                                     <span className="saddprogramari__muted-note">
                                        {" "}
@@ -1315,7 +1407,6 @@ export default function SAddProg({ onClose }) {
                                                       tabIndex={0}
                                                       focusable="true"
                                                       aria-label="Șterge programarea"
-                                                      type="button"
                                                       src={trashIcon}
                                                       className="saddprogramari__add-btn-icon delete"
                                                    />
@@ -1408,7 +1499,6 @@ export default function SAddProg({ onClose }) {
                                                       tabIndex={0}
                                                       focusable="true"
                                                       aria-label="Șterge programarea"
-                                                      type="button"
                                                       src={trashIcon}
                                                       className="saddprogramari__add-btn-icon delete"
                                                    />
@@ -1463,7 +1553,8 @@ export default function SAddProg({ onClose }) {
                      <button
                         onClick={trimiteProgramari}
                         disabled={
-                           selectedDates.length < requiredSubmitCount || loading
+                           selectedDates.length !== requiredSubmitCount ||
+                           loading
                         }
                         className="saddprogramari__add-btn arrow"
                         type="button"

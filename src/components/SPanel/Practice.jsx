@@ -1,6 +1,14 @@
-import React, { useMemo, useRef, useState, useEffect } from "react";
-import { getTicket } from "../../api/examService";
+// src/components/SPanel/Practice.jsx
+import React, { useMemo, useRef, useState, useEffect, useContext } from "react";
 import AlertPills from "../Utils/AlertPills";
+import { UserContext } from "../../UserContext";
+import {
+   startPracticeSession,
+   getPracticeSession,
+   submitPracticeAnswer,
+   getTicketQuestions,
+   getAllMyPracticeHistory, // status-urile biletelor
+} from "../../api/examService";
 
 /* ===== Config din .env ===== */
 const readEnv = (viteKey, craKey) =>
@@ -16,8 +24,6 @@ const START_ID = Number(
 const COUNT = Number(
    readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 269 - 246 + 1
 );
-
-/* Generează 130,131,132,... */
 const TICKET_IDS = Array.from({ length: COUNT }, (_, i) => START_ID + i);
 
 /* ===== Helpers ===== */
@@ -26,105 +32,20 @@ const prettyTime = (sec) => {
    const s = sec % 60;
    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 };
-/* ===== Chei localStorage (cu tentative multiple) ===== */
-const currAttemptKey = (tid) => `practice_attempt_current_${tid}`;
-const lastAttemptKey = (tid) => `practice_attempt_last_${tid}`;
-const answersKey = (tid, aid) => `practice_answers_${tid}_${aid}`;
-const lastIndexKey = (tid, aid) => `practice_lastIndex_${tid}_${aid}`;
-const attemptResultKey = (tid, aid) => `practice_attempt_result_${tid}_${aid}`;
-
-const loadAnswers = (ticketId, attemptId) => {
-   try {
-      const raw = localStorage.getItem(answersKey(ticketId, attemptId));
-      if (raw) return JSON.parse(raw);
-      if (attemptId === 1) {
-         const legacy = localStorage.getItem(`practice_answers_${ticketId}`);
-         return legacy ? JSON.parse(legacy) : {};
-      }
-      return {};
-   } catch {
-      return {};
-   }
-};
-const saveAnswers = (ticketId, attemptId, obj) => {
-   try {
-      localStorage.setItem(
-         answersKey(ticketId, attemptId),
-         JSON.stringify(obj)
-      );
-   } catch {}
-};
-const loadLastIndex = (ticketId, attemptId) => {
-   try {
-      const v = localStorage.getItem(lastIndexKey(ticketId, attemptId));
-      const n = Number(v);
-      return Number.isInteger(n) ? n : 0;
-   } catch {
-      return 0;
-   }
-};
-const saveLastIndex = (ticketId, attemptId, idx) => {
-   try {
-      localStorage.setItem(lastIndexKey(ticketId, attemptId), String(idx));
-   } catch {}
-};
-const saveAttemptResult = (ticketId, attemptId, result) => {
-   try {
-      localStorage.setItem(
-         attemptResultKey(ticketId, attemptId),
-         JSON.stringify(result)
-      );
-      localStorage.setItem(lastAttemptKey(ticketId), String(attemptId));
-   } catch {}
-};
-function loadAttemptResult(ticketId, attemptId) {
-   try {
-      const raw = localStorage.getItem(attemptResultKey(ticketId, attemptId));
-      return raw ? JSON.parse(raw) : null;
-   } catch {
-      return null;
-   }
-}
-function getLastAttemptId(ticketId) {
-   const v = localStorage.getItem(lastAttemptKey(ticketId));
-   const n = Number(v);
-   return Number.isInteger(n) ? n : null;
-}
-const startNewAttemptIds = (ticketId) => {
-   const last = getLastAttemptId(ticketId);
-   const next = (last || 0) + 1;
-   localStorage.setItem(currAttemptKey(ticketId), String(next));
-   return { currentAttemptId: next, lastAttemptId: last };
-};
 
 const IMG_HOST = "https://instruireauto.site";
-
-/**
- * EXAMEN_INSTRUIERE_AUTO/...  -> https://instruireauto.site/images/...
- * Acceptă și EXAMEN-INSTRUIIERE-AUTO, lowercase, cu/ fără leading slash.
- */
 function rewriteImageUrl(raw) {
    if (!raw) return null;
    try {
       const u = new URL(String(raw).trim(), IMG_HOST);
-
       const segs = u.pathname.split("/").filter(Boolean);
       const norm = (s) => s.toLowerCase().replace(/[-_]+/g, "");
       const token = "exameninstruireauto";
-
       let idx = segs.findIndex((p) => norm(p) === token);
-
-      if (idx !== -1) {
-         segs[idx] = "images";
-      } else {
-         if (segs.length && norm(segs[0]) !== "images") {
-            segs.unshift("images");
-         }
-      }
-
-      u.pathname = "/" + segs.join("/");
-      u.pathname = u.pathname.replace(/\/{2,}/g, "/");
-
+      if (idx !== -1) segs[idx] = "images";
+      else if (segs.length && norm(segs[0]) !== "images")
+         segs.unshift("images");
+      u.pathname = "/" + segs.join("/").replace(/\/{2,}/g, "/");
       return u.origin + u.pathname;
    } catch {
       const tail = String(raw)
@@ -140,68 +61,134 @@ function rewriteImageUrl(raw) {
    }
 }
 
+/** Normalizează structura venită din GET /exams/practice/{id} în formatul UI */
+function normalizeSessionToTicket(sess) {
+   if (!sess) return null;
+
+   const ticket = sess.ticket || {};
+   const tidRaw = ticket?.id ?? sess.ticketId;
+   const tid =
+      Number.isInteger(Number(tidRaw)) && Number(tidRaw) > 0
+         ? Number(tidRaw)
+         : null;
+
+   const name =
+      ticket?.name || sess.ticketName || (tid ? `Bilet ${tid}` : "Bilet");
+   const rawQs = ticket?.questions || sess.questions || [];
+
+   const questions = (rawQs || []).map((q, i) => ({
+      id: Number(q?.id ?? q?.questionId ?? i + 1),
+      text: q?.text ?? q?.question ?? q?.title ?? "",
+      answers: Array.isArray(q?.answers)
+         ? q.answers
+         : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null),
+      correctAnswer:
+         q?.correctAnswer ?? q?.correctIndex ?? q?.rightIndex ?? undefined,
+      image: rewriteImageUrl(q?.image || q?.img || ""),
+      order: Number.isFinite(q?.order) ? q.order : i,
+   }));
+
+   return { id: tid, name, questions };
+}
+
+/* prag „admis” (22/26 sau 85%) */
+const requiredOk = (total) => (total >= 26 ? 22 : Math.ceil(total * 0.85));
+
+/* extras numărul P din “Practice P2”, “P 12”, “PracticeP7” etc. */
+function getTicketNrFromName(name) {
+   const m = String(name || "").match(/P\s*([0-9]+)/i);
+   const n = m ? Number(m[1]) : NaN;
+   return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/* ====== Memorare ultimul practiceId pe bilet (localStorage) ====== */
+const lastKeyForTicket = (tid) => `practice:last:${tid}`;
+const rememberPractice = (tid, pid) => {
+   try {
+      localStorage.setItem(lastKeyForTicket(tid), String(pid));
+   } catch {}
+};
+const recallPractice = (tid) => {
+   try {
+      const v = localStorage.getItem(lastKeyForTicket(tid));
+      const n = v ? Number(v) : null;
+      return Number.isInteger(n) && n > 0 ? n : null;
+   } catch {
+      return null;
+   }
+};
+const forgetPractice = (tid) => {
+   try {
+      localStorage.removeItem(lastKeyForTicket(tid));
+   } catch {}
+};
+
+/* ====== Salvare rezultat local pentru statistici ====== */
+function saveLocalPracticeResult(ticketId, { ok, bad, total }) {
+   try {
+      const ts = Date.now();
+      const key = `practice_attempt_result_${ticketId}_${ts}`;
+      const obj = {
+         ok: Number(ok || 0),
+         bad: Number(bad || 0),
+         skip: Math.max(
+            0,
+            Number(total || 0) - Number(ok || 0) - Number(bad || 0)
+         ),
+         finishedAt: new Date(ts).toISOString(),
+      };
+      localStorage.setItem(key, JSON.stringify(obj));
+   } catch {}
+}
+
+/* Heuristic: sesiunea are deja răspunsuri? */
+function sessionHasAnswers(sess) {
+   const answered =
+      Number(sess?.progress?.answered ?? sess?.answered ?? 0) || 0;
+   if (answered > 0) return true;
+   const qs = sess?.questions || sess?.ticket?.questions || [];
+   return qs.some(
+      (q) =>
+         q?.selectedAnswer != null ||
+         q?.userAnswer != null ||
+         q?.answer != null ||
+         q?.answered === true
+   );
+}
+
 export default function Practice() {
+   const { user } = useContext(UserContext) || {};
    const [view, setView] = useState("tickets"); // 'tickets' | 'test'
    const DISPLAY_BASE = START_ID - 1;
 
    const tickets = useMemo(
       () => TICKET_IDS.map((id) => ({ id, nr: id - DISPLAY_BASE })),
-      []
+      [DISPLAY_BASE]
    );
 
-   // test state (local)
+   // status vizual pt. bilete: { [localTicketId]: 'ok'|'bad' }
+   const [ticketStatusMap, setTicketStatusMap] = useState({});
+   const [historyLoading, setHistoryLoading] = useState(false);
+
+   // state sesiune practice
+   const [practiceId, setPracticeId] = useState(null); // doar pt. mod 'server'
+   const [localAttemptId, setLocalAttemptId] = useState(null); // pt. mod 'local'
+   const [practiceMode, setPracticeMode] = useState("server"); // 'server' | 'local'
+
+   const [ticketId, setTicketId] = useState(null);
    const [ticket, setTicket] = useState(null); // {id,name,questions:[]}
    const [idx, setIdx] = useState(0);
-
-   // tentative
-   const [attemptId, setAttemptId] = useState(null);
-   const [prevAttemptId, setPrevAttemptId] = useState(null);
-
-   // curent (NUMAI răspunsurile alese)
    const [answersMap, setAnswersMap] = useState({});
-   // ultima tentativă (doar pentru mesaj „Ultima dată: Corect/Greșit”)
-   const [prevAnswersMap, setPrevAnswersMap] = useState({});
+   const [loading, setLoading] = useState(false);
+   const [pillMsgs, setPillMsgs] = useState([]);
 
-   const [loadingTicket, setLoadingTicket] = useState(false);
-
-   // înainte:
-   // const toolbarRef = useRef(null);
-   // const qAnchorRef = useRef(null);
-
-   // după:
-   const toolbarRef = useRef(null);
    const qTextRef = useRef(null);
+   const timerRef = useRef(null);
+   const [remaining, setRemaining] = useState(20 * 60);
 
-   // înlocuiește funcția existentă
-   const scrollToCurrent = () => {
-      const el = qTextRef.current;
-      if (!el) return;
+   const [correctMap, setCorrectMap] = useState({});
+   const [correctLoaded, setCorrectLoaded] = useState(false);
 
-      // top absolut al .practice__qtext în pagină
-      const rectTop = el.getBoundingClientRect().top;
-      const targetTop = window.scrollY + rectTop; // FĂRĂ NICIUN OFFSET
-
-      if (Math.abs(window.scrollY - targetTop) > 1) {
-         window.scrollTo({ top: targetTop, behavior: "smooth" });
-      }
-   };
-
-   const isAnswered = (qId) => {
-      const a = answersMap[qId];
-      return !!a && a.selected != null;
-   };
-   const findFirstUnansweredFrom = (startIdx = 0) => {
-      if (!ticket) return -1;
-      for (let i = startIdx; i < (ticket.questions?.length || 0); i++) {
-         const q = ticket.questions[i];
-         if (!isAnswered(q.id)) return i;
-      }
-      return -1;
-   };
-   const findFirstUnanswered = () => findFirstUnansweredFrom(0);
-
-   // ALERT PILLS pentru erori
-   const [pillMsgs, setPillMsgs] = useState([]); // [{id,type:'error',text}]
    const pushError = (text) =>
       setPillMsgs((arr) => [
          ...arr,
@@ -214,85 +201,288 @@ export default function Practice() {
       return () => clearTimeout(t);
    }, [pillMsgs]);
 
-   // timer (opțional: 20 min)
-   const [remaining, setRemaining] = useState(0);
-   const timerRef = useRef(null);
-   useEffect(
-      () => () => timerRef.current && clearInterval(timerRef.current),
-      []
-   );
-   const startLocalTimer = (secs = 20 * 60) => {
-      setRemaining(secs);
+   useEffect(() => {
+      return () => timerRef.current && clearInterval(timerRef.current);
+   }, []);
+   useEffect(() => {
+      setRemaining(20 * 60);
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => {
-         setRemaining((r) => {
-            if (r <= 1) {
-               clearInterval(timerRef.current);
-               return 0;
-            }
-            return r - 1;
-         });
+         setRemaining((r) => (r <= 1 ? 0 : r - 1));
       }, 1000);
+   }, [practiceId, localAttemptId, practiceMode]);
+
+   // La expirarea timpului — finalizează sesiunea (și salvează local dacă e cazul)
+   useEffect(() => {
+      if (remaining === 0 && (practiceId || localAttemptId)) {
+         (async () => {
+            await finalizeAttempt("timeout");
+         })();
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [remaining, practiceId, localAttemptId]);
+
+   const scrollToCurrent = () => {
+      const el = qTextRef.current;
+      if (!el) return;
+      const top = window.scrollY + (el.getBoundingClientRect().top || 0);
+      if (Math.abs(window.scrollY - top) > 1) {
+         window.scrollTo({ top, behavior: "smooth" });
+      }
    };
 
-   // ==== Intrare într-un bilet ====
-   const enterTicket = async (ticketId) => {
-      setLoadingTicket(true);
-      try {
-         const t = await getTicket(ticketId);
+   useEffect(() => {
+      if (!ticket) return;
+      const raf = requestAnimationFrame(() =>
+         requestAnimationFrame(scrollToCurrent)
+      );
+      return () => cancelAnimationFrame(raf);
+   }, [ticket, idx]);
 
-         t.questions = [...(t.questions || [])]
-            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-            .map((q, i) => {
-               const raw = q.image || "";
-               const finalUrl = rewriteImageUrl(raw);
-               //if (process.env.NODE_ENV !== "production") {
-               //   console.log(`[Practice] Q${i + 1} img:`, { raw, finalUrl });
-               //}
-               return { ...q, image: finalUrl };
+   /* ====== Culoarea biletelor din istoricul meu (după NUME: “Practice P#”) ====== */
+   useEffect(() => {
+      if (view !== "tickets") return;
+      let alive = true;
+
+      (async () => {
+         setHistoryLoading(true);
+         try {
+            const all = await getAllMyPracticeHistory({
+               pageSize: 100,
+               maxPages: 10,
             });
+            const items = Array.isArray(all)
+               ? all
+               : all?.data || all?.items || [];
 
+            // Ținem doar ultima încercare per P# (după completedAt, altfel startedAt)
+            const lastByPNr = new Map(); // key: pNr -> { ts, status, total, correct }
+
+            for (const it of items) {
+               const pNr = getTicketNrFromName(
+                  it.ticketName || it.ticket?.name
+               );
+               if (!pNr) continue;
+
+               const status = String(it.status || "").toUpperCase();
+               const ts =
+                  Date.parse(
+                     it.completedAt ||
+                        it.finishedAt ||
+                        it.endedAt ||
+                        it.startedAt ||
+                        it.createdAt ||
+                        0
+                  ) || 0;
+
+               const prev = lastByPNr.get(pNr);
+               if (prev && ts <= prev.ts) continue;
+
+               const total = Number(
+                  it.totalQuestions ??
+                     it.total ??
+                     it.questionsTotal ??
+                     Number(it.correct ?? 0) +
+                        Number(it.wrong ?? 0) +
+                        Number(it.unanswered ?? 0)
+               );
+
+               const correct = Number(
+                  it.score ??
+                     it.correct ??
+                     it.correctCount ??
+                     it.progress?.correct ??
+                     0
+               );
+
+               lastByPNr.set(pNr, { ts, status, total, correct });
+            }
+
+            const mapObj = {};
+            for (const [pNr, v] of lastByPNr.entries()) {
+               // P1 -> 246, P2 -> 247, ...
+               const localId = START_ID + (pNr - 1);
+
+               // IN_PROGRESS nu colorează
+               if (v.status.includes("IN_PROGRESS")) continue;
+
+               let cls;
+               if (v.status.includes("FAILED")) {
+                  cls = "bad";
+               } else if (v.status.includes("PASSED")) {
+                  cls = "ok";
+               } else if (v.total > 0 && Number.isFinite(v.correct)) {
+                  const need = requiredOk(v.total);
+                  cls = v.correct >= need ? "ok" : "bad";
+               }
+
+               if (cls) mapObj[localId] = cls;
+            }
+
+            if (alive) setTicketStatusMap(mapObj);
+         } catch {
+            if (alive) setTicketStatusMap({});
+         } finally {
+            if (alive) setHistoryLoading(false);
+         }
+      })();
+
+      return () => {
+         alive = false;
+      };
+   }, [view]);
+
+   /* ========= START LOCAL FRESH (fără server) ========= */
+   async function startLocalFresh(tid) {
+      setPracticeMode("local");
+      setPracticeId(null);
+      setLocalAttemptId(
+         `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      );
+      setTicketId(tid);
+      setAnswersMap({});
+      setIdx(0);
+      setCorrectMap({});
+      setCorrectLoaded(false);
+
+      const qs = await getTicketQuestions(tid);
+      const t = {
+         id: Number(tid),
+         name: `Bilet ${Number(tid) - (START_ID - 1)}`,
+         questions: (qs || [])
+            .map((q, i) => ({
+               id: Number(q?.id ?? i + 1),
+               text: q?.text ?? q?.question ?? q?.title ?? "",
+               answers: Array.isArray(q?.answers)
+                  ? q.answers
+                  : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null),
+               image: rewriteImageUrl(q?.image || q?.img || ""),
+               order: Number.isFinite(q?.order) ? q.order : i,
+            }))
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+      };
+      setTicket(t);
+
+      // corectele (0- sau 1-based)
+      const m = {};
+      (qs || []).forEach((q) => {
+         const answersLen = Array.isArray(q?.answers) ? q.answers.length : 0;
+         const n = Number(q?.correctAnswer);
+         let ci = null;
+         if (Number.isInteger(n) && answersLen > 0) {
+            if (n >= 0 && n < answersLen) ci = n;
+            else if (n >= 1 && n <= answersLen) ci = n - 1;
+         }
+         if (Number.isInteger(q?.id) && Number.isInteger(ci))
+            m[Number(q.id)] = ci;
+      });
+      setCorrectMap(m);
+      setCorrectLoaded(true);
+
+      setView("test");
+   }
+
+   // pornește PRACTICA pe un bilet — încearcă server; dacă reia vechea sesiune, comută local
+   const enterTicket = async (tid) => {
+      setLoading(true);
+
+      // Golire UI înainte de init
+      setPracticeId(null);
+      setLocalAttemptId(null);
+      setPracticeMode("server");
+      setTicket(null);
+      setTicketId(null);
+      setCorrectMap({});
+      setCorrectLoaded(false);
+      setAnswersMap({});
+      setIdx(0);
+
+      try {
+         // server: start sau resume
+         const started = await startPracticeSession(tid); // { id, ticketId, ... }
+         const pid =
+            Number(started?.id) ||
+            Number(started?.practiceId) ||
+            Number(started?.sessionId);
+         if (!Number.isInteger(pid) || pid <= 0) {
+            throw new Error("PracticeID invalid la start.");
+         }
+         const serverTid = Number(started?.ticketId);
+         const effectiveTid =
+            Number.isInteger(serverTid) && serverTid > 0
+               ? serverTid
+               : Number(tid);
+
+         // obține detalii
+         const sess = await getPracticeSession(pid);
+
+         // dacă are deja răspunsuri -> RESTART LOCAL CURAT
+         if (sessionHasAnswers(sess)) {
+            await startLocalFresh(effectiveTid);
+            // memorăm ultima sesiune de pe bilet doar ca referință (nu o folosim activ)
+            rememberPractice(effectiveTid, pid);
+            setLoading(false);
+            return;
+         }
+
+         // altfel, e o sesiune curată pe server
+         setPracticeMode("server");
+         setPracticeId(pid);
+         setTicketId(effectiveTid);
+         rememberPractice(effectiveTid, pid);
+
+         let t = normalizeSessionToTicket(sess);
+         t = {
+            ...t,
+            questions: [...(t?.questions || [])].sort(
+               (a, b) => (a.order ?? 0) - (b.order ?? 0)
+            ),
+         };
          setTicket(t);
-         const { currentAttemptId, lastAttemptId } =
-            startNewAttemptIds(ticketId);
-         setAttemptId(currentAttemptId);
-         setPrevAttemptId(lastAttemptId || null);
 
-         const initial = {};
-         setAnswersMap(initial);
-         saveAnswers(ticketId, currentAttemptId, initial);
+         // Fallback pentru corecte (ca în varianta inițială)
+         try {
+            const fallbackTid =
+               Number.isInteger(t?.id) && t.id > 0 ? t.id : effectiveTid;
 
-         if (lastAttemptId)
-            setPrevAnswersMap(loadAnswers(ticketId, lastAttemptId) || {});
-         else setPrevAnswersMap({});
+            if (Number.isInteger(fallbackTid) && fallbackTid > 0) {
+               const srvQs = await getTicketQuestions(fallbackTid);
+               const m = {};
+               (srvQs || []).forEach((q) => {
+                  const qid = Number(q?.id);
+                  const answersLen = Array.isArray(q?.answers)
+                     ? q.answers.length
+                     : 0;
+                  const n = Number(q?.correctAnswer);
+                  let ci = null;
+                  if (Number.isInteger(n) && answersLen > 0) {
+                     if (n >= 0 && n < answersLen) ci = n;
+                     else if (n >= 1 && n <= answersLen) ci = n - 1;
+                  }
+                  if (Number.isInteger(qid) && Number.isInteger(ci))
+                     m[qid] = ci;
+               });
+               setCorrectMap(m);
+            } else {
+               setCorrectMap({});
+            }
+         } catch {
+            setCorrectMap({});
+         } finally {
+            setCorrectLoaded(true);
+         }
 
-         setIdx(0);
-         startLocalTimer(20 * 60);
          setView("test");
-
-         // scroll inițial după ce e randată întrebarea
-         setTimeout(() => {
-            requestAnimationFrame(() => requestAnimationFrame(scrollToCurrent));
-         }, 0);
       } catch (e) {
-         const msg =
-            e?.message === "AUTH_401"
-               ? "Trebuie să fii autentificat (401)."
-               : e?.message === "AUTH_403"
-               ? "Nu ai permisiune (403)."
-               : e?.message === "TICKET_404"
-               ? "Bilet inexistent (404)."
-               : e?.message || "Nu am putut încărca biletul.";
-         pushError(msg);
+         pushError(e?.message || "Nu am putut porni sesiunea de practică.");
       } finally {
-         setLoadingTicket(false);
+         setLoading(false);
       }
    };
 
    const current = ticket?.questions?.[idx] || null;
    const total = ticket?.questions?.length || 0;
 
-   // counts curente (NUMAI răspunsuri alese)
    const counts = useMemo(() => {
       let ok = 0,
          bad = 0;
@@ -304,8 +494,7 @@ export default function Practice() {
       return { ok, bad };
    }, [answersMap]);
 
-   // Toate au verdict? (adică AU răspuns, fără „sărite”)
-   const allDecided = useMemo(() => {
+   const allAnswered = useMemo(() => {
       if (!ticket) return false;
       return ticket.questions.every((q) => {
          const a = answersMap[q.id];
@@ -313,130 +502,156 @@ export default function Practice() {
       });
    }, [ticket, answersMap]);
 
-   // jumpTo: setează indexul și scrollează
    const jumpTo = (i) => {
       if (!ticket) return;
       const clamped = Math.max(0, Math.min(i, total - 1));
       setIdx(clamped);
-      if (ticket && attemptId) saveLastIndex(ticket.id, attemptId, clamped);
-      requestAnimationFrame(() => {
-         requestAnimationFrame(scrollToCurrent);
-      });
    };
-
-   // NEXT "smart": dacă sunt întrebări sărite, du-te la prima fără răspuns
    const goNext = () => {
       if (!ticket) return;
-
-      // Încearcă în față de la idx+1
-      const unansweredAhead = findFirstUnansweredFrom(idx + 1);
-      if (unansweredAhead !== -1) {
-         jumpTo(unansweredAhead);
-         return;
-      }
-
-      // Dacă ești la final dar există sărite în urmă
-      const anyUnanswered = findFirstUnanswered();
-      if (anyUnanswered !== -1) {
-         jumpTo(anyUnanswered);
-         return;
-      }
-
-      // Altfel, comportament normal (fără depășire)
-      const next = Math.min(idx + 1, total - 1);
-      jumpTo(next);
+      setIdx(Math.min(idx + 1, total - 1));
    };
 
-   // auto-scroll când se schimbă întrebarea sau biletul
-   useEffect(() => {
-      if (!ticket) return;
-      const id = requestAnimationFrame(() =>
-         requestAnimationFrame(scrollToCurrent)
-      );
-      return () => cancelAnimationFrame(id);
-   }, [ticket, idx]);
+   // finalizează încercarea (curăță local; salvează local dacă e mod 'local')
+   const finalizeAttempt = async (reason = "manual-exit") => {
+      // salvăm local doar în mod 'local'
+      if (practiceMode === "local" && ticketId && ticket) {
+         saveLocalPracticeResult(ticketId, {
+            ok: counts.ok,
+            bad: counts.bad,
+            total,
+         });
+         // actualizează vizual biletul curent
+         const need = requiredOk(total);
+         setTicketStatusMap((m) => ({
+            ...m,
+            [ticketId]: counts.ok >= need ? "ok" : "bad",
+         }));
+      }
+      // UI reset
+      setView("tickets");
+      setPracticeId(null);
+      setLocalAttemptId(null);
+      setPracticeMode("server");
+      setTicket(null);
+      setTicketId(null);
+      setCorrectMap({});
+      setCorrectLoaded(false);
+      setAnswersMap({});
+      setIdx(0);
+   };
 
-   // click pe răspuns → SALVEAZĂ și BLOCHEAZĂ
-   const onChoose = (i) => {
-      if (!ticket || !current || !attemptId) return;
+   // submit la fiecare răspuns — NU auto-next
+   const onChoose = async (answerIdx) => {
+      if (!current) return;
 
       const existing = answersMap[current.id];
       if (existing && existing.selected != null) return;
 
-      const isCorrect = Number(i) === Number(current.correctAnswer);
-      const nextMap = {
+      // Înregistrăm selectarea
+      let nextMap = {
          ...answersMap,
          [current.id]: {
-            selected: Number(i),
-            correct: isCorrect,
+            selected: Number(answerIdx),
+            correct: null,
             at: new Date().toISOString(),
          },
       };
       setAnswersMap(nextMap);
-      saveAnswers(ticket.id, attemptId, nextMap);
+
+      // Mod LOCAL: verificăm corectitudinea din correctMap (fără server)
+      if (practiceMode === "local") {
+         const effectiveCorrectIdx = Object.prototype.hasOwnProperty.call(
+            correctMap,
+            current.id
+         )
+            ? Number(correctMap[current.id])
+            : null;
+
+         const finalCorrect =
+            Number.isInteger(effectiveCorrectIdx) &&
+            Number(answerIdx) === Number(effectiveCorrectIdx);
+
+         nextMap = {
+            ...nextMap,
+            [current.id]: {
+               ...nextMap[current.id],
+               correct: finalCorrect,
+               correctIdx: Number.isInteger(effectiveCorrectIdx)
+                  ? Number(effectiveCorrectIdx)
+                  : null,
+               explanation: null,
+            },
+         };
+         setAnswersMap(nextMap);
+         return;
+      }
+
+      // Mod SERVER: trimitem la backend
+      if (!practiceId) return;
+
+      try {
+         const normalize = await submitPracticeAnswer(practiceId, {
+            questionId: Number(current.id),
+            selectedAnswer: Number(answerIdx),
+         });
+
+         const answersLen = (current.answers || []).length;
+         const { correct, correctIdx, explanation } = normalize(answersLen);
+
+         let finalCorrect = correct;
+         const effectiveCorrectIdx = Number.isInteger(correctIdx)
+            ? correctIdx
+            : Object.prototype.hasOwnProperty.call(correctMap, current.id)
+            ? Number(correctMap[current.id])
+            : null;
+
+         if (finalCorrect == null && Number.isInteger(effectiveCorrectIdx)) {
+            finalCorrect = Number(answerIdx) === Number(effectiveCorrectIdx);
+         }
+
+         nextMap = {
+            ...nextMap,
+            [current.id]: {
+               ...nextMap[current.id],
+               correct: finalCorrect,
+               correctIdx: Number.isInteger(effectiveCorrectIdx)
+                  ? Number(effectiveCorrectIdx)
+                  : null,
+               explanation: explanation || null,
+            },
+         };
+         setAnswersMap(nextMap);
+      } catch (e) {
+         const msg = String(e?.message || "");
+         if (/Active practice session not found/i.test(msg)) {
+            pushError(
+               "Sesiunea server s-a închis/expirat. Trec pe mod local curat."
+            );
+            // trecem pe local fresh ca fallback
+            await startLocalFresh(ticketId || START_ID);
+         } else {
+            pushError(msg || "Nu am putut trimite răspunsul.");
+         }
+      }
    };
 
-   // finalizează tentativă
-   const finalizeAttempt = () => {
-      if (!ticket || !attemptId) return;
-      const ok = counts.ok;
-      const bad = counts.bad;
-      const skip = Math.max(0, (ticket?.questions?.length || 0) - ok - bad);
-      const result = {
-         ok,
-         bad,
-         skip,
-         total: total,
-         finishedAt: new Date().toISOString(),
-      };
-      saveAttemptResult(ticket.id, attemptId, result);
-      exitToTickets();
-   };
-
-   const exitToTickets = () => {
-      setView("tickets");
-      setTicket(null);
-      setIdx(0);
-      setAttemptId(null);
-      setPrevAnswersMap({});
-      if (timerRef.current) clearInterval(timerRef.current);
-   };
-
-   // —— Status board (2 × 12) pt. tentativă curentă —— (fără “skip”)
-   const STATUS_COLS = 12;
    const statusBoard = useMemo(() => {
       if (!ticket) return [];
       return ticket.questions.map((q, i) => {
          const a = answersMap[q.id];
          let status = "none";
-         if (a?.selected != null) status = a.correct ? "ok" : "bad";
+         if (a?.selected != null)
+            status =
+               a.correct === false ? "bad" : a.correct === true ? "ok" : "wait";
          return { i, status };
       });
    }, [ticket, answersMap]);
 
-   // pentru afișarea instant a rezultatului la întrebare curentă (curent attempt)
-   const saved = current ? answersMap[current.id] : null;
-   const reveal = !!saved && saved.selected != null;
-
-   // „ultima dată” (prev attempt) – DOAR mesaj
-   const prevSaved = current ? prevAnswersMap[current.id] : null;
-   const showPrev = !!prevSaved && prevSaved.selected != null;
-
-   // —— Status card pentru fiecare bilet în grid ——
-   const getTicketBadge = (tid) => {
-      const last = getLastAttemptId(tid);
-      if (!last) return "none";
-      const res = loadAttemptResult(tid, last);
-      if (!res || !res.total) return "none";
-      if (res.ok === res.total) return "ok";
-      if (res.ok === 0 && res.bad > 0) return "bad";
-      if (res.bad > 0) return "warn";
-      return "none";
-   };
+   const keySalt = practiceMode === "local" ? localAttemptId : practiceId;
 
    return (
       <div className="practice">
-         {/* Alert pills — DOAR pentru erori din pagină */}
          <AlertPills messages={pillMsgs} onDismiss={dismissLastPill} />
 
          {view === "tickets" && (
@@ -447,21 +662,17 @@ export default function Practice() {
 
                <div className="practice__grid">
                   {tickets.map((t) => {
-                     const badge = getTicketBadge(t.id);
+                     const st = ticketStatusMap[t.id]; // 'ok' | 'bad' | undefined
+                     const cls =
+                        "practice__ticket" +
+                        (st ? ` practice__ticket--${st}` : "");
                      return (
                         <button
                            key={t.id}
-                           className={
-                              "practice__ticket" +
-                              (badge === "ok" ? " practice__ticket--ok" : "") +
-                              (badge === "warn"
-                                 ? " practice__ticket--warn"
-                                 : "") +
-                              (badge === "bad" ? " practice__ticket--bad" : "")
-                           }
+                           className={cls}
                            onClick={() => enterTicket(t.id)}
-                           title={`Start Bilet ${t.nr}`}
-                           disabled={loadingTicket}
+                           disabled={loading || historyLoading}
+                           title={`Start bilet ${t.nr}`}
                         >
                            <div className="practice__ticket-title">
                               Bilet {t.nr}
@@ -475,9 +686,11 @@ export default function Practice() {
 
          {view === "test" && ticket && (
             <>
-               {/* 🔽 ref pe toolbar pentru măsurarea offset-ului */}
-               <div className="practice__toolbar" ref={toolbarRef}>
-                  <button className="practice__back" onClick={exitToTickets}>
+               <div className="practice__toolbar">
+                  <button
+                     className="practice__back"
+                     onClick={() => finalizeAttempt("back-button")}
+                  >
                      Înapoi
                   </button>
 
@@ -492,15 +705,15 @@ export default function Practice() {
                         Greșite: {counts.bad}
                      </span>
                   </div>
+
                   <div className="practice__timer">{prettyTime(remaining)}</div>
                </div>
 
-               {/* Status board: 2 × 12 pills (fără “skip”) */}
                <div
                   className="practice__statusboard"
                   style={{
                      display: "grid",
-                     gridTemplateColumns: `repeat(${STATUS_COLS}, 1fr)`,
+                     gridTemplateColumns: `repeat(12, 1fr)`,
                      gap: 6,
                      marginBottom: 12,
                   }}
@@ -513,7 +726,7 @@ export default function Practice() {
                            (i === idx ? " practice__dot--current" : "") +
                            (status === "ok" ? " practice__dot--ok" : "") +
                            (status === "bad" ? " practice__dot--bad" : "") +
-                           (status === "none" ? " practice__dot--none" : "")
+                           (status === "wait" ? " practice__dot--none" : "")
                         }
                         title={`Întrebarea ${i + 1}`}
                         onClick={() => jumpTo(i)}
@@ -523,27 +736,27 @@ export default function Practice() {
                   ))}
                </div>
 
-               {loadingTicket && (
-                  <div className="practice__loading">Se încarcă biletul…</div>
-               )}
-
                {current && (
                   <div className="practice__question">
                      <div className="practice__qtext" ref={qTextRef}>
                         {current.text}
                      </div>
+
                      <div className="practice__row">
-                        <div className="practice__qimage-wrapper ">
+                        <div className="practice__qimage-wrapper">
                            {current?.image && (
                               <img
-                                 key={`${ticket.id}-${current.id}-${idx}`}
+                                 key={`${keySalt}-${current.id}-${idx}`}
                                  className="practice__qimage"
                                  src={
                                     current.image +
                                     (current.image.includes("?") ? "&" : "?") +
-                                    `v=${ticket.id}-${current.id}-${idx}`
+                                    `v=${keySalt}-${current.id}-${idx}`
                                  }
                                  alt="Întrebare"
+                                 onError={(e) =>
+                                    (e.currentTarget.hidden = true)
+                                 }
                               />
                            )}
                         </div>
@@ -551,54 +764,60 @@ export default function Practice() {
                         {current?.image && (
                            <div className="practice__qimage-wrapper mobile">
                               <img
-                                 key={`${ticket.id}-${current.id}-${idx}`}
+                                 key={`${keySalt}-${current.id}-${idx}-m`}
                                  className="practice__qimage"
                                  src={
                                     current.image +
                                     (current.image.includes("?") ? "&" : "?") +
-                                    `v=${ticket.id}-${current.id}-${idx}`
+                                    `v=${keySalt}-${current.id}-${idx}-m`
                                  }
                                  alt="Întrebare"
+                                 onError={(e) =>
+                                    (e.currentTarget.hidden = true)
+                                 }
                               />
                            </div>
                         )}
 
                         <div className="practice__answers">
                            {(current.answers || []).map((ans, i) => {
-                              const isCorrect =
-                                 i === Number(current.correctAnswer);
+                              const saved = answersMap[current.id];
+                              const already = !!saved && saved.selected != null;
+                              const effectiveCorrectIdx =
+                                 already && Number.isInteger(saved?.correctIdx)
+                                    ? Number(saved.correctIdx)
+                                    : null;
 
-                              const cur = saved;
-                              const alreadyAnswered =
-                                 !!cur && cur.selected != null;
+                              const isCorrectOption =
+                                 already &&
+                                 Number.isInteger(effectiveCorrectIdx) &&
+                                 i === effectiveCorrectIdx;
 
-                              const showCorrect =
-                                 !!cur && cur.selected != null && isCorrect;
-                              const showWrongSelected =
-                                 !!cur &&
-                                 cur.selected === i &&
-                                 cur.correct === false;
+                              const isWrongSelected =
+                                 already &&
+                                 saved.selected === i &&
+                                 Number.isInteger(effectiveCorrectIdx) &&
+                                 saved.selected !== effectiveCorrectIdx;
+
+                              const className =
+                                 "practice__answer" +
+                                 (isCorrectOption
+                                    ? " practice__answer--correct"
+                                    : "") +
+                                 (isWrongSelected
+                                    ? " practice__answer--wrong-selected"
+                                    : "") +
+                                 (already ? " practice__answer--locked" : "");
 
                               return (
                                  <button
                                     key={i}
-                                    className={
-                                       "practice__answer" +
-                                       (showCorrect
-                                          ? " practice__answer--correct"
-                                          : "") +
-                                       (showWrongSelected
-                                          ? " practice__answer--wrong-selected"
-                                          : "") +
-                                       (alreadyAnswered
-                                          ? " practice__answer--locked"
-                                          : "")
-                                    }
+                                    className={className}
                                     onClick={() => onChoose(i)}
-                                    disabled={alreadyAnswered}
+                                    disabled={already}
                                     title={
-                                       alreadyAnswered
-                                          ? "Răspuns blocat în această tentativă"
+                                       already
+                                          ? "Răspuns blocat"
                                           : "Alege răspunsul"
                                     }
                                  >
@@ -608,28 +827,16 @@ export default function Practice() {
                            })}
                         </div>
                      </div>
+
                      <div className="practice__actions">
-                        {showPrev && (
-                           <div
-                              className={`practice__dot ${
-                                 prevSaved && prevSaved.selected != null
-                                    ? prevSaved.correct
-                                       ? "practice__dot--ok"
-                                       : "practice__dot--bad"
-                                    : ""
-                              }`}
-                           >
-                              Ultima dată:{" "}
-                              {prevSaved.correct ? "Corect" : "Greșit"}
-                           </div>
-                        )}
+                        <div />
                         <div className="practice__spacer" />
-                        {!allDecided ? (
+                        {!allAnswered ? (
                            <button
                               type="button"
                               className="practice__secondary"
                               onClick={goNext}
-                              title="Următoarea întrebare"
+                              disabled={idx >= total - 1}
                            >
                               Următorul
                            </button>
@@ -637,9 +844,9 @@ export default function Practice() {
                            <button
                               type="button"
                               className="practice__secondary practice__secondary--primary"
-                              onClick={finalizeAttempt}
+                              onClick={() => finalizeAttempt("user-finish")}
                            >
-                              Finalizează biletul
+                              Finalizează
                            </button>
                         )}
                      </div>

@@ -93,10 +93,10 @@ const messagesRO = {
 
 function IPCalendar() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
+      { link: "/instructor", text: "Acasă", icon: homeIcon },
       { link: "/instructor/today", text: "Azi", icon: todayIcon },
       { link: "/instructor/groups", text: "Grupe", icon: groupsIcon },
-      { link: "/instructor", text: "Acasă", icon: homeIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    const { user } = useContext(UserContext);

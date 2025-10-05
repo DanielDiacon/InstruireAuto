@@ -98,10 +98,10 @@ const messagesRO = {
 
 function IPanel() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
-      { link: "/instructor/today", text: "Azi", icon: todayIcon },
       { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
+      { link: "/instructor/today", text: "Azi", icon: todayIcon },
       { link: "/instructor/groups", text: "Grupe", icon: groupsIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    const { user } = useContext(UserContext);

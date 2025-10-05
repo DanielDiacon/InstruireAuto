@@ -1,22 +1,14 @@
+// src/store/instructorsSlice.js
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import {
    getInstructors,
    createInstructors,
    patchInstructors,
    deleteInstructors,
+   patchInstructorOrder,
 } from "../api/instructorsService";
-import { createUser, updateUser } from "../api/usersService";
 
-/** doar câmpurile permise pe /users */
-const pickUserFields = (d = {}) => ({
-   email: d.email,
-   firstName: d.firstName,
-   lastName: d.lastName,
-   phone: d.phone,
-   privateMessage: d.privateMessage, // aici ținem “Înlocuitor: ...”
-});
-
-/* ===== Thunks de bază ===== */
+/* ===== Thunks de bază (numai instructor) ===== */
 export const fetchInstructors = createAsyncThunk(
    "instructors/fetchInstructors",
    async () => {
@@ -30,6 +22,7 @@ export const fetchInstructors = createAsyncThunk(
 export const addInstructor = createAsyncThunk(
    "instructors/addInstructor",
    async (payload) => {
+      // payload poate conține și `password` la CREATE
       return await createInstructors(payload);
    }
 );
@@ -37,8 +30,25 @@ export const addInstructor = createAsyncThunk(
 export const updateInstructor = createAsyncThunk(
    "instructors/updateInstructor",
    async ({ id, data }) => {
-      await patchInstructors(id, data);
-      return { id, ...data };
+      const updated = await patchInstructors(id, data);
+      return { ...(updated || {}), id, ...data };
+   }
+);
+
+/* ===== Patch doar order (pozițiile coloanei) ===== */
+export const updateInstructorOrder = createAsyncThunk(
+   "instructors/updateOrder",
+   async ({ id, order }, { rejectWithValue }) => {
+      try {
+         const updated = await patchInstructorOrder(id, order);
+         return { id, order: updated?.order ?? order };
+      } catch (err) {
+         return rejectWithValue({
+            id,
+            order,
+            message: err?.message || "Failed to patch order",
+         });
+      }
    }
 );
 
@@ -50,13 +60,13 @@ export const removeInstructor = createAsyncThunk(
    }
 );
 
-/* ===== Add: creează mai întâi user, apoi instructor ===== */
+/* ===== Back-compat: NU ȘTERGE — wrappers pe noul flux (fără user) ===== */
+// Păstrăm numele vechi ca să nu rupem importurile existente.
+
+// create + (opțional) password din payload
 export const addInstructorWithUser = createAsyncThunk(
    "instructors/addWithUser",
    async (payload) => {
-      const user = await createUser(pickUserFields(payload));
-      const userId = user?.id ?? user?.userId ?? user?.data?.id;
-
       const instructor = await createInstructors({
          firstName: payload.firstName,
          lastName: payload.lastName,
@@ -65,28 +75,19 @@ export const addInstructorWithUser = createAsyncThunk(
          sector: payload.sector,
          isActive: payload.isActive,
          instructorsGroupId: payload.instructorsGroupId,
-         userId,
+         password: payload.password, // API-ul tău cere password la POST /instructors
+         // dacă backend-ul ignoră extra chei, nu e problemă:
+         ...(payload.userId ? { userId: payload.userId } : {}),
       });
-
       return instructor;
    }
 );
 
-/* ===== Update: sincronizează user (privateMessage) + instructor ===== */
+// update bazat doar pe instructor; dacă primește password, o trimitem pentru reset
 export const updateInstructorWithUser = createAsyncThunk(
    "instructors/updateWithUser",
-   async ({ id, data }, { getState }) => {
-      const state = getState();
-      const instr = state.instructors.list.find(
-         (i) => String(i.id) === String(id)
-      );
-      const userId = data.userId ?? instr?.userId;
-
-      if (userId) {
-         await updateUser(userId, pickUserFields(data)); // aici ajunge “Înlocuitor: …”
-      }
-
-      await patchInstructors(id, {
+   async ({ id, data }) => {
+      const patch = {
          email: data.email,
          firstName: data.firstName,
          lastName: data.lastName,
@@ -94,10 +95,11 @@ export const updateInstructorWithUser = createAsyncThunk(
          sector: data.sector,
          isActive: data.isActive,
          instructorsGroupId: data.instructorsGroupId,
-         userId,
-      });
-
-      return { id, ...data };
+         ...(data.password ? { password: data.password } : {}),
+         ...(data.userId ? { userId: data.userId } : {}),
+      };
+      const updated = await patchInstructors(id, patch);
+      return { ...(updated || {}), id, ...patch };
    }
 );
 
@@ -127,9 +129,25 @@ const instructorsSlice = createSlice({
             );
             if (idx !== -1) s.list[idx] = { ...s.list[idx], ...a.payload };
          })
+         .addCase(updateInstructorOrder.fulfilled, (s, a) => {
+            const idx = s.list.findIndex(
+               (i) => String(i.id) === String(a.payload.id)
+            );
+            if (idx !== -1) {
+               s.list[idx] = { ...s.list[idx], order: a.payload.order };
+            }
+         })
+         .addCase(updateInstructorOrder.rejected, (s, a) => {
+            s.error =
+               a.payload?.message ||
+               a.error?.message ||
+               "Failed to update instructor order";
+         })
          .addCase(removeInstructor.fulfilled, (s, a) => {
             s.list = s.list.filter((i) => String(i.id) !== String(a.payload));
          })
+
+         /* back-compat handlers */
          .addCase(addInstructorWithUser.fulfilled, (s, a) => {
             s.list.push(a.payload);
          })

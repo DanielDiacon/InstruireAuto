@@ -19,13 +19,13 @@ import { openPopup } from "../Utils/popupStore";
 import { ReactSVG } from "react-svg";
 import refreshIcon from "../../assets/svg/grommet-icons--power-reset.svg";
 import editIcon from "../../assets/svg/material-symbols--edit-outline-sharp.svg";
-import arrowIcon from "../../assets/svg/material-symbols--edit-off-outline-sharp.svg";
 
 import useInertialPan from "./Calendar/useInertialPan";
 import usePinchZoom from "./Calendar/usePinchZoom";
 import useCalendarAutoRefresh from "./Calendar/useCalendarAutoRefresh";
 import DayWindow from "./Calendar/DayWindow";
 import { fetchUsers } from "../../store/usersSlice";
+import { updateInstructorOrder } from "../../store/instructorsSlice";
 
 /* ====== NAV STATE GLOBAL ====== */
 let __DV_NAV_STATE__ = {
@@ -102,13 +102,11 @@ function toRowsOfN(list, n, pad = true) {
 }
 
 /* ====== localStorage cache pt. order ====== */
-// FORCE TOKENS: dacă order e JSON ({"all":{x,y},"days":{YYYYMMDD:{x,y}}})
-// îl convertim în "allx{X}y{Y}|YYYYMMDDx{X}y{Y}|..."
 function coerceOrderToTokens(orderStr) {
    if (!orderStr) return "";
    try {
       const obj = JSON.parse(orderStr);
-      if (!obj || typeof obj !== "object") return orderStr; // deja tokens
+      if (!obj || typeof obj !== "object") return orderStr;
       const tokens = [];
       if (obj.all && obj.all.x && obj.all.y) {
          tokens.push(`allx${obj.all.x}y${obj.all.y}`);
@@ -120,7 +118,7 @@ function coerceOrderToTokens(orderStr) {
       }
       return tokens.join("|");
    } catch {
-      return orderStr; // nu e JSON, lăsăm așa (tokens)
+      return orderStr;
    }
 }
 
@@ -139,6 +137,12 @@ const saveOrderCache = (obj) => {
       localStorage.setItem(ORDER_LS_KEY, JSON.stringify(obj || {}));
    } catch {}
 };
+
+// === requestIdleCallback polyfill ===
+const rIC =
+   typeof window !== "undefined" && window.requestIdleCallback
+      ? window.requestIdleCallback
+      : (cb) => setTimeout(() => cb({ timeRemaining: () => 10 }), 0);
 
 export default function CustomDayView(props = {}) {
    const { onViewStudent } = props;
@@ -202,7 +206,6 @@ export default function CustomDayView(props = {}) {
 
    const getZoom = useCallback(() => zoom, [zoom]);
 
-   // butoane ±: zoom instant & ancorare la cursor/centru
    const zoomAtPoint = useCallback(
       (newZ, clientX) => {
          const el = scrollRef.current;
@@ -215,7 +218,7 @@ export default function CustomDayView(props = {}) {
          const s = z / oldZ;
 
          const rect = el.getBoundingClientRect();
-         const x = (clientX ?? rect.left + el.clientWidth / 2) - rect.left; // coordonate locale
+         const x = (clientX ?? rect.left + el.clientWidth / 2) - rect.left;
          el.scrollLeft = (el.scrollLeft + x) * s - x;
       },
       [zoom, setZoomClamped]
@@ -223,7 +226,7 @@ export default function CustomDayView(props = {}) {
 
    const incZoom = useCallback(
       (e) => {
-         const mult = 1.3; // mai agresiv
+         const mult = 1.3;
          zoomAtPoint(zoom * mult, e?.clientX);
       },
       [zoom, zoomAtPoint]
@@ -238,9 +241,7 @@ export default function CustomDayView(props = {}) {
    );
 
    const resetZoom = useCallback(
-      (e) => {
-         zoomAtPoint(1, e?.clientX);
-      },
+      (e) => zoomAtPoint(1, e?.clientX),
       [zoomAtPoint]
    );
 
@@ -259,27 +260,21 @@ export default function CustomDayView(props = {}) {
       [getZoom, setZoomClamped]
    );
 
-   // Ctrl/⌘/Alt + rotiță: zoom instant & mai rapid
    useEffect(() => {
       const el = scrollRef.current;
       if (!el) return;
 
       const wheelHandler = (e) => {
-         // pinch pe touchpad sau Ctrl/Meta/Alt => zoom pe calendar
          if (e.ctrlKey || e.metaKey || e.altKey) {
-            e.preventDefault(); // IMPORTANT: oprește zoomul paginii
+            e.preventDefault();
             e.stopPropagation();
-
-            // mai hotărât: ~1.35x per "notch" (ajustează baza dacă vrei)
             const factor = Math.pow(1.0035, -e.deltaY);
             const clientX =
                e.clientX ??
                el.getBoundingClientRect().left + el.clientWidth / 2;
-
             zoomAt(factor, clientX);
             return;
          }
-         // altfel e scroll normal -> îl lăsăm
       };
 
       el.addEventListener("wheel", wheelHandler, { passive: false });
@@ -299,7 +294,7 @@ export default function CustomDayView(props = {}) {
 
    // === ORDER ENCODING (compact iN + compat x/y) ==================
    const ORDER_SEP = "|";
-   const COLS = 3; // ține în sync cu maxColsPerGroup
+   const COLS = 3;
 
    const dateKey = (d) => {
       const x = new Date(d);
@@ -334,7 +329,7 @@ export default function CustomDayView(props = {}) {
          .map((t) => t.trim())
          .filter(Boolean);
 
-   const xyToIdx = (x, y) => (y - 1) * COLS + x; // x=1..3, y>=1
+   const xyToIdx = (x, y) => (y - 1) * COLS + x;
    const idxToXY = (i) => {
       const n = Math.max(1, Number(i) || 1);
       const y = Math.floor((n - 1) / COLS) + 1;
@@ -346,12 +341,10 @@ export default function CustomDayView(props = {}) {
       const s = String(tok || "").trim();
       if (!s) return null;
 
-      // === Zi cu index iN: YYYYMMDDiN
       let m = /^(\d{4})(\d{2})(\d{2})i(\d+)$/i.exec(s);
       if (m)
          return { kind: "day", key: `${m[1]}${m[2]}${m[3]}`, i: Number(m[4]) };
 
-      // Zi cu index iN: DDmmmYYYYiN (03feb2025i7)
       m = /^(\d{1,2})([a-z]{3})(\d{4})i(\d+)$/i.exec(s);
       if (m) {
          const dd = String(m[1]).padStart(2, "0");
@@ -359,13 +352,9 @@ export default function CustomDayView(props = {}) {
          return { kind: "day", key: `${m[3]}${mm}${dd}`, i: Number(m[4]) };
       }
 
-      // ALL implicit cu index: alliN
       m = /^(all|def)i(\d+)$/i.exec(s);
       if (m) return { kind: "all", key: "ALL", i: Number(m[2]) };
 
-      // ====== Compatibilitate veche (x/y) ======
-
-      // Zi cu x/y: YYYYMMDDxXyY
       m = /^(\d{4})(\d{2})(\d{2})x(\d+)y(\d+)$/i.exec(s);
       if (m) {
          const x = Number(m[4]),
@@ -373,7 +362,6 @@ export default function CustomDayView(props = {}) {
          return { kind: "day", key: `${m[1]}${m[2]}${m[3]}`, i: xyToIdx(x, y) };
       }
 
-      // Zi cu x/y: DDmmmYYYYxXyY
       m = /^(\d{1,2})([a-z]{3})(\d{4})x(\d+)y(\d+)$/i.exec(s);
       if (m) {
          const dd = String(m[1]).padStart(2, "0");
@@ -383,7 +371,6 @@ export default function CustomDayView(props = {}) {
          return { kind: "day", key: `${m[3]}${mm}${dd}`, i: xyToIdx(x, y) };
       }
 
-      // ALL cu x/y: allxXyY
       m = /^(all|def)x(\d+)y(\d+)$/i.exec(s);
       if (m) {
          const x = Number(m[2]),
@@ -548,6 +535,7 @@ export default function CustomDayView(props = {}) {
          const overlaps = (aStart, aEnd, bStart, bEnd) =>
             Math.max(aStart.getTime(), bStart.getTime()) <
             Math.min(aEnd.getTime(), bEnd.getTime());
+
          return timeMarks
             .map((t) => {
                const start = mkLocal(t);
@@ -625,16 +613,35 @@ export default function CustomDayView(props = {}) {
 
    const instructorMeta = useMemo(() => {
       const dict = new Map();
+
+      // index: instructorId -> sector (din grup)
+      const instSectorIndex = new Map();
+      (instructorsGroups || []).forEach((g) => {
+         const sectorRaw = g?.sector ?? g?.location ?? "";
+         const sectorNorm = String(sectorRaw).trim().toLowerCase();
+         (g?.instructors || []).forEach((ii) => {
+            const idStr = String(ii?.id ?? ii);
+            if (sectorNorm && !instSectorIndex.has(idStr)) {
+               instSectorIndex.set(idStr, sectorNorm);
+            }
+         });
+      });
+
       (instructors || []).forEach((i) => {
          const id = String(i.id);
          const name = `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim();
          const phone = i.phone ?? i.phoneNumber ?? i.mobile ?? i.telefon ?? "";
+
          const plate = instructorPlates.get(id)?.plate ?? "";
          const gearbox =
             instructorPlates.get(id)?.gearbox ??
             i.gearbox ??
             i.transmission ??
             null;
+
+         // sector din instructor sau fallback din grup
+         const sectorRaw = i.sector ?? instSectorIndex.get(id) ?? "";
+         const sectorNorm = String(sectorRaw).trim().toLowerCase();
 
          dict.set(id, {
             name,
@@ -645,10 +652,22 @@ export default function CustomDayView(props = {}) {
             plateDigits: digitsOnly(plate),
             gearbox: gearbox ? String(gearbox).toLowerCase() : null,
             orderRaw: i.order ?? "",
+            sectorNorm,
          });
       });
+
       return dict;
-   }, [instructors, instructorPlates]);
+   }, [instructors, instructorPlates, instructorsGroups]);
+   // instructori per sector selectat
+   const allowedInstBySector = useMemo(() => {
+      const set = new Set();
+      (instructors || []).forEach((i) => {
+         const id = String(i.id);
+         const s = instructorMeta.get(id)?.sectorNorm ?? "";
+         if (s && s === sectorFilterNorm) set.add(id);
+      });
+      return set;
+   }, [instructors, instructorMeta, sectorFilterNorm]);
 
    const getOrderStringForInst = useCallback(
       (instId) => {
@@ -701,17 +720,21 @@ export default function CustomDayView(props = {}) {
          const current = getOrderStringForInst(id);
          const updated = upsertPosGeneric(current, dayDate, x, y);
 
-         console.log("[ORDER local → tokens]", { instructorId: id, updated });
-
+         // update instant în UI (override local + cache)
          setOrderOverrides((prev) => {
             const next = { ...prev, [id]: updated };
             saveOrderCache(next);
             return next;
          });
 
-         props.onChangeInstructorOrder?.(id, updated);
+         // persistă în backend (folosim prop dacă a fost dată, altfel facem noi dispatch)
+         if (props.onChangeInstructorOrder) {
+            props.onChangeInstructorOrder(id, updated);
+         } else {
+            dispatch(updateInstructorOrder({ id, order: updated }));
+         }
       },
-      [getOrderStringForInst, props]
+      [getOrderStringForInst, props.onChangeInstructorOrder, dispatch]
    );
 
    const computeOrderedInstIdsForDay = useCallback(
@@ -870,39 +893,47 @@ export default function CustomDayView(props = {}) {
    // === SEARCH ====================================================
    const [query, setQuery] = useState("");
    const deferredQuery = useDeferredValue(query);
-
    const parseToken = (raw) => {
       const t = String(raw || "").trim();
       if (!t) return null;
 
-      const m = /^([a-z]+)\s*:(.*)$/i.exec(t);
-      const key = m ? m[1].toLowerCase() : null;
+      // ignorăm eventuale "cheie:valoare" și detectăm automat
+      const m = /^([a-zăâîșț]+)\s*:(.*)$/i.exec(t);
       const val = (m ? m[2] : t).trim();
 
       const valNorm = norm(val);
       const valDigits = digitsOnly(val);
       const valPlate = normPlate(val);
+      const hasLetters = /[a-z]/i.test(val);
+      const hasDigits = /\d/.test(val);
 
-      const isTime = /^(\d{1,2})([:\.](\d{0,2}))?$|^\d{1,2}h$/i.test(val);
-      const hhmmPrefix = isTime
-         ? val.includes(":") || val.includes(".")
-            ? val.replace(".", ":").padEnd(5, "0").slice(0, 5)
-            : `${String(val).padStart(2, "0")}:`
-         : null;
+      const hasColonOrDot = /[:\.]/.test(val);
+      const hasSuffixH = /h$/i.test(val);
 
-      const plateLike = /[A-Z]/i.test(valPlate) && /\d/.test(valPlate);
+      // Timp DOAR dacă are ":" sau "." sau "h" (ex: "8:", "8.3", "08:30", "8h")
+      let hhmmPrefix = null;
+      if (hasColonOrDot || hasSuffixH) {
+         // normalizează la prefix HH:MM (acceptă și "8:", "8.3")
+         if (/^\d{1,2}([:\.]\d{0,2})?$|^\d{1,2}h$/i.test(val)) {
+            hhmmPrefix =
+               val.includes(":") || val.includes(".")
+                  ? val.replace(".", ":").padEnd(5, "0").slice(0, 5)
+                  : `${String(val).replace(/[^\d]/g, "").padStart(2, "0")}:`;
+         }
+      }
 
-      let kind;
-      if (key === "time" || key === "ora" || isTime) kind = "time";
-      else if (key === "phone" || key === "tel") kind = "digits";
-      else if (key === "plate" || key === "nr") kind = "plate";
-      else if (key === "group" || key === "grp") kind = "group";
-      else if (key === "inst" || key === "instructor") kind = "inst";
-      else if (key === "student" || key === "stud") kind = "student";
-      else if (key === "note" || key === "not") kind = "note";
-      else if (plateLike) kind = "plate";
-      else if (valDigits.length >= 3) kind = "digits";
-      else kind = "text";
+      let kind = "text";
+      if (hhmmPrefix) {
+         kind = "time";
+      } else if (hasLetters && hasDigits && valPlate.length >= 4) {
+         // litere + cifre => probabil plăcuță
+         kind = "plate";
+      } else if (valDigits.length >= 2) {
+         // 2+ cifre => căutăm subsecvența în numerele de telefon / plăcuțe
+         kind = "digits";
+      } else {
+         kind = "text";
+      }
 
       return {
          raw,
@@ -1002,19 +1033,80 @@ export default function CustomDayView(props = {}) {
             return false;
       }
    };
+   // cache pentru facts (face căutarea mult mai rapidă)
+   const factsCacheRef = useRef(new WeakMap());
+   const getFacts = useCallback(
+      (ev) => {
+         let f = factsCacheRef.current.get(ev);
+         if (f) return f;
+
+         const inst = instructorMeta.get(String(ev.instructorId)) || {};
+         const studentFull = `${ev.studentFirst || ""} ${
+            ev.studentLast || ""
+         }`.trim();
+
+         f = {
+            studentName: norm(studentFull),
+            instName: inst.nameNorm || "",
+            phones: [
+               digitsOnly(ev.studentPhone || ""),
+               inst.phoneDigits || "",
+            ].filter(Boolean),
+            time: hhmm(ev.start),
+            plateNorm: inst.plateNorm || "",
+            plateDigits: inst.plateDigits || "",
+            groupName: norm(ev.groupName || ""),
+            note: norm(ev.privateMessage || ""),
+         };
+         factsCacheRef.current.set(ev, f);
+         return f;
+      },
+      [instructorMeta]
+   );
 
    const eventMatchesAllTokens = useCallback(
       (ev) => {
          if (!anyTokens) return true;
-         const facts = makeFacts(ev);
+         const facts = getFacts(ev);
          return tokens.every((t) => tokenHitsFacts(facts, t));
       },
-      [anyTokens, tokens, instructorMeta]
+      [anyTokens, tokens, getFacts]
    );
 
-   // rezervări -> evenimente
-   const mappedEvents = useMemo(() => {
-      const result = (reservations || []).map((r) => {
+   // === LAZY HYDRATION ===
+   const resByDayRef = useRef(new Map()); // ts -> Reservation[]
+   const evByDayRef = useRef(new Map()); // ts -> Event[]
+   const hydratedDaysRef = useRef(new Set()); // ts
+   const dayCacheRef = useRef(new Map());
+   const [hydrationVer, setHydrationVer] = useState(0);
+
+   useEffect(() => {
+      const next = new Map();
+      for (const r of reservations || []) {
+         const startRaw =
+            r.startTime ??
+            r.start ??
+            r.startedAt ??
+            r.start_at ??
+            r.startDate ??
+            r.start_date ??
+            null;
+         if (!startRaw) continue;
+         const s = new Date(startRaw);
+         const ts = new Date(
+            s.getFullYear(),
+            s.getMonth(),
+            s.getDate()
+         ).getTime();
+         if (!next.has(ts)) next.set(ts, []);
+         next.get(ts).push(r);
+      }
+      resByDayRef.current = next;
+      setHydrationVer((v) => v + 1);
+   }, [reservations]);
+
+   const mapReservationToEvent = useCallback(
+      (r) => {
          const startRaw =
             r.startTime ??
             r.start ??
@@ -1078,13 +1170,13 @@ export default function CustomDayView(props = {}) {
 
          const instIdStr =
             instructorIdRaw != null ? String(instructorIdRaw) : "__unknown";
-         const instMeta = instructorMeta.get(instIdStr);
+         const instMetaLocal = instructorMeta.get(instIdStr);
          const gearboxRaw =
             r.gearbox ??
             r.transmission ??
             r.gearboxType ??
             r.transmissionType ??
-            instMeta?.gearbox ??
+            instMetaLocal?.gearbox ??
             null;
          const gearboxNorm = gearboxRaw
             ? String(gearboxRaw).toLowerCase()
@@ -1106,16 +1198,7 @@ export default function CustomDayView(props = {}) {
                false
          );
 
-         const isAutoCreated = Boolean(
-            (r.createdBy &&
-               String(r.createdBy).toLowerCase().includes("auto")) ||
-               (r.source && String(r.source).toLowerCase().includes("auto")) ||
-               r.isAuto === true ||
-               r.automatic === true
-         );
-         const programareOrigine = isAutoCreated ? "Automată" : "Manuală";
-
-         const instPlateNorm = normPlate(instMeta?.plateRaw ?? "");
+         const instPlateNorm = normPlate(instMetaLocal?.plateRaw ?? "");
 
          return {
             id: r.id ?? genId(),
@@ -1134,126 +1217,54 @@ export default function CustomDayView(props = {}) {
             color: r.color ?? undefined,
             gearboxLabel,
             isConfirmed,
-            programareOrigine,
+            programareOrigine: null,
             instructorPlateNorm: instPlateNorm,
             raw: r,
          };
-      });
-      return result;
-   }, [reservations, date, studentDict, instructorsGroups, instructorMeta]);
+      },
+      [studentDict, instructorsGroups, instructorMeta]
+   );
 
-   // RANGE din toate rezervările
+   // RANGE din rezervări brute
    useEffect(() => {
       const todayTs = startOfDayTs(new Date());
-
-      if (!mappedEvents || mappedEvents.length === 0) {
+      const list = reservations || [];
+      if (!list.length) {
          const PAD = 14;
          setRangeStartTs(todayTs - PAD * DAY_MS);
          setRangeDays(1 + PAD * 2);
          __DV_NAV_STATE__.centerOnDateNextTick = true;
          return;
       }
-
-      let minTs = Infinity;
-      let maxTs = -Infinity;
-      for (const ev of mappedEvents) {
-         const s = startOfDayTs(ev.start);
-         const e = startOfDayTs(ev.end || ev.start);
-         if (s < minTs) minTs = s;
-         if (e > maxTs) maxTs = e;
+      let minTs = Infinity,
+         maxTs = -Infinity;
+      for (const r of list) {
+         const sRaw =
+            r.startTime ??
+            r.start ??
+            r.startedAt ??
+            r.start_at ??
+            r.startDate ??
+            r.start_date ??
+            null;
+         if (!sRaw) continue;
+         const s = new Date(sRaw);
+         const ts = new Date(
+            s.getFullYear(),
+            s.getMonth(),
+            s.getDate()
+         ).getTime();
+         if (ts < minTs) minTs = ts;
+         if (ts > maxTs) maxTs = ts;
       }
       const PAD = 1;
-      minTs = minTs - PAD * DAY_MS;
-      maxTs = maxTs + PAD * DAY_MS;
-
+      minTs -= PAD * DAY_MS;
+      maxTs += PAD * DAY_MS;
       const days = Math.max(1, Math.floor((maxTs - minTs) / DAY_MS) + 1);
       setRangeStartTs(minTs);
       setRangeDays(days);
       __DV_NAV_STATE__.centerOnDateNextTick = true;
-   }, [mappedEvents]);
-
-   const eventsByDay = useMemo(() => {
-      const map = new Map();
-      for (const ev of mappedEvents || []) {
-         const ts = startOfDayTs(ev.start);
-         if (!map.has(ts)) map.set(ts, []);
-         map.get(ts).push(ev);
-      }
-      for (const [_, list] of map) list.sort((a, b) => a.start - b.start);
-      return map;
-   }, [mappedEvents]);
-
-   const dayCacheRef = useRef(new Map());
-   const buildUiDay = useCallback(
-      (day) => {
-         const ts = startOfDayTs(day);
-         const cacheKey = `${ts}|${__DV_NAV_STATE__.queryKey}|${sectorFilter}`;
-         const cache = dayCacheRef.current;
-         if (cache.has(cacheKey)) return cache.get(cacheKey);
-
-         const dayEventsRaw = eventsByDay.get(ts) || [];
-         const filtered = dayEventsRaw.filter((ev) => {
-            const sectorOk = anyTokens ? true : eventMatchesSector(ev);
-            const queryOk = eventMatchesAllTokens(ev);
-            return sectorOk && queryOk;
-         });
-
-         const allInstIds = new Set([
-            ...(instructors || []).map((i) => String(i.id)),
-            ...filtered.map((ev) => String(ev.instructorId ?? "__unknown")),
-         ]);
-
-         const { orderedIds, rows } = computeOrderedInstIdsForDay(
-            allInstIds,
-            day,
-            maxColsPerGroup
-         );
-
-         const instructorsForDay = orderedIds.map((iid) => {
-            const name = instructorMeta.get(iid)?.name || "Necunoscut";
-            const events = filtered
-               .filter((e) => String(e.instructorId ?? "__unknown") === iid)
-               .sort((a, b) => a.start - b.start);
-            return { inst: { id: iid, name }, events };
-         });
-
-         const built = {
-            id: `day_${ts}`,
-            date: day,
-            name: day.toLocaleDateString("ro-RO", {
-               weekday: "long",
-               day: "2-digit",
-               month: "long",
-               year: "numeric",
-            }),
-            instructors: instructorsForDay,
-            rowsCount: rows,
-         };
-
-         cache.set(cacheKey, built);
-         return built;
-      },
-      [
-         eventsByDay,
-         anyTokens,
-         eventMatchesSector,
-         eventMatchesAllTokens,
-         instructorMeta,
-         instructors,
-         computeOrderedInstIdsForDay,
-         maxColsPerGroup,
-         sectorFilter,
-      ]
-   );
-   useEffect(() => {
-      dayCacheRef.current.clear();
-   }, [
-      eventsByDay,
-      __DV_NAV_STATE__.queryKey,
-      sectorFilter,
-      instructorMeta,
-      instructors,
-   ]);
+   }, [reservations]);
 
    // NAV state pentru search
    const anchorTsRef = useRef(null);
@@ -1276,33 +1287,36 @@ export default function CustomDayView(props = {}) {
          if (anyTokens) anchorTsRef.current = startOfDayTs(date);
       }
    }, [sectorFilter, anyTokens, date]);
-
+   // 1) define buildMatchDays mai sus
    const buildMatchDays = useCallback(() => {
       if (!anyTokens) return [];
-      const days = new Set();
-      for (const r of reservations || []) {
-         const startRaw =
-            r.startTime ??
-            r.start ??
-            r.startedAt ??
-            r.start_at ??
-            r.startDate ??
-            r.start_date ??
-            null;
-         const start = startRaw ? new Date(startRaw) : null;
-         if (!start) continue;
-         const ev = (mappedEvents || []).find((x) => x.raw === r) || null;
-         if (!ev) continue;
-         if (!eventMatchesAllTokens(ev)) continue;
-         const d = new Date(
-            start.getFullYear(),
-            start.getMonth(),
-            start.getDate()
-         );
-         days.add(d.getTime());
-      }
-      return Array.from(days).sort((a, b) => a - b);
-   }, [anyTokens, reservations, mappedEvents, eventMatchesAllTokens]);
+      const days = [];
+      evByDayRef.current.forEach((events, ts) => {
+         for (const ev of events) {
+            const iid = String(ev.instructorId ?? "__unknown");
+            if (allowedInstBySector.size && !allowedInstBySector.has(iid))
+               continue;
+            if (eventMatchesAllTokens(ev)) {
+               days.push(ts);
+               break;
+            }
+         }
+      });
+      days.sort((a, b) => a - b);
+      return days;
+   }, [anyTokens, allowedInstBySector, eventMatchesAllTokens, hydrationVer]);
+
+   // 2) abia apoi folosește-l
+   const [matchDaysLocal, setMatchDaysLocal] = useState([]);
+   useEffect(() => {
+      setMatchDaysLocal(anyTokens ? buildMatchDays() : []);
+   }, [anyTokens, buildMatchDays]);
+
+   const visibleDaysForRender = useMemo(() => {
+      if (!anyTokens) return visibleDays;
+      const set = new Set(matchDaysLocal);
+      return visibleDays.filter((d) => set.has(startOfDayTs(d)));
+   }, [visibleDays, anyTokens, matchDaysLocal]);
 
    useEffect(() => {
       const qKey = anyTokens
@@ -1389,10 +1403,9 @@ export default function CustomDayView(props = {}) {
       const tokens = coerceOrderToTokens(orderStr);
       return upsertPosInOrder(tokens, d, x, y);
    }
-   // după upsertPosGeneric(...)
+
    const getAllPositionsForDay = useCallback(
       (dayDate, cols = 3) => {
-         // obținem ordinea vizuală pentru zi
          const allInstIds = new Set(
             (instructors || []).map((i) => String(i.id))
          );
@@ -1402,7 +1415,6 @@ export default function CustomDayView(props = {}) {
             cols
          );
 
-         // mapăm fiecare instructor la poziția lui (x,y)
          const posMap = new Map();
          orderedIds.forEach((iid, idx) => {
             const specific = getPosGeneric(getOrderStringForInst(iid), dayDate);
@@ -1429,7 +1441,6 @@ export default function CustomDayView(props = {}) {
       (dayDate, fromX, toX, cols = 3) => {
          if (fromX === toX) return;
          const { posMap } = getAllPositionsForDay(dayDate, cols);
-
          posMap.forEach((pos, iid) => {
             if (pos.x === fromX) {
                setInstructorOrderForDate(iid, dayDate, toX, pos.y);
@@ -1448,7 +1459,7 @@ export default function CustomDayView(props = {}) {
       shouldIgnore: isInteractiveTarget,
    });
 
-   // Vars CSS de bază (fără *zoom; scalăm vizual cu transform)
+   // Vars CSS de bază
    const layoutVars = {
       "--event-h": EVENT_H,
       "--hours-col-w": HOURS_COL_W,
@@ -1460,7 +1471,7 @@ export default function CustomDayView(props = {}) {
 
    const px = (v) => parseFloat(String(v || 0));
 
-   // Base metrics (fără zoom)
+   // Base metrics
    const baseMetrics = useMemo(() => {
       const baseColw = px(COL_W);
       const baseSlot = px(SLOT_H);
@@ -1475,11 +1486,10 @@ export default function CustomDayView(props = {}) {
    }, [COL_W, SLOT_H, maxColsPerGroup, visibleSlotCount]);
 
    const contentW = useMemo(
-      () => visibleDays.length * (baseMetrics.dayWidth + DAY_GAP),
-      [visibleDays.length, baseMetrics.dayWidth]
+      () => visibleDaysForRender.length * (baseMetrics.dayWidth + DAY_GAP),
+      [visibleDaysForRender.length, baseMetrics.dayWidth]
    );
 
-   // activăm pinch pe touch (folosește scale)
    usePinchZoom({
       scrollRef,
       getZoom,
@@ -1487,7 +1497,6 @@ export default function CustomDayView(props = {}) {
       getContentWidthPx: () => contentW * zoom,
    });
 
-   // centrează pe zi (folosind lățimea *scalată*)
    const centerDayHorizontally = useCallback(
       (targetDate) => {
          const el = scrollRef.current;
@@ -1508,9 +1517,8 @@ export default function CustomDayView(props = {}) {
    );
 
    useEffect(() => {
-      if (!visibleDays.length) return;
+      if (!visibleDaysForRender.length) return;
       if (!__DV_NAV_STATE__.centerOnDateNextTick) return;
-
       const id = requestAnimationFrame(() => {
          centerDayHorizontally(date);
          __DV_NAV_STATE__.centerOnDateNextTick = false;
@@ -1518,13 +1526,15 @@ export default function CustomDayView(props = {}) {
          if (el) el.dispatchEvent(new Event("scroll"));
       });
       return () => cancelAnimationFrame(id);
-   }, [date, visibleDays.length, centerDayHorizontally]);
+   }, [date, visibleDaysForRender.length, centerDayHorizontally]);
 
    // Window strip
    const DAY_W_BASE = baseMetrics.dayWidth + DAY_GAP;
    const DAY_W_SCALED = DAY_W_BASE * zoom;
-   const VIRTUALIZE = props.virtualize ?? false;
-   const WINDOW = VIRTUALIZE ? 9 : visibleDays.length;
+   //const VIRTUALIZE = props.virtualize ?? true; // implici?t ON
+   //const WINDOW = VIRTUALIZE ? 9 : visibleDays.length;
+   const VIRTUALIZE = props.virtualize ?? false; // implicit ON
+   const WINDOW = visibleDays.length;
    const HALF = Math.floor(WINDOW / 2);
 
    const [winStart, setWinStart] = useState(0);
@@ -1583,6 +1593,99 @@ export default function CustomDayView(props = {}) {
       el.scrollLeft = prevScrollRef.current;
    }, [VIRTUALIZE, winStart]);
 
+   useEffect(() => {
+      const map = new Map();
+      const hydrated = new Set();
+      const src = resByDayRef.current; // umplut în efectul de mai sus (grupare pe zile)
+      src.forEach((raws, ts) => {
+         const events = raws
+            .map(mapReservationToEvent)
+            .sort((a, b) => a.start - b.start);
+         map.set(ts, events);
+         hydrated.add(ts);
+      });
+      evByDayRef.current = map;
+      hydratedDaysRef.current = hydrated;
+      setHydrationVer((v) => v + 1);
+   }, [mapReservationToEvent, reservations]);
+
+   // buildUiDay
+   const buildUiDay = useCallback(
+      (day) => {
+         const ts = startOfDayTs(day);
+         const cacheKey = `${ts}|${__DV_NAV_STATE__.queryKey}|${sectorFilter}|v${hydrationVer}`;
+         const cache = dayCacheRef.current;
+         if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+         // evenimentele brute pentru zi
+         const dayEventsRaw = evByDayRef.current.get(ts) || [];
+
+         // 1) filtrăm pe sector (prin instructor) + 2) filtrăm pe căutare (dacă există)
+         const filtered = dayEventsRaw.filter((ev) => {
+            const iid = String(ev.instructorId ?? "__unknown");
+            const sectorOk = allowedInstBySector.size
+               ? allowedInstBySector.has(iid)
+               : true;
+            if (!sectorOk) return false;
+            return anyTokens ? eventMatchesAllTokens(ev) : true;
+         });
+
+         // instructorii pe care îi arătăm în zi:
+         // - la căutare: doar cei care au măcar un eveniment potrivit
+         // - fără căutare: toți instructorii din sectorul curent
+         const allInstIds = anyTokens
+            ? new Set(
+                 filtered.map((ev) => String(ev.instructorId ?? "__unknown"))
+              )
+            : allowedInstBySector;
+
+         const { orderedIds, rows } = computeOrderedInstIdsForDay(
+            allInstIds,
+            day,
+            maxColsPerGroup
+         );
+
+         const instructorsForDay = orderedIds.map((iid) => {
+            const name = instructorMeta.get(iid)?.name || "Necunoscut";
+            const events = filtered
+               .filter((e) => String(e.instructorId ?? "__unknown") === iid)
+               .sort((a, b) => a.start - b.start);
+            return { inst: { id: iid, name }, events };
+         });
+
+         const built = {
+            id: `day_${ts}`,
+            date: day,
+            hydrated: true,
+            name: day.toLocaleDateString("ro-RO", {
+               weekday: "long",
+               day: "2-digit",
+               month: "long",
+               year: "numeric",
+            }),
+            instructors: instructorsForDay,
+            rowsCount: rows,
+         };
+
+         cache.set(cacheKey, built);
+         return built;
+      },
+      [
+         anyTokens,
+         allowedInstBySector,
+         eventMatchesAllTokens,
+         instructorMeta,
+         computeOrderedInstIdsForDay,
+         maxColsPerGroup,
+         sectorFilter,
+         hydrationVer,
+      ]
+   );
+
+   useEffect(() => {
+      dayCacheRef.current.clear();
+   }, [__DV_NAV_STATE__.queryKey, sectorFilter, instructorMeta, instructors]);
+
    // handlers open/create
    const openReservationOnDbl = useCallback(
       (reservationId) => {
@@ -1623,7 +1726,7 @@ export default function CustomDayView(props = {}) {
                         checked={sectorFilter === "Botanica"}
                         onChange={(e) => setSectorFilter(e.target.value)}
                      />
-                     Botanica
+                     Bot.
                   </label>
                   <label>
                      <input
@@ -1633,7 +1736,7 @@ export default function CustomDayView(props = {}) {
                         checked={sectorFilter === "Ciocana"}
                         onChange={(e) => setSectorFilter(e.target.value)}
                      />
-                     Ciocana
+                     Cio.
                   </label>
                </div>
             </div>
@@ -1658,9 +1761,6 @@ export default function CustomDayView(props = {}) {
                >
                   −
                </button>
-               {/* <button className="dv-btn dv-btn--ghost" onClick={(e)=>resetZoom(e)} title="Reset zoom">
-            {Math.round(zoom * 100)}%
-          </button> */}
                <button
                   className="dv-btn"
                   onClick={(e) => incZoom(e)}
@@ -1698,14 +1798,14 @@ export default function CustomDayView(props = {}) {
                className="dayview__track"
                style={{
                   position: "relative",
-                  width: contentW * zoom, // wrapperul se lărgește pentru scroll corect
+                  width: contentW * zoom,
                   height: "100%",
                }}
             >
                <div
                   className="dv-scale"
                   style={{
-                     width: contentW, // dimensiuni de bază (fără zoom)
+                     width: contentW,
                      height: "100%",
                      transform: `scale(${zoom})`,
                      transformOrigin: "0 0",
@@ -1713,7 +1813,7 @@ export default function CustomDayView(props = {}) {
                   }}
                >
                   <DayWindow
-                     visibleDays={visibleDays}
+                     visibleDays={visibleDaysForRender}
                      winStart={winStart}
                      WINDOW={WINDOW}
                      DAY_W={DAY_W_BASE}
@@ -1721,7 +1821,7 @@ export default function CustomDayView(props = {}) {
                      virtualize={VIRTUALIZE}
                      maxColsPerGroup={maxColsPerGroup}
                      COL_W={COL_W}
-                     metrics={baseMetrics} // ← METRICI DE BAZĂ
+                     metrics={baseMetrics}
                      ROW_GAP={ROW_GAP}
                      toRowsOfN={toRowsOfN}
                      buildUiDay={buildUiDay}
@@ -1809,7 +1909,6 @@ CustomDayView.navigate = (date, action) => {
 };
 
 CustomDayView.title = (date, { localizer } = {}) => {
-   // ex: "sâm., 27 sept."
    if (localizer && typeof localizer.format === "function") {
       return localizer.format(date, "ddd, DD MMM");
    }

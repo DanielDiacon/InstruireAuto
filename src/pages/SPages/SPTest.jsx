@@ -21,6 +21,7 @@ import addIcon from "../../assets/svg/mdi--calendar-plus-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import testIcon from "../../assets/svg/material-symbols--book-outline.svg";
 import examIcon from "../../assets/svg/mdi--book-clock-outline.svg";
+import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import { openPopup } from "../../components/Utils/popupStore";
 import Practice from "../../components/SPanel/Practice";
 import PracticeStatistics from "../../components/SPanel/PracticeStatistics";
@@ -95,11 +96,11 @@ const messagesRO = {
 
 function SPTest() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
-      { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student", text: "Acasă", icon: homeIcon },
-      { link: "/student", text: "Testare", icon: testIcon },
-      { link: "/student", text: "Examen", icon: examIcon },
+      { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
+      { popup: "sAddProg", text: "Programare", icon: addIcon },
+      { link: "/student/exam", text: "Examen", icon: examIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    return (

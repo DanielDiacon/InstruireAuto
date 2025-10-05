@@ -1,20 +1,33 @@
 // src/components/Popups/StudentInfoPopup.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { fetchUserReservations } from "../../store/reservationsSlice";
 import { updateStudent, removeStudent } from "../../store/studentsSlice";
+import { fetchUsers } from "../../store/usersSlice";
+import { updateUser } from "../../api/usersService";
+import {
+   getExamHistoryForStudentIdAll,
+   getExamHistoryForUser, 
+   downloadExamPdf,
+} from "../../api/examService";
+
+import { ReactSVG } from "react-svg";
 import phoneIcon from "../../assets/svg/phone.svg";
 import successIcon from "../../assets/svg/success.svg";
 import cancelIcon from "../../assets/svg/cancel.svg";
 import clockIcon from "../../assets/svg/clock.svg";
 import emailIcon from "../../assets/svg/email.svg";
-import { ReactSVG } from "react-svg";
+import downloadIcon from "../../assets/svg/download.svg";
+
 import {
    closePopup as closePopupStore,
    openSubPopup,
-   // closeSubPopup,
 } from "../Utils/popupStore";
-import { getExamHistoryForUser } from "../../api/examService";
+
+const normEmail = (s) =>
+   String(s || "")
+      .trim()
+      .toLowerCase();
 
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
@@ -24,6 +37,8 @@ export default function StudentInfoPopup({ student, onClose }) {
       loading,
       error,
    } = useSelector((state) => state.reservations);
+
+   const users = useSelector((s) => s.users?.list || []);
 
    const [isEditing, setIsEditing] = useState(false);
    const [isEditingNote, setIsEditingNote] = useState(false);
@@ -38,32 +53,59 @@ export default function StudentInfoPopup({ student, onClose }) {
 
    const [noteValue, setNoteValue] = useState(student?.privateMessage || "");
    const [liveStudent, setLiveStudent] = useState(student || {});
-
-   // confirmare pentru ștergere
    const [confirmDelete, setConfirmDelete] = useState(false);
 
-   // tab-uri: programări / încercări examen
    const [tab, setTab] = useState("reservations"); // 'reservations' | 'attempts'
-
-   // încercări examen
    const [attempts, setAttempts] = useState([]);
    const [attemptsLoading, setAttemptsLoading] = useState(false);
    const [attemptsError, setAttemptsError] = useState("");
 
+   const [downloadingId, setDownloadingId] = useState(null);
+   const [downloadError, setDownloadError] = useState("");
+
    const safeClose = () => {
-      if (typeof onClose === "function") {
-         onClose();
-      } else {
+      if (typeof onClose === "function") onClose();
+      else {
          try {
             closePopupStore();
-         } catch (_) {}
+         } catch {}
       }
    };
 
-   useEffect(() => {
-      if (student?.id) {
-         dispatch(fetchUserReservations(student.id));
+   const targetUser = useMemo(() => {
+      if (!student) return null;
+      if (student.userId) {
+         const u = users.find((x) => String(x.id) === String(student.userId));
+         if (u) return u;
       }
+      const e = normEmail(student.email);
+      if (e) {
+         const u = users.find((x) => normEmail(x.email) === e);
+         if (u) return u;
+      }
+      return null;
+   }, [student, users]);
+
+   const targetUserId = targetUser?.id || student?.userId || null;
+
+   const fmtRO = useMemo(
+      () =>
+         new Intl.DateTimeFormat("ro-MD", {
+            timeZone: "Europe/Chisinau",
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+         }),
+      []
+   );
+
+   useEffect(() => {
+      dispatch(fetchUsers());
+
       setFormData({
          firstName: student?.firstName || "",
          lastName: student?.lastName || "",
@@ -74,8 +116,20 @@ export default function StudentInfoPopup({ student, onClose }) {
       setNoteValue(student?.privateMessage || "");
       setLiveStudent(student || {});
       setConfirmDelete(false);
-      setTab("reservations"); // la schimbarea studentului, revino pe Programări
+      setTab("reservations");
    }, [student, dispatch]);
+
+   useEffect(() => {
+      if (targetUserId) {
+         dispatch(fetchUserReservations(String(targetUserId)));
+      }
+   }, [dispatch, targetUserId]);
+
+   useEffect(() => {
+      if (!isEditing && targetUser?.email) {
+         setFormData((prev) => ({ ...prev, email: targetUser.email }));
+      }
+   }, [targetUser?.email, isEditing]);
 
    const handleEditToggle = () => setIsEditing(!isEditing);
 
@@ -90,6 +144,17 @@ export default function StudentInfoPopup({ student, onClose }) {
          const updated = await dispatch(
             updateStudent({ id: student.id, data: dataToSend })
          ).unwrap();
+
+         const newEmail = normEmail(dataToSend.email);
+         const oldEmail = normEmail(targetUser?.email || "");
+         if (targetUserId && newEmail && newEmail !== oldEmail) {
+            try {
+               await updateUser(targetUserId, { email: dataToSend.email });
+               dispatch(fetchUsers());
+            } catch (e) {
+               console.warn("Update user email failed:", e);
+            }
+         }
 
          setLiveStudent(updated);
          setFormData(updated);
@@ -108,11 +173,12 @@ export default function StudentInfoPopup({ student, onClose }) {
                data: { privateMessage: noteValue },
             })
          ).unwrap();
-         setLiveStudent((prev) => ({ ...prev, privateMessage: noteValue }));
-         setIsEditingNote(false);
-      } catch (err) {
+      } catch {
          alert("Nu s-a putut salva notița!");
+         return;
       }
+      setLiveStudent((prev) => ({ ...prev, privateMessage: noteValue }));
+      setIsEditingNote(false);
    };
 
    const handleDelete = async () => {
@@ -128,7 +194,30 @@ export default function StudentInfoPopup({ student, onClose }) {
       }
    };
 
-   // normalizator pentru încercări
+   const getReservationUserId = (r) => {
+      const v =
+         r?.userId ??
+         r?.user_id ??
+         r?.studentId ??
+         r?.student?.id ??
+         r?.user?.id ??
+         r?.student?.userId ??
+         null;
+      return v != null ? String(v) : null;
+   };
+
+   const getAttemptUserId = (it) => {
+      const v =
+         it?.userId ??
+         it?.user_id ??
+         it?.user?.id ??
+         it?.studentId ??
+         it?.student?.id ??
+         it?.student?.userId ??
+         null;
+      return v != null ? String(v) : null;
+   };
+
    const normalizeAttempt = (it) => ({
       id:
          it.id ??
@@ -147,54 +236,99 @@ export default function StudentInfoPopup({ student, onClose }) {
          (typeof it.percentage === "number" && it.percentage) ||
          (typeof it.score === "number" && it.score) ||
          null,
+      attemptUserId: getAttemptUserId(it),
    });
 
-   // fetch încercări când intri pe tab
+   const myReservations = useMemo(() => {
+      if (!targetUserId) return [];
+      const uid = String(targetUserId);
+      return reservations.filter((r) => getReservationUserId(r) === uid);
+   }, [reservations, targetUserId]);
+
    useEffect(() => {
       let cancelled = false;
-      if (tab !== "attempts" || !student?.id) return;
+      if (tab !== "attempts" || !targetUserId) return;
 
       (async () => {
          setAttemptsLoading(true);
          setAttemptsError("");
          try {
-            const pageSize = 50;
-            let page = 1;
-            const all = [];
-            for (;;) {
-               const batch = await getExamHistoryForUser(student.id, {
-                  page,
-                  limit: pageSize,
+            // 1) încercăm endpointul nou: /exams/history/student/{studentId}
+            const all = await getExamHistoryForStudentIdAll(
+               String(targetUserId),
+               {
+                  pageSize: 50,
+                  maxPages: 10,
+               }
+            );
+
+            const uid = String(targetUserId);
+            const normalized = all
+               .map(normalizeAttempt)
+               // Dacă serverul nu pune userId în fiecare item, nu mai filtrăm strict.
+               .filter((a) => !a.attemptUserId || a.attemptUserId === uid)
+               .sort((a, b) => {
+                  const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
+                  const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
+                  return tb - ta;
                });
-               const items = Array.isArray(batch)
-                  ? batch
-                  : batch?.data || batch?.items || batch?.results || [];
-               if (!items?.length) break;
-               all.push(...items);
-
-               const totalPages =
-                  batch?.pagination?.totalPages ??
-                  batch?.meta?.totalPages ??
-                  batch?.totalPages ??
-                  null;
-
-               if (totalPages ? page >= totalPages : items.length < pageSize)
-                  break;
-               page += 1;
-            }
-
-            const normalized = all.map(normalizeAttempt).sort((a, b) => {
-               const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
-               const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
-               return tb - ta;
-            });
 
             if (!cancelled) setAttempts(normalized);
          } catch (e) {
-            if (!cancelled)
-               setAttemptsError(
-                  e?.message || "Nu am putut încărca încercările."
-               );
+            // 2) fallback: vechiul "smart" (în caz de 404/405 sau backend vechi)
+            try {
+               const pageSize = 50;
+               let page = 1;
+               const all = [];
+               for (;;) {
+                  const batch = await getExamHistoryForUser(
+                     String(targetUserId),
+                     { page, limit: pageSize }
+                  );
+                  const items = Array.isArray(batch)
+                     ? batch
+                     : batch?.data || batch?.items || batch?.results || [];
+                  if (!items?.length) break;
+                  all.push(...items);
+
+                  const totalPages =
+                     batch?.pagination?.totalPages ??
+                     batch?.meta?.totalPages ??
+                     batch?.totalPages ??
+                     null;
+
+                  if (totalPages ? page >= totalPages : items.length < pageSize)
+                     break;
+                  page += 1;
+               }
+
+               const uid = String(targetUserId);
+               const normalized = all
+                  .map(normalizeAttempt)
+                  .filter((a) => a.attemptUserId === uid)
+                  .sort((a, b) => {
+                     const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
+                     const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
+                     return tb - ta;
+                  });
+
+               if (!cancelled) setAttempts(normalized);
+            } catch (e2) {
+               if (!cancelled) {
+                  const msg = String(
+                     e?.message ||
+                        e2?.message ||
+                        "Nu am putut încărca încercările."
+                  );
+                  const friendly =
+                     msg === "AUTH_401"
+                        ? "Nu ești autentificat (401)."
+                        : msg === "AUTH_403"
+                        ? "Doar Manager/Admin pot vedea încercările acestui student (403)."
+                        : msg;
+                  setAttemptsError(friendly);
+               }
+            }
          } finally {
             if (!cancelled) setAttemptsLoading(false);
          }
@@ -203,9 +337,24 @@ export default function StudentInfoPopup({ student, onClose }) {
       return () => {
          cancelled = true;
       };
-   }, [tab, student?.id]);
+   }, [tab, targetUserId]);
 
    if (!student) return null;
+
+   const displayEmail = targetUser?.email || liveStudent.email || "–";
+
+   const handleDownloadPdf = async (examId) => {
+      setDownloadError("");
+      setDownloadingId(examId);
+      try {
+         await downloadExamPdf(examId /*, `rezultat-exam-${examId}.pdf` */);
+      } catch (e) {
+         console.error("Download PDF failed:", e);
+         setDownloadError(e?.message || "Descărcarea a eșuat.");
+      } finally {
+         setDownloadingId(null);
+      }
+   };
 
    return (
       <div className="students-info">
@@ -316,7 +465,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                         src={emailIcon}
                         className="students-info__icon"
                      />
-                     {liveStudent.email}
+                     {displayEmail}
                   </div>
                   <div className="students-info__field">
                      <ReactSVG
@@ -374,7 +523,6 @@ export default function StudentInfoPopup({ student, onClose }) {
                </>
             )}
 
-            {/* TABS */}
             <div className="students-info__tabs">
                <button
                   className={
@@ -396,7 +544,6 @@ export default function StudentInfoPopup({ student, onClose }) {
                </button>
             </div>
 
-            {/* TAB: PROGRAMĂRI */}
             {tab === "reservations" && (
                <>
                   {loading && (
@@ -405,16 +552,16 @@ export default function StudentInfoPopup({ student, onClose }) {
                      </p>
                   )}
                   {error && <p className="students-info__error">{error}</p>}
-                  {!loading && reservations.length === 0 && (
+                  {!loading && myReservations.length === 0 && (
                      <p className="students-info__empty">
                         Nu există programări.
                      </p>
                   )}
 
-                  {!loading && reservations.length > 0 && (
+                  {!loading && myReservations.length > 0 && (
                      <div className="students-info__list-wrapper">
                         <div className="students-info__list">
-                           {reservations.map((res, index) => {
+                           {myReservations.map((res, index) => {
                               const status = res.status || "pending";
                               return (
                                  <div
@@ -438,9 +585,11 @@ export default function StudentInfoPopup({ student, onClose }) {
                                              : "fără instructor"}
                                        </p>
                                        <span>
-                                          {new Date(
-                                             res.startTime
-                                          ).toLocaleString()}
+                                          {res.startTime
+                                             ? fmtRO.format(
+                                                  new Date(res.startTime)
+                                               )
+                                             : "—"}
                                        </span>
                                     </div>
                                     <div className="students-info__item-right">
@@ -472,12 +621,16 @@ export default function StudentInfoPopup({ student, onClose }) {
                </>
             )}
 
-            {/* TAB: ÎNCERCĂRI EXAMEN */}
             {tab === "attempts" && (
                <div className="students-info__attempts">
                   {attemptsLoading && <p>Se încarcă încercările…</p>}
                   {attemptsError && (
                      <p className="students-info__error">{attemptsError}</p>
+                  )}
+                  {downloadError && (
+                     <p className="students-info__error">
+                        Descărcare: {downloadError}
+                     </p>
                   )}
 
                   {!attemptsLoading &&
@@ -496,15 +649,18 @@ export default function StudentInfoPopup({ student, onClose }) {
                               const status = (
                                  a.status || "UNKNOWN"
                               ).toLowerCase();
+
                               const started = a.startedAt
-                                 ? new Date(a.startedAt).toLocaleString()
+                                 ? fmtRO.format(new Date(a.startedAt))
                                  : "–";
                               const finished = a.finishedAt
-                                 ? new Date(a.finishedAt).toLocaleString()
+                                 ? fmtRO.format(new Date(a.finishedAt))
                                  : null;
+
                               const lineLeft = finished
                                  ? `${started} → ${finished}`
-                                 : `${started}`;
+                                 : started;
+
                               const scoreText =
                                  a.scorePct != null
                                     ? `${Math.round(a.scorePct)}%`
@@ -514,10 +670,16 @@ export default function StudentInfoPopup({ student, onClose }) {
                                     ? `${a.correct} corecte / ${a.wrong} greșite`
                                     : "–";
 
+                              const eid = a.examId ?? a.id;
+
                               return (
                                  <div
                                     key={a.id}
                                     className={`students-info__attempt students-info__attempt--${status}`}
+                                    style={{
+                                       position: "relative",
+                                       paddingRight: 44,
+                                    }}
                                  >
                                     <div>
                                        <div className="students-info__attempt-status">
@@ -527,12 +689,47 @@ export default function StudentInfoPopup({ student, onClose }) {
                                           {lineLeft}
                                        </div>
                                     </div>
+
                                     <div className="students-info__attempt-score">
                                        <div>{scoreText}</div>
                                        {a.total != null && (
                                           <div>{a.total} întrebări</div>
                                        )}
                                     </div>
+
+                                    {eid && (
+                                       <button
+                                          type="button"
+                                          onClick={(e) => {
+                                             e.stopPropagation();
+                                             handleDownloadPdf(eid);
+                                          }}
+                                          className="students-info__btn-icon students-info__attempt-download"
+                                          title={
+                                             downloadingId === eid
+                                                ? "Se descarcă..."
+                                                : "Descarcă rezultatul (PDF)"
+                                          }
+                                          disabled={downloadingId === eid}
+                                          style={{
+                                             position: "absolute",
+                                             top: 6,
+                                             right: 6,
+                                             padding: 6,
+                                             opacity: 0.9,
+                                          }}
+                                       >
+                                          <ReactSVG
+                                             src={downloadIcon}
+                                             className={
+                                                "students-info__item-icon download" +
+                                                (downloadingId === eid
+                                                   ? " is-loading"
+                                                   : "")
+                                             }
+                                          />
+                                       </button>
+                                    )}
                                  </div>
                               );
                            })}

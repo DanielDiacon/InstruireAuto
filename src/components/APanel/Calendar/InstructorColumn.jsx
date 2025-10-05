@@ -102,7 +102,7 @@ function InstructorColumn({
    const displayInstPhone = isPad ? "" : (meta?.phoneDigits || "").trim();
    const eventsToRender = isPad ? [] : events;
 
-   // ===== Înlocuitor în user.privateMessage (doar în mod normal) =====
+   // ===== Înlocuitor în user.privateMessage =====
    const currentPrivateMsg = (userForInstr?.privateMessage ?? "").toString();
    const existingSubstName = useMemo(() => {
       const m = /Înlocuitor:\s*([^\n]+)/i.exec(currentPrivateMsg || "");
@@ -194,6 +194,9 @@ function InstructorColumn({
       if (!canRight) return;
       swapColumnsForDay?.(day.date, curPos.x, curPos.x + 1, 3);
    };
+
+   // Skeleton dacă ziua nu e încă hidratată
+   const isHydrating = day && day.hydrated === false;
 
    return (
       <div
@@ -312,36 +315,30 @@ function InstructorColumn({
                   ↓
                </button>
                <span />
-
-               <button
-                  type="button"
-                  title="Schimbă cu toată coloana din stânga"
-                  disabled={!canLeft}
-                  onClick={swapColLeft}
-               >
-                  «
-               </button>
-               <span />
-               <button
-                  type="button"
-                  title="Schimbă cu toată coloana din dreapta"
-                  disabled={!canRight}
-                  onClick={swapColRight}
-               >
-                  »
-               </button>
-               <span />
             </div>
          )}
 
          {!editMode &&
             slots.map((slot, sIdx) => {
+               const cellKey = `${day.id}-${inst?.id}-${slot.start.getTime()}`;
+               if (isHydrating || isPad) {
+                  return (
+                     <div
+                        key={cellKey}
+                        className="dv-slot"
+                        style={{ gridRow: sIdx + 2, height: "var(--event-h)" }}
+                     >
+                        <div className="dv-skel-bar" />
+                     </div>
+                  );
+               }
+
                const ev = eventsToRender.find(
                   (e) =>
                      Math.max(e.start.getTime(), slot.start.getTime()) <
                      Math.min(e.end.getTime(), slot.end.getTime())
                );
-               const cellKey = `${day.id}-${inst?.id}-${slot.start.getTime()}`;
+
                return (
                   <div
                      key={cellKey}
@@ -360,9 +357,8 @@ function InstructorColumn({
                         <EmptySlot
                            slot={slot}
                            onCreate={() =>
-                              !isPad &&
                               !editMode &&
-                              onCreateFromEmpty({
+                              onCreateFromEmpty?.({
                                  start: slot.start,
                                  end: slot.end,
                                  instructorId: String(inst.id),

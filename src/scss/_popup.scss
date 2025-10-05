@@ -29,25 +29,25 @@
       transition: opacity 0.4s ease;
       pointer-events: none;
    }
-   &::after {
-      content: "";
-      position: absolute;
-      top: -80%;
-      left: -80%;
-      width: 150%;
-      height: 150%;
-      background: radial-gradient(
-         circle,
-         rgba(243, 252, 121, 0.1),
-         transparent
-      );
-      filter: blur(40px);
-      pointer-events: none;
-      z-index: 0;
-   }
+   //&::after {
+   //   content: "";
+   //   position: absolute;
+   //   top: -80%;
+   //   left: -80%;
+   //   width: 150%;
+   //   height: 150%;
+   //   background: radial-gradient(
+   //      circle,
+   //      rgba(243, 252, 121, 0.1),
+   //      transparent
+   //   );
+   //   filter: blur(40px);
+   //   pointer-events: none;
+   //   z-index: 0;
+   //}
    &__inner {
       z-index: 10000;
-      flex: 1 1 0; 
+      flex: 1 1 0;
       overflow: auto;
       &::-webkit-scrollbar {
          display: none !important;
@@ -144,22 +144,22 @@ body.popup-open .popup-panel__overlay {
       transition: opacity 0.4s ease;
       pointer-events: none;
    }
-   &::after {
-      content: "";
-      position: absolute;
-      top: -80%;
-      left: -80%;
-      width: 150%;
-      height: 150%;
-      background: radial-gradient(
-         circle,
-         rgba(243, 252, 121, 0.1),
-         transparent
-      );
-      filter: blur(40px);
-      pointer-events: none;
-      z-index: 0;
-   }
+   //&::after {
+   //   content: "";
+   //   position: absolute;
+   //   top: -80%;
+   //   left: -80%;
+   //   width: 150%;
+   //   height: 150%;
+   //   background: radial-gradient(
+   //      circle,
+   //      rgba(243, 252, 121, 0.1),
+   //      transparent
+   //   );
+   //   filter: blur(40px);
+   //   pointer-events: none;
+   //   z-index: 0;
+   //}
    &__inner {
       z-index: 10010;
       flex: 1;
@@ -248,6 +248,9 @@ body.subpopup-open .subpopup-panel__overlay {
       }
       &__header {
          margin-bottom: 20px;
+      }
+      &__overlay {
+         backdrop-filter: none;
       }
    }
 }

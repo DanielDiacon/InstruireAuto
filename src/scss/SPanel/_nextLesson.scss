@@ -7,29 +7,29 @@
    justify-content: flex-end;
    position: relative;
    overflow: hidden;
-   &::after {
-      content: "";
-      position: absolute;
-      bottom: -180%;
-      left: 50%; // ← în loc de right
-      transform: translateX(-50%);
-      width: 300%;
-      height: 300%;
-      background: radial-gradient(
-         circle,
-         transparent,
-         transparent,
-         rgba(243, 252, 121, 0.2),
-         transparent,
-         transparent,
-         transparent,
-         transparent
-      );
-
-      filter: blur(10px);
-      pointer-events: none;
-      z-index: 0;
-   }
+//   &::after {
+//      content: "";
+//      position: absolute;
+//      bottom: -180%;
+//      left: 50%; // ← în loc de right
+//      transform: translateX(-50%);
+//      width: 300%;
+//      height: 300%;
+//      background: radial-gradient(
+//         circle,
+//         transparent,
+//         transparent,
+//         rgba(243, 252, 121, 0.2),
+//         transparent,
+//         transparent,
+//         transparent,
+//         transparent
+//      );
+//
+//      filter: blur(10px);
+//      pointer-events: none;
+//      z-index: 0;
+//   }
    p {
       color: var(--white-s);
    }

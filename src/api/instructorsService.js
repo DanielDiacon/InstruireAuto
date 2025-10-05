@@ -19,6 +19,13 @@ export async function patchInstructors(id, payload) {
    return res.json();
 }
 
+export async function patchInstructorOrder(id, order) {
+   // trimitem doar order; backend-ul tău ar trebui să accepte PATCH parțial
+   const res = await apiClientService.patch(`/instructors/${id}`, { order });
+   if (!res.ok) throw new Error(await res.text());
+   return res.json(); // așteptăm să întoarcă instructorul actualizat sau cel puțin { order }
+}
+
 export async function deleteInstructors(id) {
    const res = await apiClientService.delete(`/instructors/${id}`);
    if (!res.ok) throw new Error(await res.text());

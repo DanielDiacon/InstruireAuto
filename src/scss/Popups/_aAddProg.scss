@@ -66,13 +66,7 @@
       &__item {
       }
    }
-   .saddprogramari__info {
-      color: var(--white-p);
-      text-align: center;
-      b {
-         font-weight: 500;
-      }
-   }
+
    .picker__row {
       button {
          width: 100%;
@@ -80,5 +74,13 @@
    }
    .picker__list {
       //background: #000;
+   }
+}
+.saddprogramari__info {
+   color: var(--white-p);
+   font-weight: 400;
+   text-align: center;
+   b {
+      font-weight: 400;
    }
 }

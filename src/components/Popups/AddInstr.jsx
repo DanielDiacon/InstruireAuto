@@ -1,3 +1,4 @@
+// src/components/Instructors/AddInstr.jsx
 import React, { useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { ReactSVG } from "react-svg";
@@ -10,7 +11,8 @@ import {
 } from "../../store/instructorsSlice";
 
 import { fetchCars, addCar, updateCar, removeCar } from "../../store/carsSlice";
-import { getUserById, updateUser, createUser } from "../../api/usersService";
+import { fetchUsers } from "../../store/usersSlice";
+import { updateUser } from "../../api/usersService";
 
 import editIcon from "../../assets/svg/edit.svg";
 import AlertPills from "../Utils/AlertPills";
@@ -20,10 +22,22 @@ const clean = (o = {}) =>
    Object.fromEntries(
       Object.entries(o).filter(([_, v]) => v !== undefined && v !== "")
    );
+
 const norm = (s) =>
    String(s || "")
       .replace(/\s+/g, "")
       .toLowerCase();
+const normPlate = (s) =>
+   String(s || "")
+      .replace(/\s+/g, "")
+      .replace(/-/g, "")
+      .toUpperCase();
+const normEmail = (s) =>
+   String(s || "")
+      .trim()
+      .toLowerCase();
+const normPhone = (s) => String(s || "").replace(/\D/g, ""); // doar cifre
+
 const toApiGearbox = (v) =>
    String(v || "")
       .toLowerCase()
@@ -31,10 +45,34 @@ const toApiGearbox = (v) =>
       ? "automat"
       : "manual";
 
+// extrage mesaje lizibile din erorile backend
+function extractServerErrors(err) {
+   const out = [];
+   const raw = err?.message || err?.toString?.() || "";
+   try {
+      const json = JSON.parse(raw);
+      if (Array.isArray(json?.message)) out.push(...json.message.map(String));
+      else if (json?.message) out.push(String(json.message));
+      else out.push(raw);
+   } catch {
+      out.push(raw);
+   }
+   return out
+      .map((m) =>
+         m
+            .replace(/^\s*Error:\s*/i, "")
+            .replace(/Bad Request/gi, "")
+            .replace(/Conflict/gi, "")
+            .trim()
+      )
+      .filter(Boolean);
+}
+
 function AddInstr() {
    const dispatch = useDispatch();
    const { list: instructors, status } = useSelector((s) => s.instructors);
    const cars = useSelector((s) => s.cars.list || []);
+   const users = useSelector((s) => s.users?.list || []);
 
    const [activeTab, setActiveTab] = useState("list");
    const [search, setSearch] = useState("");
@@ -42,16 +80,28 @@ function AddInstr() {
 
    const [pillMessages, setPillMessages] = useState([]);
    const pushPill = (text, type = "error") =>
-      setPillMessages((prev) => [...prev, { id: Date.now(), text, type }]);
+      setPillMessages((prev) => [
+         ...prev,
+         { id: Date.now() + Math.random(), text, type },
+      ]);
+   const setPills = (arr) =>
+      setPillMessages(
+         (arr || []).map((text) => ({
+            id: Date.now() + Math.random(),
+            text,
+            type: "error",
+         }))
+      );
+   const clearPills = () => setPillMessages([]);
    const popPill = () => setPillMessages((prev) => prev.slice(0, -1));
 
-   // === creare (fără confirmare parolă) ===
+   // === creare instructor (fără user) ===
    const [newInstr, setNewInstr] = useState({
       firstName: "",
       lastName: "",
       phone: "",
       email: "",
-      password: "",
+      password: "", // <— PAROLĂ OBLIGATORIE la CREATE
       sector: "Botanica",
       isActive: true,
       instructorsGroupId: null,
@@ -71,14 +121,13 @@ function AddInstr() {
       gearbox: "manual",
    });
 
-   const [usersById, setUsersById] = useState({});
+   const getUserByIdFromStore = (id) =>
+      users.find((u) => String(u.id) === String(id)) || null;
 
-   const pickName = (inst = {}, u = {}) => ({
-      firstName: inst.firstName || u.firstName || "",
-      lastName: inst.lastName || u.lastName || "",
-   });
-   const getUserData = (inst) =>
-      inst?.userId ? usersById[inst.userId] || {} : {};
+   const mergedEmail = (inst) => {
+      const u = inst?.userId ? getUserByIdFromStore(inst.userId) : null;
+      return u?.email || inst.email || "";
+   };
 
    function highlightText(text, query) {
       if (text === undefined || text === null) return "";
@@ -101,56 +150,20 @@ function AddInstr() {
          dispatch(fetchInstructors());
          dispatch(fetchCars());
       }
+      // încărcăm toți userii pentru mapare userId → email
+      dispatch(fetchUsers());
    }, [status, dispatch]);
-
-   useEffect(() => {
-      let cancelled = false;
-      (async () => {
-         const ids = Array.from(
-            new Set(instructors.map((i) => i.userId).filter(Boolean))
-         );
-         if (!ids.length) {
-            setUsersById({});
-            return;
-         }
-         try {
-            const entries = await Promise.all(
-               ids.map(async (id) => {
-                  try {
-                     const u = await getUserById(id);
-                     return [
-                        id,
-                        {
-                           email: u?.email || "",
-                           firstName: u?.firstName || "",
-                           lastName: u?.lastName || "",
-                           phone: u?.phone || "",
-                        },
-                     ];
-                  } catch {
-                     return [
-                        id,
-                        { email: "", firstName: "", lastName: "", phone: "" },
-                     ];
-                  }
-               })
-            );
-            if (!cancelled) setUsersById(Object.fromEntries(entries));
-         } catch {}
-      })();
-      return () => void (cancelled = true);
-   }, [instructors]);
 
    const filteredInstructors = instructors.filter((inst) => {
       const q = (search || "").toLowerCase();
-      const u = getUserData(inst);
-      const { firstName, lastName } = pickName(inst, u);
-      const fullName = `${firstName} ${lastName}`.toLowerCase();
-      const email = (inst.email || u.email || "").toLowerCase();
-      const phone = (inst.phone || u.phone || "").toLowerCase();
-      const sector = (inst.sector || "").toLowerCase();
+      const fullName = `${inst.firstName || ""} ${inst.lastName || ""}`
+         .trim()
+         .toLowerCase();
+      const email = mergedEmail(inst).toLowerCase(); // doar emailul din user dacă există
+      const phone = String(inst.phone || "").toLowerCase(); // telefonul rămâne din instructor
+      const sector = String(inst.sector || "").toLowerCase();
       const car = cars.find((c) => String(c.instructorId) === String(inst.id));
-      const plate = (car?.plateNumber || "").toLowerCase();
+      const plate = String(car?.plateNumber || "").toLowerCase();
       return (
          fullName.includes(q) ||
          email.includes(q) ||
@@ -162,7 +175,7 @@ function AddInstr() {
 
    /* car helpers */
    const upsertCarForInstructor = async ({ instructorId, plate, gearbox }) => {
-      const normalizedPlate = norm(plate);
+      const normalizedPlate = normPlate(plate);
       const existing = cars.find(
          (c) => String(c.instructorId) === String(instructorId)
       );
@@ -171,94 +184,172 @@ function AddInstr() {
          if (existing) await dispatch(removeCar(existing.id)).unwrap();
          return;
       }
+
+      const payload = {
+         plateNumber: (plate || "").trim(),
+         instructorId,
+         gearbox: toApiGearbox(gearbox),
+      };
+
       if (existing) {
-         if (
-            norm(existing.plateNumber) !== normalizedPlate ||
-            toApiGearbox(existing.gearbox) !== toApiGearbox(gearbox)
-         ) {
-            await dispatch(
-               updateCar({
-                  id: existing.id,
-                  plateNumber: plate.trim(),
-                  instructorId,
-                  gearbox: toApiGearbox(gearbox),
-               })
-            ).unwrap();
+         const changed =
+            normPlate(existing.plateNumber) !== normalizedPlate ||
+            toApiGearbox(existing.gearbox) !== payload.gearbox;
+
+         if (changed) {
+            await dispatch(updateCar({ id: existing.id, ...payload })).unwrap();
          }
       } else {
-         await dispatch(
-            addCar({
-               plateNumber: plate.trim(),
-               instructorId,
-               gearbox: toApiGearbox(gearbox),
-            })
-         ).unwrap();
+         await dispatch(addCar(payload)).unwrap();
       }
    };
 
-   /* ADD (fără confirmare) */
+   /* ===== VALIDĂRI UNICITATE (client) ===== */
+   const collectCreateConflicts = () => {
+      const errs = [];
+
+      // phone unic în instructori
+      const p = normPhone(newInstr.phone);
+      if (p) {
+         const dupPhone = instructors.some((i) => normPhone(i.phone) === p);
+         if (dupPhone) errs.push("Telefonul este deja folosit.");
+      }
+
+      // email unic în useri SAU în instructori fără user
+      const e = normEmail(newInstr.email);
+      if (e) {
+         const dupInUsers = users.some((u) => normEmail(u.email) === e);
+         const dupInInstructors = instructors.some(
+            (i) => !i.userId && normEmail(i.email) === e
+         );
+         if (dupInUsers || dupInInstructors)
+            errs.push("Emailul este deja folosit.");
+      }
+
+      const plate = normPlate(newInstr.carPlate);
+      if (plate) {
+         const dupPlate = cars.some((c) => normPlate(c.plateNumber) === plate);
+         if (dupPlate) errs.push("Numărul de înmatriculare este deja folosit.");
+      }
+
+      return errs;
+   };
+
+   const collectEditConflicts = (id, uid) => {
+      const errs = [];
+
+      // phone — rămâne în instructori
+      const p = normPhone(editInstr.phone);
+      if (p) {
+         const dupPhone = instructors.some(
+            (i) => String(i.id) !== String(id) && normPhone(i.phone) === p
+         );
+         if (dupPhone)
+            errs.push("Telefonul este deja folosit de alt instructor.");
+      }
+
+      // email — unic în useri (exceptând propriul userId) + în instructori fără user
+      const e = normEmail(editInstr.email);
+      if (e) {
+         const dupInUsers = users.some(
+            (u) => String(u.id) !== String(uid) && normEmail(u.email) === e
+         );
+         const dupInInstructors = instructors.some(
+            (i) =>
+               String(i.id) !== String(id) &&
+               !i.userId &&
+               normEmail(i.email) === e
+         );
+         if (dupInUsers || dupInInstructors)
+            errs.push("Emailul este deja folosit de alt utilizator.");
+      }
+
+      // car plate
+      const plate = normPlate(editInstr.carPlate);
+      if (plate) {
+         const dupPlate = cars.some((c) => {
+            const belongsToOther = String(c.instructorId) !== String(id);
+            return belongsToOther && normPlate(c.plateNumber) === plate;
+         });
+         if (dupPlate) errs.push("Numărul de înmatriculare este deja folosit.");
+      }
+
+      return errs;
+   };
+
+   /* ADD (doar instructor + mașină opțional) */
    const handleAdd = async () => {
       setSaving(true);
+      clearPills();
 
+      // validări minime
+      const localErrors = [];
+      if (!newInstr.firstName?.trim() || !newInstr.lastName?.trim()) {
+         localErrors.push("Completează Prenume și Nume.");
+      }
       if (!newInstr.password || newInstr.password.length < 6) {
-         pushPill("Parola trebuie să aibă minim 6 caractere.");
+         localErrors.push("Parola trebuie să aibă minim 6 caractere.");
+      }
+      // unicități
+      localErrors.push(...collectCreateConflicts());
+
+      if (localErrors.length) {
+         setPills(localErrors);
          setSaving(false);
          return;
       }
 
-      try {
-         // user cu rol INSTRUCTOR
-         const userPayload = clean({
-            email: newInstr.email?.trim(),
-            password: newInstr.password,
-            firstName: newInstr.firstName?.trim(),
-            lastName: newInstr.lastName?.trim(),
-            phone: newInstr.phone?.trim(),
-            role: "INSTRUCTOR",
-            roles: ["INSTRUCTOR"],
-            roleName: "INSTRUCTOR",
-         });
-         const createdUser = await createUser(userPayload);
-         const userId =
-            createdUser?.id ?? createdUser?.userId ?? createdUser?.data?.id;
+      let createdId = null;
 
-         // instructor
+      try {
          const instrPayload = clean({
             firstName: newInstr.firstName?.trim(),
             lastName: newInstr.lastName?.trim(),
             phone: newInstr.phone?.trim(),
-            email: newInstr.email?.trim(),
+            email: newInstr.email?.trim(), // la creare rămâne pe instructor (nu avem userId)
             sector: newInstr.sector,
             isActive: newInstr.isActive,
             instructorsGroupId: newInstr.instructorsGroupId,
-            userId,
+            password: newInstr.password, // <— AICI TRIMIT PAROLA
          });
+
          const createdInstr = await dispatch(
             addInstructor(instrPayload)
          ).unwrap();
-         const instructorId = createdInstr?.id ?? createdInstr?.data?.id;
+         createdId = createdInstr?.id ?? createdInstr?.data?.id;
 
-         // car
-         if (instructorId) {
-            await upsertCarForInstructor({
-               instructorId,
-               plate: newInstr.carPlate || "",
-               gearbox: newInstr.gearbox || "manual",
-            });
+         // mașina (opțional) — rollback dacă pică
+         if (createdId) {
+            try {
+               await upsertCarForInstructor({
+                  instructorId: createdId,
+                  plate: newInstr.carPlate || "",
+                  gearbox: newInstr.gearbox || "manual",
+               });
+            } catch (carErr) {
+               try {
+                  await dispatch(removeInstructor(createdId)).unwrap();
+               } catch {}
+               const msgs = extractServerErrors(carErr);
+               setPills(msgs.length ? msgs : ["Eroare la salvarea mașinii."]);
+               setSaving(false);
+               return;
+            }
          }
 
          await Promise.all([
             dispatch(fetchInstructors()),
             dispatch(fetchCars()),
+            dispatch(fetchUsers()),
          ]);
 
-         setPillMessages([]);
+         clearPills();
          setNewInstr({
             firstName: "",
             lastName: "",
             phone: "",
             email: "",
-            password: "",
+            password: "", // reset
             sector: "Botanica",
             isActive: true,
             instructorsGroupId: null,
@@ -267,47 +358,51 @@ function AddInstr() {
          });
          setActiveTab("list");
       } catch (e) {
-         console.error("[ADD] Eroare (user/instructor):", e);
-         pushPill("Eroare la creare utilizator/instructor.");
+         const msgs = extractServerErrors(e);
+         setPills(
+            msgs.length
+               ? msgs
+               : [
+                    "Eroare la creare instructor (verifică email/telefon/parolă).",
+                 ]
+         );
       } finally {
          setSaving(false);
       }
    };
 
-   /* EDIT */
+   /* EDIT (update user.email dacă avem userId) — blocăm salvarea pe conflicte */
    const handleSaveEdit = async () => {
       setSaving(true);
+      clearPills();
+
+      const conflicts = collectEditConflicts(editingId, editingUserId);
+      if (conflicts.length) {
+         setPills(conflicts);
+         setSaving(false);
+         return;
+      }
+
       try {
-         const uid =
-            editingUserId ??
-            instructors.find((i) => i.id === editingId)?.userId ??
-            null;
+         // 1) dacă instructorul are userId, actualizăm emailul în /users/:id
+         if (editingUserId) {
+            await updateUser(editingUserId, { email: editInstr.email?.trim() });
+         }
 
-         const userPayload = clean({
-            email: editInstr.email?.trim(),
-            phone: editInstr.phone?.trim(),
-         });
-
+         // 2) patch instructor (fără/ cu email — îl păstrăm sincronizat)
          const instrPayload = clean({
             firstName: editInstr.firstName?.trim(),
             lastName: editInstr.lastName?.trim(),
-            email: editInstr.email?.trim(),
             phone: editInstr.phone?.trim(),
+            email: editInstr.email?.trim(), // păstrăm aliniat cu user.email
             sector: editInstr.sector,
          });
-
-         if (uid) {
-            const userRes = await updateUser(uid, userPayload);
-            setUsersById((prev) => ({
-               ...prev,
-               [uid]: { ...(prev[uid] || {}), ...userRes },
-            }));
-         }
 
          await dispatch(
             updateInstructor({ id: editingId, data: instrPayload })
          ).unwrap();
 
+         // 3) maşina
          await upsertCarForInstructor({
             instructorId: editingId,
             plate: editInstr.carPlate || "",
@@ -317,15 +412,18 @@ function AddInstr() {
          await Promise.all([
             dispatch(fetchInstructors()),
             dispatch(fetchCars()),
+            dispatch(fetchUsers()),
          ]);
       } catch (e) {
-         console.error("[EDIT] Eroare (user/instructor):", e);
-         pushPill("Eroare la salvarea modificărilor.");
-      } finally {
+         const msgs = extractServerErrors(e);
+         setPills(msgs.length ? msgs : ["Eroare la salvarea modificărilor."]);
          setSaving(false);
-         setEditingId(null);
-         setEditingUserId(null);
+         return;
       }
+
+      setSaving(false);
+      setEditingId(null);
+      setEditingUserId(null);
    };
 
    const handleDelete = async (id) => {
@@ -382,14 +480,10 @@ function AddInstr() {
                   <div className="instructors-popup__list-wrapper">
                      <ul className="instructors-popup__list-items">
                         {filteredInstructors.map((inst) => {
-                           const u = getUserData(inst);
-                           const { firstName, lastName } = pickName(inst, u);
-                           const mergedPhone = inst.phone || u.phone || "";
-                           const mergedEmail = inst.email || u.email || "";
                            const car = cars.find(
                               (c) => String(c.instructorId) === String(inst.id)
                            );
-
+                           const email = mergedEmail(inst);
                            return (
                               <li
                                  key={inst.id}
@@ -412,7 +506,7 @@ function AddInstr() {
                                                 }))
                                              }
                                              placeholder={
-                                                firstName || "Prenume"
+                                                inst.firstName || "Prenume"
                                              }
                                              autoComplete="given-name"
                                           />
@@ -426,12 +520,14 @@ function AddInstr() {
                                                    lastName: e.target.value,
                                                 }))
                                              }
-                                             placeholder={lastName || "Nume"}
+                                             placeholder={
+                                                inst.lastName || "Nume"
+                                             }
                                              autoComplete="family-name"
                                           />
                                        </div>
 
-                                       {/* rând 2: Telefon + Email */}
+                                       {/* rând 2: Telefon + Nr. mașină */}
                                        <div className="instructors-popup__form-row">
                                           <input
                                              type="tel"
@@ -444,9 +540,7 @@ function AddInstr() {
                                                 }))
                                              }
                                              placeholder={
-                                                (mergedPhone &&
-                                                   `Ex: ${mergedPhone}`) ||
-                                                "Telefon"
+                                                inst.phone || "Telefon"
                                              }
                                              inputMode="tel"
                                              autoComplete="tel"
@@ -464,6 +558,8 @@ function AddInstr() {
                                              }
                                           />
                                        </div>
+
+                                       {/* rând 3: Email (din user dacă există) */}
                                        <input
                                           type="email"
                                           className="instructors-popup__input"
@@ -474,11 +570,11 @@ function AddInstr() {
                                                 email: e.target.value,
                                              }))
                                           }
-                                          placeholder={mergedEmail || "Email"}
+                                          placeholder={email || "Email"}
                                           autoComplete="email"
                                        />
 
-                                       {/* rând 4: Sector (radio) + Cutie (radio) */}
+                                       {/* rând 4: Sector + Cutie */}
                                        <div className="instructors-popup__form-row">
                                           <div
                                              className={`instructors-popup__radio-wrapper grow ${
@@ -490,7 +586,7 @@ function AddInstr() {
                                              <label>
                                                 <input
                                                    type="radio"
-                                                   name={`sector-${editingId}`}
+                                                   name={`sector-${inst.id}`}
                                                    value="Botanica"
                                                    checked={
                                                       editInstr.sector ===
@@ -508,7 +604,7 @@ function AddInstr() {
                                              <label>
                                                 <input
                                                    type="radio"
-                                                   name={`sector-${editingId}`}
+                                                   name={`sector-${inst.id}`}
                                                    value="Ciocana"
                                                    checked={
                                                       editInstr.sector ===
@@ -535,7 +631,7 @@ function AddInstr() {
                                              <label>
                                                 <input
                                                    type="radio"
-                                                   name={`gearbox-${editingId}`}
+                                                   name={`gearbox-${inst.id}`}
                                                    value="manual"
                                                    checked={
                                                       editInstr.gearbox ===
@@ -554,7 +650,7 @@ function AddInstr() {
                                              <label>
                                                 <input
                                                    type="radio"
-                                                   name={`gearbox-${editingId}`}
+                                                   name={`gearbox-${inst.id}`}
                                                    value="automat"
                                                    checked={
                                                       editInstr.gearbox ===
@@ -609,23 +705,21 @@ function AddInstr() {
                                        <div className="instructors-popup__item-left">
                                           <h3>
                                              {highlightText(
-                                                `${firstName} ${lastName}`,
+                                                `${inst.firstName || ""} ${
+                                                   inst.lastName || ""
+                                                }`,
                                                 search
                                              )}
                                           </h3>
                                           <p>
                                              {highlightText(
-                                                inst.phone ||
-                                                   getUserData(inst).phone ||
-                                                   "",
+                                                inst.phone || "",
                                                 search
                                              )}
                                           </p>
                                           <p>
                                              {highlightText(
-                                                inst.email ||
-                                                   getUserData(inst).email ||
-                                                   "",
+                                                mergedEmail(inst),
                                                 search
                                              )}
                                           </p>
@@ -637,11 +731,27 @@ function AddInstr() {
                                           </p>
                                           <p>
                                              {highlightText(
+                                                inst.gearbox || "",
+                                                search
+                                             )}
+                                          </p>
+                                          <p>
+                                             {highlightText(
                                                 cars.find(
                                                    (c) =>
                                                       String(c.instructorId) ===
                                                       String(inst.id)
                                                 )?.plateNumber || "—",
+                                                search
+                                             )}
+                                          </p>
+                                            <p>
+                                             {highlightText(
+                                                cars.find(
+                                                   (c) =>
+                                                      String(c.instructorId) ===
+                                                      String(inst.id)
+                                                )?.gearbox || "—",
                                                 search
                                              )}
                                           </p>
@@ -659,16 +769,11 @@ function AddInstr() {
                                                    String(c.instructorId) ===
                                                    String(inst.id)
                                              );
-                                             const u = getUserData(inst);
-                                             const { firstName, lastName } =
-                                                pickName(inst, u);
                                              setEditInstr({
-                                                firstName,
-                                                lastName,
-                                                phone:
-                                                   inst.phone || u.phone || "",
-                                                email:
-                                                   inst.email || u.email || "",
+                                                firstName: inst.firstName || "",
+                                                lastName: inst.lastName || "",
+                                                phone: inst.phone || "",
+                                                email: mergedEmail(inst) || "",
                                                 sector:
                                                    inst.sector || "Botanica",
                                                 carPlate:
@@ -691,16 +796,7 @@ function AddInstr() {
 
                {activeTab === "add" && (
                   <div className="instructors-popup__add">
-                     {/* Pills vizibile în add */}
-                     <div
-                        className="instructors-popup__pill"
-                        style={{ marginBottom: 8 }}
-                     >
-                        <AlertPills
-                           messages={pillMessages}
-                           onDismiss={popPill}
-                        />
-                     </div>
+                     <AlertPills messages={pillMessages} onDismiss={popPill} />
 
                      {/* rând 1: Prenume + Nume */}
                      <div className="instructors-popup__form-row">
@@ -737,7 +833,7 @@ function AddInstr() {
                         <input
                            type="email"
                            className="instructors-popup__input"
-                           placeholder="Email (user)"
+                           placeholder="Email"
                            value={newInstr.email}
                            onChange={(e) =>
                               setNewInstr({
@@ -763,12 +859,12 @@ function AddInstr() {
                         />
                      </div>
 
-                     {/* rând 3: Parolă + Nr. mașină */}
+                     {/* rând 3: Parolă (obligatoriu) + Nr. mașină (opțional) */}
                      <div className="instructors-popup__form-row">
                         <input
                            type="password"
                            className="instructors-popup__input"
-                           placeholder="Parolă (user)"
+                           placeholder="Parolă (obligatoriu)"
                            value={newInstr.password}
                            onChange={(e) =>
                               setNewInstr({

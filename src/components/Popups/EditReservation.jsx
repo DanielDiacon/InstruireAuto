@@ -69,6 +69,18 @@ const COLOR_LABEL = {
    purple: "Mov",
    pink: "Roz",
 };
+/* — etichete semnificație pentru tooltip / mobil — */
+const COLOR_HINTS = {
+  yellow: "Loc Liber",
+  green: "Achitată",
+  red: "Grafic Închis",
+  orange: "Achitare Card În Oficiu",
+  indigo: "Lecție Stabilită De Instructor",
+  pink: "Grafic Pentru Ciocana/Buiucani",
+  blue: "Instructorul Care Activează Pe Ciocana",
+  purple: "Instructorul Care Activează Pe Botanica",
+};
+
 const normalizeColor = (val) => {
    if (!val) return "";
    if (typeof val !== "string") return String(val);
@@ -427,6 +439,16 @@ export default function ReservationEditPopup({ reservationId }) {
    // Notiță (privată) + Culoare token
    const [privateMessage, setPrivateMessage] = useState("");
    const [colorToken, setColorToken] = useState("--blue");
+
+   /* ——— Tooltip mobil / focus accesibilitate ——— */
+   const [colorHoverText, setColorHoverText] = useState("");
+   const colorHoverTimerRef = useRef(null);
+   useEffect(() => {
+      return () => {
+         if (colorHoverTimerRef.current)
+            clearTimeout(colorHoverTimerRef.current);
+      };
+   }, []);
 
    useEffect(() => {
       if (!existing || didHydrate.current) return;
@@ -1291,7 +1313,7 @@ export default function ReservationEditPopup({ reservationId }) {
             </div>
          </div>
 
-         {/* Selector culoare */}
+         {/* Selector culoare (tooltip nativ + fallback mobil) */}
          <div
             className="saddprogramari__color-grid"
             role="radiogroup"
@@ -1300,23 +1322,50 @@ export default function ReservationEditPopup({ reservationId }) {
             {COLOR_TOKENS.map((token) => {
                const suffix = token.replace(/^--/, "");
                const active = colorToken === token;
+               const name = COLOR_LABEL[suffix] || suffix;
+               const tip = COLOR_HINTS[suffix]
+                  ? `${COLOR_HINTS[suffix]}`
+                  : name;
+
                return (
                   <button
                      key={token}
                      type="button"
                      role="radio"
                      aria-checked={active}
-                     aria-label={suffix}
+                     aria-label={tip}
+                     title={tip} // ✅ tooltip nativ desktop
                      className={[
                         "saddprogramari__color-swatch",
                         `saddprogramari__color-swatch--${suffix}`,
                         active ? "is-active" : "",
                      ].join(" ")}
                      onClick={() => setColorToken(token)}
+                     onFocus={() => setColorHoverText(tip)} // accesibilitate tastatură
+                     onBlur={() => setColorHoverText("")}
+                     onTouchStart={() => {
+                        // ✅ fallback pe mobil: afișăm eticheta 1.6s
+                        setColorHoverText(tip);
+                        if (colorHoverTimerRef.current)
+                           clearTimeout(colorHoverTimerRef.current);
+                        colorHoverTimerRef.current = setTimeout(() => {
+                           setColorHoverText("");
+                        }, 1600);
+                     }}
                   />
                );
             })}
          </div>
+
+         {/* eticheta scurtă sub grid (apare pe mobil / focus) */}
+         {colorHoverText ? (
+            <div
+               className="saddprogramari__color-hint"
+               style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}
+            >
+               {colorHoverText}
+            </div>
+         ) : null}
 
          {/* Butoane */}
          <div

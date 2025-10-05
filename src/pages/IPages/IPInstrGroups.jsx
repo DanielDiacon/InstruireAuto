@@ -15,10 +15,10 @@ import InstrGroups from "../../components/IPanel/InstrGroups";
 
 function IPInstrGroups() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
-      { link: "/instructor/today", text: "Azi", icon: todayIcon },
-      { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/instructor", text: "Acasă", icon: homeIcon },
+      { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
+      { link: "/instructor/today", text: "Azi", icon: todayIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    return (

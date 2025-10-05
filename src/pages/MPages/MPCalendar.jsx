@@ -29,6 +29,7 @@ import ACalendarView from "../../components/APanel/ACalendar";
 
 import { UserContext } from "../../UserContext";
 import SubPopup from "../../components/Utils/SubPopup";
+import PreloadAppData from "../../components/Utils/PreloadAppData";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -73,7 +74,7 @@ function MPCalendar() {
    }, []);
 
    useEffect(() => {
-      if (!user || user.role !== "ADMIN") return;
+      //if (!user || user.role !== "ADMIN") return;
 
       // fetch Redux instructors
       dispatch(fetchInstructors());

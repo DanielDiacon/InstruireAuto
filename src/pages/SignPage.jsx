@@ -44,21 +44,20 @@ function SignPage() {
       confirmPassword: "",
    });
 
+   // ✅ bifa Termeni & Condiții
+   const [registerAccepted, setRegisterAccepted] = useState(false);
+
    const [loginForm, setLoginForm] = useState({
       email: "",
       password: "",
    });
-   // sus, lângă celelalte state:
-   // state existent
-   const [messages, setMessages] = useState([]);
 
-   // helper: păstrăm DOAR ultimul mesaj
+   // pills
+   const [messages, setMessages] = useState([]);
    const addMessage = (text, type = "info") => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       setMessages([{ id, type, text }]);
    };
-
-   // nou: clear fără id (e unul singur)
    const clearMessages = () => setMessages([]);
 
    const redirectByRole = (role) => {
@@ -89,6 +88,7 @@ function SignPage() {
          document.title = "Instruire Auto | Resetare Parolă";
       }
    }, [mode]);
+
    const handleRequestReset = async (e) => {
       e.preventDefault();
       const email = resetEmail.trim();
@@ -97,7 +97,7 @@ function SignPage() {
          return;
       }
 
-      addMessage("Se trimite cererea de resetare…", "info"); // 👈 vizibil ACUM
+      addMessage("Se trimite cererea de resetare…", "info");
       setResetLoading(true);
       try {
          await requestPasswordReset(email);
@@ -105,8 +105,8 @@ function SignPage() {
             "Dacă adresa există în sistem, vei primi un email cu instrucțiuni.",
             "success"
          );
-         setMode("sign-in"); // 👈 acum schimbăm tab-ul,
-         setResetEmail(""); // dar NU mai curățăm messages pe [mode]
+         setMode("sign-in");
+         setResetEmail("");
       } catch (err) {
          addMessage(
             err?.message ||
@@ -157,6 +157,15 @@ function SignPage() {
    const handleRegisterSubmit = async (e) => {
       e.preventDefault();
 
+      // ✅ blocare dacă nu e bifă
+      if (!registerAccepted) {
+         addMessage(
+            "Trebuie să accepți Termenii și Condițiile pentru a te înregistra.",
+            "warning"
+         );
+         return;
+      }
+
       if (registerForm.password !== registerForm.confirmPassword) {
          addMessage("Parolele nu coincid.", "error");
          return;
@@ -169,6 +178,7 @@ function SignPage() {
          );
          return;
       }
+
       const payload = {
          email: registerForm.email,
          password: registerForm.password,
@@ -177,7 +187,6 @@ function SignPage() {
          groupToken: registerForm.groupToken,
          phone: "+373" + registerForm.phone, // send with country code
       };
-      //console.log(payload);
 
       try {
          const response = await signup(payload);
@@ -256,12 +265,7 @@ function SignPage() {
                   <div
                      className={`sign__switcher ${
                         mode === "sign-in" ? "" : "active"
-                     }
-                     
-                     
-                     
-                           ${mode === "reset-password" ? "reset" : ""}
-                     `}
+                     } ${mode === "reset-password" ? "reset" : ""}`}
                   >
                      {/* AUTENTIFICARE */}
                      <div
@@ -326,7 +330,6 @@ function SignPage() {
                            </div>
 
                            <div className="sign__row-btns">
-                              {/* Buton pentru a comuta la resetare parola */}
                               <button
                                  type="button"
                                  className="sign__link-button"
@@ -387,6 +390,7 @@ function SignPage() {
                                  required
                               />
                            </div>
+
                            <div className="sign__form-row">
                               <input
                                  type="text"
@@ -415,6 +419,7 @@ function SignPage() {
                                  />
                               </div>
                            </div>
+
                            <div className="sign__form-row">
                               <div className="sign__input-wrapper">
                                  <input
@@ -491,7 +496,57 @@ function SignPage() {
                               </div>
                            </div>
 
-                           <button type="submit" className="sign__button">
+                           {/* ✅ Termeni și Condiții (obligatoriu) */}
+                           <div
+                              className="sign__terms"
+                           >
+                              <label
+                                 className="sign__checkbox"
+                               
+                              >
+                                 <input
+                                    type="checkbox"
+                                    checked={registerAccepted}
+                                    onChange={(e) =>
+                                       setRegisterAccepted(e.target.checked)
+                                    }
+                                    required
+                                    aria-required="true"
+                                    aria-label="Accept termenii și condițiile"
+                                 />
+                                 <span style={{ lineHeight: 1.3 }}>
+                                    Sunt de acord cu{" "}
+                                    <a
+                                       href="/termeni"
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                    >
+                                       Termenii și Condițiile
+                                    </a>{" "}
+                                    și{" "}
+                                    <a
+                                       href="/confidentialitate"
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                    >
+                                       Politica de confidențialitate
+                                    </a>
+                                    .
+                                 </span>
+                              </label>
+                           </div>
+
+                           <button
+                              type="submit"
+                              className="sign__button"
+                              disabled={!registerAccepted}
+                              aria-disabled={!registerAccepted}
+                              title={
+                                 !registerAccepted
+                                    ? "Bifează Termenii și Condițiile pentru a continua"
+                                    : "Înregistrează-te"
+                              }
+                           >
                               <span>Înregistrează-te</span>
                               <ReactSVG
                                  className="sign__button-icon sign__icon"

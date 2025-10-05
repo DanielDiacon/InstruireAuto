@@ -14,29 +14,29 @@
    overflow: hidden;
    &.exam {
       min-height: calc(100vh - 48px);
-      &::after {
-         content: "";
-         position: absolute;
-         bottom: -180%;
-         left: 50%;
-         transform: translateX(-50%);
-         width: 300%;
-         height: 300%;
-         background: radial-gradient(
-            circle,
-            transparent,
-            transparent,
-            rgba(243, 252, 121, 0.2),
-            transparent,
-            transparent,
-            transparent,
-            transparent
-         );
-
-         filter: blur(10px);
-         pointer-events: none;
-         z-index: 0;
-      }
+//      &::after {
+//         content: "";
+//         position: absolute;
+//         bottom: -180%;
+//         left: 50%;
+//         transform: translateX(-50%);
+//         width: 300%;
+//         height: 300%;
+//         background: radial-gradient(
+//            circle,
+//            transparent,
+//            transparent,
+//            rgba(243, 252, 121, 0.2),
+//            transparent,
+//            transparent,
+//            transparent,
+//            transparent
+//         );
+//
+//         filter: blur(10px);
+//         pointer-events: none;
+//         z-index: 0;
+//      }
    }
    &__header {
       display: flex;
@@ -68,7 +68,14 @@
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 6px;
    }
-
+   &__input {
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: var(--black-p);
+      color: var(--white-p);
+      width: 172px;
+      min-width: none;
+   }
    &__ticket {
       position: relative;
       display: flex;
@@ -80,6 +87,15 @@
       cursor: pointer;
       transition: var(--elastic-s);
       padding: 28px;
+      &--ok {
+         background: #9cf680 !important;
+         color: #0d3700 !important;
+      }
+      &--bad {
+         background: #f68080 !important;
+         color: #410000 !important;
+      }
+
       &:hover {
          padding: 29px;
          margin: -1px;
@@ -413,6 +429,14 @@
       background: #80d1f6;
       color: #002c41;
    }
+   &__icon {
+      &.rotate45 {
+         padding: 1.5px;
+         svg {
+            rotate: 45deg;
+         }
+      }
+   }
    /* — Mobile — */
 } /* Ticket badges (verde/galben/roșu) pe card */
 .lives {
@@ -441,6 +465,26 @@
       svg {
          width: 21.5px;
          height: 21.5px;
+      }
+      &.rezult {
+         width: 15vw;
+         height: 15vw;
+         z-index: 30;
+         opacity: 1;
+         div {
+            width: 15vw;
+            height: 15vw;
+         }
+         svg {
+            width: 15vw;
+            height: 15vw;
+         }
+      }
+      &.rezult:first-child {
+         transform: rotate(-15deg) scale(0.9);
+      }
+      &.rezult:last-child {
+         transform: rotate(15deg) scale(0.9);;
       }
    }
 }
@@ -818,7 +862,8 @@
             }
          }
 
-         &--finished {
+         &--finished,
+         &--completed {
             background: #9cf680;
             color: #0d3700;
          }
@@ -923,4 +968,27 @@
    @media (max-width: 720px) {
       padding: 10px 14px;
    }
+}
+.practice__answer--correct {
+   background: #9cf680;
+   color: #0d3700;
+}
+.practice__answer--wrong-selected {
+   background: #f68080;
+   color: #410000;
+}
+.idnp-block__boxes {
+   display: flex !important;
+   gap: 3px !important;
+   align-items: center !important;
+   justify-content: center !important;
+}
+.idnp-box {
+   width: 30px !important;
+   min-width: none;
+   border-radius: 8px;
+   padding: 10px;
+   border: none;
+   background: var(--white-p);
+   margin: 0;
 }

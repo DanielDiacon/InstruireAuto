@@ -16,8 +16,6 @@
       font-size: 20px;
       cursor: pointer;
    }
-   &__icon {
-   }
 
    &__subtitle {
       margin-top: 10px;
@@ -119,6 +117,7 @@
       gap: 6px;
       padding-bottom: 6px;
       position: absolute;
+      z-index: 20;
       right: 12px;
       top: 60px;
    }
@@ -243,11 +242,16 @@
 
       &-icon {
          background: var(--black-s);
-         //color: var(--white-s);
+
          border-radius: 16px;
          padding: 6px;
-         //transition: var(--classic-s);
-         //font-weight: 500;
+         &.download {
+            background: var(--black-s);
+            color: var(--white-p);
+            position: absolute;
+            top: 6px;
+            right: 6px;
+         }
          div {
             display: flex;
             align-items: center;
@@ -323,6 +327,7 @@
    display: flex;
    flex-direction: column;
    background: var(--black-p);
+   color: var(--white-p);
    border-radius: 22px;
    padding: 12px 14px;
    gap: 3px;
@@ -353,13 +358,15 @@
       }
    }
 
-   &--finished {
+   &--finished,
+   &--completed {
       background: #9cf680;
       color: #0d3700;
    }
    &--in_progress,
    &--inprogress,
-   &--running {
+   &--running,
+   &--expired {
       background: #80d1f6;
       color: #002c41;
    }

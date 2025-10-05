@@ -93,11 +93,11 @@ const messagesRO = {
 
 function SPCalendar() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
-      { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student", text: "Acasă", icon: homeIcon },
-      { link: "/student", text: "Testare", icon: testIcon },
-      { link: "/student", text: "Examen", icon: examIcon },
+      { popup: "sAddProg", text: "Programare", icon: addIcon },
+      { link: "/student/text", text: "Testare", icon: testIcon },
+      { link: "/student/exam", text: "Examen", icon: examIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    const [events, setEvents] = useState([]);

@@ -188,16 +188,17 @@ function GroupForm({
                </button>
             )}
          </div>
-
-         <div className="groups__keyline instructorsgroup__keyline">
-            <input
-               type="text"
-               placeholder="Token / Key (opțional)"
-               value={values.token}
-               onChange={(e) => setValues({ token: e.target.value })}
-               className="instructorsgroup__input"
-            />
-         </div>
+         {mode === "edit" && showDelete && (
+            <div className="groups__keyline instructorsgroup__keyline">
+               <input
+                  type="text"
+                  placeholder="Token / Key (opțional)"
+                  value={values.token}
+                  onChange={(e) => setValues({ token: e.target.value })}
+                  className="instructorsgroup__input"
+               />
+            </div>
+         )}
 
          <button
             type="button"
@@ -287,11 +288,9 @@ function GroupManager() {
    const [picker, setPicker] = useState({ open: false });
 
    useEffect(() => {
-    
-         dispatch(fetchGroups());
-         dispatch(fetchInstructors());
-         dispatch(fetchCars());
-      
+      dispatch(fetchGroups());
+      dispatch(fetchInstructors());
+      dispatch(fetchCars());
    }, [dispatch, user]);
 
    const instructorLabel = (id) => {

@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useMemo, useContext } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { UserContext } from "../../UserContext";
-import { fetchUserReservations } from "../../store/reservationsSlice";
+import { fetchReservations } from "../../store/reservationsSlice";
 import { getInstructors } from "../../api/instructorsService";
 import Cookies from "js-cookie";
 import { useNavigate } from "react-router-dom";
@@ -173,7 +173,7 @@ export default function Profile() {
    const showReservations = entityRole === "USER" && !!entity?.id;
 
    useEffect(() => {
-      if (showReservations) dispatch(fetchUserReservations(entity.id));
+      if (showReservations) dispatch(fetchReservations(entity.id));
       setLiveEntity(entity || {});
    }, [dispatch, entity, entity?.id, showReservations]);
 
