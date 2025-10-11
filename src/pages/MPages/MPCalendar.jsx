@@ -1,3 +1,4 @@
+// src/pages/Manager/MPCalendar.jsx
 import React, { useContext, useEffect, useState, useCallback } from "react";
 import { Calendar, dateFnsLocalizer } from "react-big-calendar";
 import format from "date-fns/format";
@@ -41,6 +42,52 @@ const localizer = dateFnsLocalizer({
    locales,
 });
 
+/** Parsează “floating”: păstrează HH:mm exact din string, ignoră Z/offset */
+function toFloatingDate(val) {
+   if (!val) return null;
+
+   if (val instanceof Date && !isNaN(val)) {
+      return new Date(
+         val.getFullYear(),
+         val.getMonth(),
+         val.getDate(),
+         val.getHours(),
+         val.getMinutes(),
+         val.getSeconds(),
+         val.getMilliseconds()
+      );
+   }
+
+   if (typeof val === "string") {
+      const m = val.match(
+         /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?$/
+      );
+      if (m) {
+         const [, Y, Mo, D, h, mi, s] = m;
+         return new Date(+Y, +Mo - 1, +D, +h, +mi, s ? +s : 0, 0);
+      }
+      const m2 = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m2) {
+         const [, Y, Mo, D] = m2;
+         return new Date(+Y, +Mo - 1, +D, 0, 0, 0, 0);
+      }
+   }
+
+   const d = new Date(val);
+   if (!isNaN(d)) {
+      return new Date(
+         d.getFullYear(),
+         d.getMonth(),
+         d.getDate(),
+         d.getHours(),
+         d.getMinutes(),
+         d.getSeconds(),
+         d.getMilliseconds()
+      );
+   }
+   return null;
+}
+
 function MPCalendar() {
    const links = [
       { link: "/manager", text: "Acasă", icon: homeIcon },
@@ -53,7 +100,6 @@ function MPCalendar() {
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-
       { link: "/manager/history", text: "Istoric", icon: clockIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];
@@ -68,18 +114,13 @@ function MPCalendar() {
 
    const { user } = useContext(UserContext);
 
-   // Set document title
    useEffect(() => {
-      document.title = "Instruire Auto | APanel";
+      document.title = "Instruire Auto | Manager";
    }, []);
 
    useEffect(() => {
-      //if (!user || user.role !== "ADMIN") return;
-
-      // fetch Redux instructors
       dispatch(fetchInstructors());
 
-      // fetch restul datelor
       async function fetchData() {
          try {
             const [resData, userData] = await Promise.all([
@@ -90,9 +131,12 @@ function MPCalendar() {
             setReservations(resData);
             setUsers(userData);
 
+            // IMPORTANT: fără corecții de fus — păstrăm ora exact din payload
             const formattedEvents = resData.map((item) => {
-               const start = new Date(item.startTime);
-               const end = new Date(start.getTime() + 90 * 60 * 1000);
+               const start = toFloatingDate(item.startTime);
+               const end = item.endTime
+                  ? toFloatingDate(item.endTime)
+                  : new Date(start.getTime() + 90 * 60 * 1000);
                return { id: item.id, title: "Programare", start, end };
             });
             setEvents(formattedEvents);
@@ -109,9 +153,12 @@ function MPCalendar() {
       instructors.find((inst) => inst.id === id);
 
    const getFormattedReservations = (reservations) => {
+      const pad = (n) => String(n).padStart(2, "0");
       return reservations.map((res) => {
-         const start = new Date(res.startTime);
-         const end = new Date(start.getTime() + 90 * 60 * 1000);
+         const start = toFloatingDate(res.startTime);
+         const end = res.endTime
+            ? toFloatingDate(res.endTime)
+            : new Date(start.getTime() + 90 * 60 * 1000);
          const personUser = findUserById(res.userId);
          const instructorObj = findInstructorById(res.instructorId);
 
@@ -122,20 +169,15 @@ function MPCalendar() {
             ? `${instructorObj.firstName} ${instructorObj.lastName}`
             : "Necunoscut";
          const status = res.status || "pending";
-         const time = `${start.getHours()}:${start
-            .getMinutes()
-            .toString()
-            .padStart(2, "0")} - ${end.getHours()}:${end
-            .getMinutes()
-            .toString()
-            .padStart(2, "0")}`;
+         const time = `${pad(start.getHours())}:${pad(
+            start.getMinutes()
+         )} - ${pad(end.getHours())}:${pad(end.getMinutes())}`;
 
          return { id: res.id, start, end, time, person, instructor, status };
       });
    };
    const formattedReservations = getFormattedReservations(reservations);
 
-   // Calendar slot click
    const handleDayClick = ({ start }) => {
       openPopup("dayInfo", {
          selectedDate: start,
@@ -143,7 +185,6 @@ function MPCalendar() {
       });
    };
 
-   // Calendar event click
    const handleEventClick = (event) => {
       openPopup("dayInfo", {
          selectedDate: event.start,
@@ -152,6 +193,7 @@ function MPCalendar() {
    };
 
    const handleViewChange = (view) => setCurrentView(view);
+
    return (
       <>
          <Header links={links}>
@@ -160,7 +202,7 @@ function MPCalendar() {
          </Header>
          <main className="main">
             <ACalendarView
-               events={events}
+               events={events} // ← DIRECT, fără conversii
                localizer={localizer}
                currentView={currentView}
                onSelectSlot={handleDayClick}

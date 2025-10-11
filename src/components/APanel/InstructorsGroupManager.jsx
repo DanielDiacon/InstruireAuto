@@ -398,31 +398,12 @@ export default function InstructorsGroupManager() {
             </div>
          </div>
 
-         {/* notice */}
-         {notice && (
-            <div
-               className="notice"
-               style={{
-                  margin: "6px 12px 0",
-                  padding: "8px 12px",
-                  borderRadius: 10,
-                  background:
-                     notice.type === "success" ? "#0f766e22" : "#ef444422",
-                  color: notice.type === "success" ? "#0f766e" : "#b91c1c",
-               }}
-               onClick={clearNotice}
-               title="Click pentru a ascunde"
-            >
-               {notice.text}
-            </div>
-         )}
-
          {/* Grid */}
          <div className="instructorsgroup__grid-wrapper">
             <div className="instructorsgroup__grid">
                {/* Creare grup */}
                {showForm && (
-                  <div className="instructorsgroup__item instructorsgroup__create-form active">
+                  <div className="instructorsgroup__item instructorsgroup__create-form instrgroup active">
                      {isCreateChooserOpen ? (
                         <InstructorChooser
                            inline

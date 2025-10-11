@@ -26,6 +26,8 @@ import Practice from "./components/SPanel/Practice";
 import SPTest from "./pages/SPages/SPTest";
 import SPExam from "./pages/SPages/SPExam";
 import ConfirmReservation from "./pages/ConfirmReservation";
+import LegalPage from "./pages/PrivacyPage";
+import TermsPage from "./pages/TermsPage";
 
 const App = () => {
    const darkMode = localStorage.getItem("darkMode") === "enabled";
@@ -204,6 +206,8 @@ const App = () => {
                   path="/confirm-reservation/:token"
                   element={<ConfirmReservation />}
                />
+               <Route path="/termeni" element={<LegalPage />} />
+               <Route path="/confidentialitate" element={<TermsPage />} />
                <Route path="/" element={<SignPage />} />
             </Routes>
          </div>

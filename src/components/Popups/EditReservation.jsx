@@ -25,16 +25,152 @@ import {
    fetchAllReservations,
 } from "../../store/reservationsSlice";
 import {
-   createReservations, // rămâne pentru alte fluxuri
-   createReservationsForUser, // 👈 nou — îl folosim când schimbi elevul
+   createReservationsForUser,
    getReservationHistory,
 } from "../../api/reservationsService";
+import { getInstructorBlackouts } from "../../api/instructorsService";
 
 import { closePopup as closePopupStore } from "../Utils/popupStore";
 import AlertPills from "../Utils/AlertPills";
 
 /* ===== Locale RO ===== */
 registerLocale("ro", ro);
+
+/* ================== TZ & chei locale (Moldova) ================== */
+const MOLDOVA_TZ = "Europe/Chisinau";
+/** Setează 'local-match' dacă backend salvează cu hack-ul în care ora locală trebuie să apară neschimbată. Pune 'utc' dacă salvezi UTC corect. */
+const BUSY_KEYS_MODE = "local-match";
+
+function localDateStrTZ(date, tz = MOLDOVA_TZ) {
+   const fmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+   });
+   const parts = fmt.formatToParts(date);
+   const day = parts.find((p) => p.type === "day")?.value ?? "01";
+   const month = parts.find((p) => p.type === "month")?.value ?? "01";
+   const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+   return `${year}-${month}-${day}`;
+}
+function timeHHMMInTZ(iso, tz = MOLDOVA_TZ) {
+   const d = new Date(iso);
+   const fmt = new Intl.DateTimeFormat("ro-RO", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   });
+   return fmt.format(d);
+}
+function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
+   const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+   });
+   const p = fmt.formatToParts(new Date(tsMs));
+   const y = +p.find((x) => x.type === "year").value;
+   const m = +p.find((x) => x.type === "month").value;
+   const d = +p.find((x) => x.type === "day").value;
+   const H = +p.find((x) => x.type === "hour").value;
+   const M = +p.find((x) => x.type === "minute").value;
+   const S = +p.find((x) => x.type === "second").value;
+   const asUTC = Date.UTC(y, m - 1, d, H, M, S);
+   return (asUTC - tsMs) / 60000;
+}
+/** Moldova (zi + "HH:mm") -> ISO UTC corect, stabil la DST */
+function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
+   const [hh, mm] = (timeStrHHMM || "00:00").split(":").map(Number);
+   const utcGuess = Date.UTC(
+      localDateObj.getFullYear(),
+      localDateObj.getMonth(),
+      localDateObj.getDate(),
+      hh,
+      mm,
+      0,
+      0
+   );
+   const offMin = tzOffsetMinutesAt(utcGuess, MOLDOVA_TZ);
+   const fixedUtcMs = utcGuess - offMin * 60000;
+   return new Date(fixedUtcMs).toISOString();
+}
+/** HACK: construiește "YYYY-MM-DDTHH:mm:+02/+03" pentru ca în DB să apară „ora locală exactă” */
+function isoForDbMatchLocalHour(isoUtcFromMoldova) {
+   const base = new Date(isoUtcFromMoldova);
+   const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
+   const shifted = new Date(base.getTime() + offMin * 60000);
+
+   const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: MOLDOVA_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   }).formatToParts(shifted);
+
+   const Y = parts.find((p) => p.type === "year").value;
+   const Mo = parts.find((p) => p.type === "month").value;
+   const Da = parts.find((p) => p.type === "day").value;
+   const HH = parts.find((p) => p.type === "hour").value;
+   const MM = parts.find((p) => p.type === "minute").value;
+
+   const offMin2 = tzOffsetMinutesAt(shifted.getTime(), MOLDOVA_TZ);
+   const sign = offMin2 >= 0 ? "+" : "-";
+   const abs = Math.abs(offMin2);
+   const offHH = String(Math.floor(abs / 60)).padStart(2, "0");
+   const offMM = String(abs % 60).padStart(2, "0");
+
+   return `${Y}-${Mo}-${Da}T${HH}:${MM}:00${sign}${offHH}:${offMM}`;
+}
+/** Cheie locală "YYYY-MM-DD|HH:mm" din timestamp */
+function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
+   const fmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   });
+   const parts = fmt.formatToParts(new Date(tsMs));
+   const Y = parts.find((p) => p.type === "year").value;
+   const Mo = parts.find((p) => p.type === "month").value;
+   const Da = parts.find((p) => p.type === "day").value;
+   const HH = parts.find((p) => p.type === "hour").value;
+   const MM = parts.find((p) => p.type === "minute").value;
+   return `${Y}-${Mo}-${Da}|${HH}:${MM}`;
+}
+const localKeyForIso = (iso) =>
+   localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+const localKeyForDateAndTime = (localDateObj, hhmm) =>
+   `${localDateStrTZ(localDateObj, MOLDOVA_TZ)}|${hhmm}`;
+/** Din ce vine din DB (hack sau UTC real) -> cheie locală stabilă */
+function busyLocalKeyFromStored(st) {
+   const d = new Date(st);
+   if (BUSY_KEYS_MODE === "local-match") {
+      const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
+      const base = new Date(d.getTime() - offMin * 60000);
+      return localKeyFromTs(base.getTime(), MOLDOVA_TZ);
+   }
+   return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
+}
+const nowHHMMInMoldova = () =>
+   new Intl.DateTimeFormat("en-GB", {
+      timeZone: MOLDOVA_TZ,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   }).format(new Date());
 
 /* ===== Intervale ore (24h) ===== */
 const oreDisponibile = [
@@ -47,6 +183,7 @@ const oreDisponibile = [
    { eticheta: "16:30", oraStart: "16:30" },
    { eticheta: "18:00", oraStart: "18:00" },
 ];
+const SLOT_MINUTES = 90;
 
 /* ===== Culori ===== */
 const COLOR_TOKENS = [
@@ -69,18 +206,16 @@ const COLOR_LABEL = {
    purple: "Mov",
    pink: "Roz",
 };
-/* — etichete semnificație pentru tooltip / mobil — */
 const COLOR_HINTS = {
-  yellow: "Loc Liber",
-  green: "Achitată",
-  red: "Grafic Închis",
-  orange: "Achitare Card În Oficiu",
-  indigo: "Lecție Stabilită De Instructor",
-  pink: "Grafic Pentru Ciocana/Buiucani",
-  blue: "Instructorul Care Activează Pe Ciocana",
-  purple: "Instructorul Care Activează Pe Botanica",
+   yellow: "Loc Liber",
+   green: "Achitată",
+   red: "Grafic Închis",
+   orange: "Achitare Card În Oficiu",
+   indigo: "Lecție Stabilită De Instructor",
+   pink: "Grafic Pentru Ciocana/Buiucani",
+   blue: "Instructorul Care Activează Pe Ciocana",
+   purple: "Instructorul Care Activează Pe Botanica",
 };
-
 const normalizeColor = (val) => {
    if (!val) return "";
    if (typeof val !== "string") return String(val);
@@ -88,29 +223,18 @@ const normalizeColor = (val) => {
    return COLOR_LABEL[key] || key;
 };
 
-/* ===== Helpers ===== */
-const SLOT_MINUTES = 90;
+/* ===== Helpers existente ===== */
 const fmtDateTimeRO = (iso) =>
    new Date(iso).toLocaleString("ro-RO", {
       dateStyle: "medium",
       timeStyle: "short",
    });
 
-const localDateStr = (d) =>
-   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-      d.getDate()
-   ).padStart(2, "0")}`;
+const localDateStr = (d) => localDateStrTZ(d, MOLDOVA_TZ);
 const todayAt00 = () => {
    const t = new Date();
    t.setHours(0, 0, 0, 0);
    return t;
-};
-/** ISO UTC din data LOCALĂ + HH:mm */
-const toUtcIsoFromLocal = (localDateObj, timeStrHHMM) => {
-   const [hh, mm] = timeStrHHMM.split(":").map(Number);
-   const d = new Date(localDateObj);
-   d.setHours(hh, mm, 0, 0);
-   return d.toISOString();
 };
 const getStartFromReservation = (r) =>
    r?.startTime ??
@@ -149,19 +273,20 @@ const nextNDays = (n, fromDate = new Date()) => {
    }
    return out;
 };
+/** Grilă ISO corectă (UTC) din zile + ore în Moldova */
 const buildFullGridISO = (daysWindow = 60) => {
    const daysArr = nextNDays(daysWindow, new Date());
    const out = [];
    for (const dayStr of daysArr) {
       const dObj = localDateObjFromStr(dayStr);
       for (const t of oreDisponibile) {
-         out.push(toUtcIsoFromLocal(dObj, t.oraStart));
+         out.push(toUtcIsoFromMoldova(dObj, t.oraStart));
       }
    }
    return out;
 };
 
-/* === Conflicts helpers (exclud rezervarea curentă) === */
+/* === Conflicts helpers pe CHEIE LOCALĂ (exclud rezervarea curentă) === */
 const hasInstructorConflict = (
    reservations,
    instructorId,
@@ -169,21 +294,17 @@ const hasInstructorConflict = (
    excludeReservationId
 ) => {
    if (!instructorId || !isoStart) return false;
-   const start = new Date(isoStart);
-   const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
+   const key = localKeyForIso(isoStart);
    return (reservations || [])
       .filter((r) => String(r.id) !== String(excludeReservationId))
       .filter((r) => String(r?.instructorId ?? "") === String(instructorId))
       .some((r) => {
          const st = getStartFromReservation(r);
-         const en = getEndFromReservation(r);
-         if (!st || !en) return false;
-         const s = new Date(st);
-         const e = new Date(en);
-         return start < e && end > s; // overlap
+         if (!st) return false;
+         const rKey = busyLocalKeyFromStored(st);
+         return rKey === key; // aceeași oră locală
       });
 };
-
 const hasStudentConflict = (
    reservations,
    studentId,
@@ -191,8 +312,7 @@ const hasStudentConflict = (
    excludeReservationId
 ) => {
    if (!studentId || !isoStart) return false;
-   const start = new Date(isoStart);
-   const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
+   const key = localKeyForIso(isoStart);
    return (reservations || [])
       .filter((r) => String(r.id) !== String(excludeReservationId))
       .filter(
@@ -200,11 +320,9 @@ const hasStudentConflict = (
       )
       .some((r) => {
          const st = getStartFromReservation(r);
-         const en = getEndFromReservation(r);
-         if (!st || !en) return false;
-         const s = new Date(st);
-         const e = new Date(en);
-         return start < e && end > s; // overlap
+         if (!st) return false;
+         const rKey = busyLocalKeyFromStored(st);
+         return rKey === key; // aceeași oră locală
       });
 };
 
@@ -223,7 +341,7 @@ function highlightText(text, query) {
    );
 }
 
-/* ===== Pretty labels + normalizare schimbări din istoric ===== */
+/* ===== Pretty labels + istoric ===== */
 const FIELD_LABEL = {
    startTime: "Data & ora",
    sector: "Sector",
@@ -236,7 +354,6 @@ const FIELD_LABEL = {
    carId: "Mașină",
    instructorsGroupId: "Grup instructori",
 };
-
 const makeResolvers = (students, instructors, h) => {
    const stuById = new Map(
       (students || []).map((s) => [
@@ -250,8 +367,6 @@ const makeResolvers = (students, instructors, h) => {
          `${i.firstName || ""} ${i.lastName || ""}`.trim(),
       ])
    );
-
-   // fallback din payload-ul de istoric (dacă există)
    if (h?.user?.id) {
       stuById.set(
          String(h.user.id),
@@ -264,15 +379,12 @@ const makeResolvers = (students, instructors, h) => {
          `${h.instructor.firstName || ""} ${h.instructor.lastName || ""}`.trim()
       );
    }
-
    const nameForUserId = (val) =>
       val == null ? "" : stuById.get(String(val)) || String(val);
    const nameForInstructorId = (val) =>
       val == null ? "" : insById.get(String(val)) || String(val);
-
    return { nameForUserId, nameForInstructorId };
 };
-
 const fmtValue = (field, value, resolvers) => {
    if (value == null || value === "") return "";
    if (field === "startTime") {
@@ -288,9 +400,7 @@ const fmtValue = (field, value, resolvers) => {
       const v = String(value).toLowerCase();
       return v === "automat" ? "Automat" : "Manual";
    }
-   if (field === "color") {
-      return normalizeColor(value);
-   }
+   if (field === "color") return normalizeColor(value);
    if (field === "userId") {
       return resolvers?.nameForUserId
          ? resolvers.nameForUserId(value)
@@ -304,12 +414,9 @@ const fmtValue = (field, value, resolvers) => {
    if (typeof value === "boolean") return value ? "Da" : "Nu";
    return String(value);
 };
-
 const buildChangesFromHistoryItem = (h, resolvers) => {
    const action = String(h?.action || "").toUpperCase();
-   // la CREATE nu afișăm detalii
    if (action === "CREATE" || action === "CREATED") return [];
-
    if (h && h.changedFields && typeof h.changedFields === "object") {
       return Object.entries(h.changedFields)
          .map(([field, diff]) => {
@@ -321,18 +428,12 @@ const buildChangesFromHistoryItem = (h, resolvers) => {
                const from = fmtValue(field, diff.from, resolvers);
                const to = fmtValue(field, diff.to, resolvers);
                if (from === to) return null;
-               return {
-                  field,
-                  label: FIELD_LABEL[field] || field,
-                  from,
-                  to,
-               };
+               return { field, label: FIELD_LABEL[field] || field, from, to };
             }
             return null;
          })
          .filter(Boolean);
    }
-
    if (Array.isArray(h?.changes)) {
       return h.changes
          .map((c) => {
@@ -344,26 +445,18 @@ const buildChangesFromHistoryItem = (h, resolvers) => {
          })
          .filter(Boolean);
    }
-
    return [];
 };
-
-/* ===== Mapare stări istorice ===== */
 const statusFromHistory = (h) => {
    const s = String(h?.status || h?.action || h?.type || "").toUpperCase();
-
    if (s.includes("CANCEL")) return "cancelled";
    if (s.includes("COMPLETE")) return "completed";
    if (s.includes("CONFIRM")) return "confirmed";
-
    if (s === "CREATE" || s === "CREATED") return "created";
    if (s === "UPDATE" || s === "UPDATED" || s.includes("EDIT"))
       return "updated";
-
    return "pending";
 };
-
-/* ===== Icon per status ===== */
 const iconFor = (status) => {
    switch (status) {
       case "updated":
@@ -376,9 +469,40 @@ const iconFor = (status) => {
       case "cancelled":
          return cancelIcon;
       default:
-         return clockIcon; // pending / necunoscut
+         return clockIcon;
    }
 };
+
+/** Helper blackout: extrage timpul corect. Preferă startDateTime pentru REPEAT. */
+function getBlackoutDT(b) {
+   if (typeof b === "string") return b;
+   const t = String(b?.type || "").toUpperCase();
+   if (t === "REPEAT") return b?.startDateTime || b?.dateTime || null;
+   return (
+      b?.dateTime || b?.datetime || b?.startTime || b?.date || b?.begin || null
+   );
+}
+
+/** Expandează un blackout REPEAT în chei locale "YYYY-MM-DD|HH:mm" în fereastra curentă. */
+function expandRepeatLocalKeys(b, allowedKeysSet) {
+   const out = [];
+   const t = String(b?.type || "").toUpperCase();
+   if (t !== "REPEAT") return out;
+
+   const stepDays = Math.max(1, Number(b?.repeatEveryDays || 1));
+   const first = b?.startDateTime || b?.dateTime;
+   const last = b?.endDateTime || first;
+   if (!first || !last) return out;
+
+   let cur = new Date(first).getTime();
+   const lastMs = new Date(last).getTime();
+   while (cur <= lastMs) {
+      const key = busyLocalKeyFromStored(new Date(cur).toISOString());
+      if (!allowedKeysSet || allowedKeysSet.has(key)) out.push(key);
+      cur += stepDays * 24 * 60 * 60 * 1000;
+   }
+   return out;
+}
 
 export default function ReservationEditPopup({ reservationId }) {
    const dispatch = useDispatch();
@@ -420,7 +544,7 @@ export default function ReservationEditPopup({ reservationId }) {
       [studentsAll]
    );
 
-   // --- hidratare UI din rezervarea existentă
+   // --- hidratare UI din rezervarea existentă (în Moldova, DST-safe)
    const didHydrate = useRef(false);
 
    const [selectedDate, setSelectedDate] = useState(() => {
@@ -452,17 +576,14 @@ export default function ReservationEditPopup({ reservationId }) {
 
    useEffect(() => {
       if (!existing || didHydrate.current) return;
-      const start = existing.startTime
-         ? new Date(existing.startTime)
-         : new Date();
 
-      const day = new Date(start);
-      day.setHours(0, 0, 0, 0);
-      setSelectedDate(day);
-
-      const hhmm = start.toTimeString().slice(0, 5);
+      // Hidratează STRICT din cheia locală (stabilă, DST-safe), indiferent de Z/offset
+      const lk = existing.startTime
+         ? busyLocalKeyFromStored(existing.startTime) // ex: "2025-10-06|08:00"
+         : localKeyFromTs(Date.now(), MOLDOVA_TZ);
+      const [dayStr, hhmm] = lk.split("|");
+      setSelectedDate(localDateObjFromStr(dayStr));
       setSelectedTime(oreDisponibile.find((o) => o.oraStart === hhmm) || null);
-
       setSector(existing.sector || "Botanica");
       setGearbox(
          (existing.gearbox || "Manual").toLowerCase() === "automat"
@@ -533,57 +654,87 @@ export default function ReservationEditPopup({ reservationId }) {
 
    // ===== Disponibilități =====
    const [freeSlots, setFreeSlots] = useState([]); // ISO[]
-   const freeSet = useMemo(() => new Set(freeSlots), [freeSlots]);
+   const freeLocalKeySet = useMemo(
+      () => new Set(freeSlots.map((iso) => localKeyForIso(iso))),
+      [freeSlots]
+   );
 
-   const recomputeAvailability = useCallback(() => {
+   // Blackout keys (chei locale "YYYY-MM-DD|HH:mm" pentru instructorul curent)
+   const [blackoutKeys, setBlackoutKeys] = useState([]); // string[]
+   const blackoutLocalKeySet = useMemo(
+      () => new Set(blackoutKeys),
+      [blackoutKeys]
+   );
+
+   const recomputeAvailability = useCallback(async () => {
       if (!studentId || !instructorId) {
          setFreeSlots([]);
+         setBlackoutKeys([]);
          return;
       }
 
       const fullGrid = buildFullGridISO(60);
+      const allowedKeys = new Set(fullGrid.map((iso) => localKeyForIso(iso)));
       const others = (reservations || []).filter(
          (r) => String(r.id) !== String(reservationId)
       );
 
-      const studentIntervals = others
-         .filter(
-            (r) => String(r?.userId ?? r?.studentId ?? "") === String(studentId)
-         )
-         .map((r) => {
-            const st = getStartFromReservation(r);
-            const en = getEndFromReservation(r);
-            return st && en ? [new Date(st), new Date(en)] : null;
-         })
-         .filter(Boolean);
+      // Occupare pe CHEIE LOCALĂ pentru elev/instructor
+      const busyStudent = new Set();
+      const busyInstructor = new Set();
+      const blkKeys = [];
 
-      const instructorIntervals = others
-         .filter((r) => String(r?.instructorId ?? "") === String(instructorId))
-         .map((r) => {
-            const st = getStartFromReservation(r);
-            const en = getEndFromReservation(r);
-            return st && en ? [new Date(st), new Date(en)] : null;
-         })
-         .filter(Boolean);
+      for (const r of others) {
+         const st = getStartFromReservation(r);
+         if (!st) continue;
+         const key = busyLocalKeyFromStored(st);
+         if (String(r?.userId ?? r?.studentId ?? "") === String(studentId)) {
+            busyStudent.add(key);
+         }
+         if (String(r?.instructorId ?? "") === String(instructorId)) {
+            busyInstructor.add(key);
+         }
+      }
 
-      const conflictsAny = (start, end) => {
-         for (const [s, e] of studentIntervals)
-            if (start < e && end > s) return true;
-         for (const [s, e] of instructorIntervals)
-            if (start < e && end > s) return true;
-         return false;
-      };
+      // —— Blackouts instructor: tratează SINGLE + extindere REPEAT ——
+      try {
+         const blackouts = await getInstructorBlackouts(instructorId);
+         for (const b of blackouts || []) {
+            const type = String(b?.type || "").toUpperCase();
+
+            if (type === "REPEAT") {
+               const keys = expandRepeatLocalKeys(b, allowedKeys);
+               for (const key of keys) {
+                  busyInstructor.add(key);
+                  blkKeys.push(key);
+               }
+            } else {
+               const dt = getBlackoutDT(b);
+               if (!dt) continue;
+               const key = busyLocalKeyFromStored(dt);
+               if (allowedKeys.has(key)) {
+                  busyInstructor.add(key);
+                  blkKeys.push(key);
+               }
+            }
+         }
+      } catch (e) {
+         pushAlert(
+            "warning",
+            "Nu am putut încărca orele blocate ale instructorului. Se afișează doar rezervările."
+         );
+      }
 
       const now = new Date();
       const free = fullGrid
+         .filter((iso) => new Date(iso) > now)
          .filter((iso) => {
-            const start = new Date(iso);
-            const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
-            return !conflictsAny(start, end);
-         })
-         .filter((iso) => new Date(iso) > now);
+            const key = localKeyForIso(iso);
+            return !busyStudent.has(key) && !busyInstructor.has(key);
+         });
 
       setFreeSlots(free);
+      setBlackoutKeys(blkKeys);
    }, [studentId, instructorId, reservations, reservationId]);
 
    useEffect(() => {
@@ -593,8 +744,9 @@ export default function ReservationEditPopup({ reservationId }) {
    const freeByDay = useMemo(() => {
       const map = new Map();
       for (const iso of freeSlots) {
-         const key = localDateStr(new Date(iso));
-         map.set(key, (map.get(key) || 0) + 1);
+         const key = localKeyForIso(iso);
+         const day = key.split("|")[0];
+         map.set(day, (map.get(day) || 0) + 1);
       }
       return map;
    }, [freeSlots]);
@@ -655,70 +807,80 @@ export default function ReservationEditPopup({ reservationId }) {
       if (!instructorId) return pushAlert("error", "Selectează instructorul.");
       if (!studentId) return pushAlert("error", "Selectează elevul.");
 
-      const currentIso = existing?.startTime
-         ? new Date(existing.startTime).toISOString()
+      // CHEI LOCALE pentru comparații de timp
+      const currentKey = existing?.startTime
+         ? busyLocalKeyFromStored(existing.startTime)
          : null;
-
-      const selectedIso =
+      const selectedKey =
          selectedDate && selectedTime
-            ? toUtcIsoFromLocal(selectedDate, selectedTime.oraStart)
+            ? localKeyForDateAndTime(selectedDate, selectedTime.oraStart)
             : null;
 
-      const changingTime = !!selectedIso && selectedIso !== currentIso;
+      // ISO UTC corect pentru selecția curentă (indiferent ce trimitem mai departe)
+      const selectedIsoUTC =
+         selectedDate && selectedTime
+            ? toUtcIsoFromMoldova(selectedDate, selectedTime.oraStart)
+            : null;
+
+      const selectedIsoForBackend =
+         selectedIsoUTC && BUSY_KEYS_MODE === "local-match"
+            ? isoForDbMatchLocalHour(selectedIsoUTC)
+            : selectedIsoUTC;
+
+      // „schimbare de timp” / entități
+      const changingTime = !!selectedKey && selectedKey !== currentKey;
       const changingStudent = String(studentId) !== String(originalStudentId);
       const changingInstructor =
          String(instructorId) !== String(originalInstructorId);
 
-      const effectiveIso = selectedIso || currentIso;
-
-      // nimic „logic” schimbat → doar metadate
-      if (!changingTime && !changingStudent && !changingInstructor) {
-         closePopupStore();
-         setTimeout(() => {
-            const payload = {
-               sector,
-               gearbox,
-               privateMessage,
-               color: colorToken,
-            };
-            dispatch(updateReservation({ id: existing.id, data: payload }))
-               .then(() => dispatch(fetchAllReservations()))
-               .catch(() => {});
-         }, 0);
-         return;
-      }
-
-      // nu permitem mutarea în trecut când modifici ora
+      // nu permitem mutarea în trecut
       if (changingTime) {
-         if (!selectedIso) {
+         if (!selectedIsoUTC) {
             return pushAlert(
                "error",
                "Selectează data și ora pentru a modifica programarea."
             );
          }
-         if (new Date(selectedIso) <= new Date()) {
+         if (new Date(selectedIsoUTC) <= new Date()) {
             return pushAlert("error", "Nu poți muta programarea în trecut.");
          }
       }
 
-      // validări de conflict
+      // —— BLACKOUT guard: dacă schimbi ora sau instructorul, ora trebuie să nu fie în blackouts
+      const keyToCheck = changingTime ? selectedKey : currentKey;
+      if ((changingTime || changingInstructor) && keyToCheck) {
+         if (blackoutLocalKeySet.has(keyToCheck)) {
+            return pushAlert(
+               "error",
+               "Instructorul este indisponibil la această oră (blackout)."
+            );
+         }
+      }
+
+      // validări conflict (rezervări)
+      const effectiveIsoForChecks =
+         selectedIsoUTC ||
+         (existing?.startTime
+            ? new Date(existing.startTime).toISOString()
+            : null);
+
       if (changingTime) {
          const conflictI = hasInstructorConflict(
             reservations,
             instructorId,
-            effectiveIso,
+            effectiveIsoForChecks,
             existing.id
          );
          const conflictS = hasStudentConflict(
             reservations,
             studentId,
-            effectiveIso,
+            effectiveIsoForChecks,
             existing.id
          );
          if (conflictI || conflictS) {
             return pushAlert(
                "error",
-               "Slot indisponibil (suprapunere pentru elev sau instructor)."
+               "Slot indisponibil (aceeași oră locală pentru elev sau instructor)."
             );
          }
       } else {
@@ -726,7 +888,7 @@ export default function ReservationEditPopup({ reservationId }) {
             const conflictI = hasInstructorConflict(
                reservations,
                instructorId,
-               effectiveIso,
+               effectiveIsoForChecks,
                existing.id
             );
             if (conflictI)
@@ -739,7 +901,7 @@ export default function ReservationEditPopup({ reservationId }) {
             const conflictS = hasStudentConflict(
                reservations,
                studentId,
-               effectiveIso,
+               effectiveIsoForChecks,
                existing.id
             );
             if (conflictS)
@@ -750,18 +912,20 @@ export default function ReservationEditPopup({ reservationId }) {
          }
       }
 
-      // ==== SCHIMB elevul → DELETE vechi + CREATE la endpoint-ul NOU /reservations/for-user
+      // ==== SCHIMB elevul → DELETE vechi + CREATE prin endpoint-ul nou
       if (changingStudent) {
-         // construim payload exact după schema endpoint-ului
+         const effectiveIsoToSend = changingTime
+            ? selectedIsoForBackend
+            : existing?.startTime;
+
          const forUserPayload = {
             userId: Number(studentId),
             instructorId: Number(instructorId) || undefined,
-            // dacă ai grup pe rezervarea existentă, îl trimitem ca fallback
             instructorsGroupId:
                existing?.instructorsGroupId ?? existing?.groupId ?? undefined,
             reservations: [
                {
-                  startTime: effectiveIso,
+                  startTime: effectiveIsoToSend,
                   sector,
                   gearbox,
                   privateMessage,
@@ -773,13 +937,9 @@ export default function ReservationEditPopup({ reservationId }) {
          closePopupStore();
 
          try {
-            // 1) șterg rezervarea veche
             await dispatch(removeReservation(existing.id));
-            // 2) mic delay pentru a evita racing în listă
             await sleep(AFTER_DELETE_DELAY_MS);
-            // 3) creez noua rezervare pentru user prin endpoint-ul nou
             await createReservationsForUser(forUserPayload);
-            // 4) reîncărcare
             await dispatch(fetchAllReservations());
          } catch (e) {
             setAlerts((prev) => [
@@ -794,16 +954,23 @@ export default function ReservationEditPopup({ reservationId }) {
          return;
       }
 
-      // ==== restul cazurilor (elevul NU se schimbă): UPDATE standard pe rezervarea curentă
+      // ==== restul cazurilor: UPDATE pe rezervarea curentă
       const payload = {
          sector,
          gearbox,
          instructorId: Number(instructorId),
-         userId: Number(originalStudentId), // elevul rămâne același
+         userId: Number(originalStudentId),
          instructorsGroupId: null,
          privateMessage,
          color: colorToken,
-         ...(changingTime ? { startTime: effectiveIso } : {}),
+         ...(changingTime
+            ? {
+                 startTime:
+                    BUSY_KEYS_MODE === "local-match"
+                       ? selectedIsoForBackend
+                       : selectedIsoUTC,
+              }
+            : {}),
       };
 
       closePopupStore();
@@ -870,7 +1037,7 @@ export default function ReservationEditPopup({ reservationId }) {
             time: when ? fmtDateTimeRO(when) : "",
             status,
             by: who,
-            changes, // [{field,label,from,to}]
+            changes,
             action,
          };
       });
@@ -890,7 +1057,7 @@ export default function ReservationEditPopup({ reservationId }) {
    }
 
    const existingDayKey = existing?.startTime
-      ? localDateStr(new Date(existing.startTime))
+      ? busyLocalKeyFromStored(existing.startTime).split("|")[0]
       : null;
 
    const filterDate = (date) => {
@@ -934,7 +1101,6 @@ export default function ReservationEditPopup({ reservationId }) {
                   const isCreate = String(entry.action || "")
                      .toUpperCase()
                      .startsWith("CREATE");
-
                   return (
                      <div
                         key={entry.id + "-" + index}
@@ -1083,321 +1249,335 @@ export default function ReservationEditPopup({ reservationId }) {
       </>
    );
 
-   const renderForm = () => (
-      <>
-         {/* Calendar + Ore */}
-         <div className="saddprogramari__selector">
-            {/* Calendar */}
-            <div className="saddprogramari__calendar">
-               <h3 className="saddprogramari__title">
-                  Selectează data și ora:
-               </h3>
-               <DatePicker
-                  selected={selectedDate}
-                  onChange={(d) => {
-                     setSelectedDate(d);
-                     setSelectedTime(null);
-                  }}
-                  inline
-                  locale="ro"
-                  openToDate={
-                     selectedDate ||
-                     (existing?.startTime
-                        ? new Date(existing.startTime)
-                        : undefined)
-                  }
-                  formatWeekDay={(name) =>
-                     name.substring(0, 2).replace(/^./, (c) => c.toUpperCase())
-                  }
-                  filterDate={filterDate}
-                  dayClassName={(date) => {
-                     const key = localDateStr(date);
-                     return freeByDay.has(key) || key === existingDayKey
-                        ? ""
-                        : "saddprogramari__day--inactive";
-                  }}
-                  calendarClassName="aAddProg__datepicker"
-               />
-            </div>
+   const renderForm = () => {
+      const nowDayLocal = localDateStrTZ(new Date(), MOLDOVA_TZ);
+      const nowHHMM = nowHHMMInMoldova();
+      const currentKey = existing?.startTime
+         ? busyLocalKeyFromStored(existing.startTime)
+         : null;
+      const currentDayKey = currentKey ? currentKey.split("|")[0] : null;
 
-            {/* Ore – LISTĂ simplă */}
-            <div className="saddprogramari__times">
-               <h3 className="saddprogramari__title hide">Selectează:</h3>
-               <div className="saddprogramari__times-list">
-                  {!selectedDate && (
-                     <div className="saddprogramari__disclaimer">
-                        Te rog să selectezi mai întâi o zi!
-                     </div>
-                  )}
-
-                  {oreDisponibile.map((ora) => {
-                     const iso = selectedDate
-                        ? toUtcIsoFromLocal(selectedDate, ora.oraStart)
-                        : null;
-                     const isSelected = selectedTime?.oraStart === ora.oraStart;
-
-                     const isToday =
-                        selectedDate &&
-                        localDateStr(selectedDate) === localDateStr(new Date());
-                     const now = new Date();
-                     const nowHH = String(now.getHours()).padStart(2, "0");
-                     const nowMM = String(now.getMinutes()).padStart(2, "0");
-                     const nowHHMM = `${nowHH}:${nowMM}`;
-                     const pastToday = isToday && ora.oraStart <= nowHHMM;
-
-                     const currentIso = existing?.startTime
-                        ? new Date(existing.startTime).toISOString()
-                        : null;
-                     const isExistingSlot = currentIso && iso === currentIso;
-                     const studentUnchanged =
-                        String(studentId) === String(originalStudentId);
-
-                     const available =
-                        (isExistingSlot && studentUnchanged) ||
-                        (iso ? freeSet.has(iso) : false);
-
-                     const disabled =
-                        !selectedDate ||
-                        pastToday ||
-                        (iso && new Date(iso) <= new Date()) ||
-                        !available;
-
-                     return (
-                        <button
-                           key={ora.eticheta}
-                           onClick={() => setSelectedTime(ora)}
-                           disabled={disabled}
-                           className={`saddprogramari__time-btn ${
-                              isSelected
-                                 ? "saddprogramari__time-btn--selected"
-                                 : ""
-                           } ${
-                              disabled
-                                 ? "saddprogramari__time-btn--disabled"
-                                 : ""
-                           }`}
-                           title={
-                              !selectedDate
-                                 ? "Alege o zi"
-                                 : pastToday
-                                 ? "Ora a trecut deja pentru azi"
-                                 : isExistingSlot && !studentUnchanged
-                                 ? "Schimbi elevul: slotul actual trebuie să fie liber"
-                                 : !available
-                                 ? "Indisponibil pentru elevul/instructorul selectați"
-                                 : ""
-                           }
-                        >
-                           {ora.eticheta}
-                        </button>
-                     );
-                  })}
-               </div>
-            </div>
-         </div>
-
-         {/* Elev + Instructor */}
-         <div className="instructors-popup__form-row" style={{ marginTop: 10 }}>
-            <label className="instructors-popup__field" style={{ flex: 1 }}>
-               <span className="instructors-popup__label">Elev</span>
-               <div className="picker__row">
-                  <input
-                     className="instructors-popup__input"
-                     type="text"
-                     readOnly
-                     value={
-                        studentDisplay +
-                        (studentPhone ? ` · ${studentPhone}` : "")
-                     }
-                     placeholder="Alege elev"
-                  />
-                  <button
-                     type="button"
-                     className="instructors-popup__form-button"
-                     onClick={() => setView("studentSearch")}
-                  >
-                     Caută elev
-                  </button>
-               </div>
-            </label>
-
-            <label className="instructors-popup__field" style={{ flex: 1 }}>
-               <span className="instructors-popup__label">Instructor</span>
-               <div className="picker__row">
-                  <input
-                     className="instructors-popup__input"
-                     type="text"
-                     readOnly
-                     value={
-                        instructorDisplay +
-                        (instructorPhone ? ` · ${instructorPhone}` : "")
-                     }
-                     placeholder="Alege instructor"
-                  />
-                  <button
-                     type="button"
-                     className="instructors-popup__form-button"
-                     onClick={() => setView("instructorSearch")}
-                  >
-                     Caută instructor
-                  </button>
-               </div>
-            </label>
-         </div>
-
-         {/* Notiță scurtă */}
-         <input
-            className="instructors-popup__input"
-            placeholder="Ex.: punct de întâlnire, cerințe speciale, progres etc."
-            value={privateMessage}
-            style={{ marginBottom: "6px" }}
-            onChange={(e) => setPrivateMessage(e.target.value)}
-         />
-
-         {/* Sector + Cutie */}
-         <div className="instructors-popup__form-row">
-            <div
-               className={`instructors-popup__radio-wrapper addprog ${
-                  sector === "Botanica" ? "active-botanica" : "active-ciocana"
-               }`}
-               style={{ flex: 1 }}
-            >
-               <label>
-                  <input
-                     type="radio"
-                     name="sector"
-                     value="Botanica"
-                     checked={sector === "Botanica"}
-                     onChange={(e) => setSector(e.target.value)}
-                  />
-                  Botanica
-               </label>
-               <label>
-                  <input
-                     type="radio"
-                     name="sector"
-                     value="Ciocana"
-                     checked={sector === "Ciocana"}
-                     onChange={(e) => setSector(e.target.value)}
-                  />
-                  Ciocana
-               </label>
-            </div>
-
-            <div
-               className={`instructors-popup__radio-wrapper addprog ${
-                  gearbox === "Manual" ? "active-botanica" : "active-ciocana"
-               }`}
-               style={{ flex: 1 }}
-            >
-               <label>
-                  <input
-                     type="radio"
-                     name="gearbox"
-                     value="Manual"
-                     checked={gearbox === "Manual"}
-                     onChange={(e) => setGearbox(e.target.value)}
-                  />
-                  Manual
-               </label>
-               <label>
-                  <input
-                     type="radio"
-                     name="gearbox"
-                     value="Automat"
-                     checked={gearbox === "Automat"}
-                     onChange={(e) => setGearbox(e.target.value)}
-                  />
-                  Automat
-               </label>
-            </div>
-         </div>
-
-         {/* Selector culoare (tooltip nativ + fallback mobil) */}
-         <div
-            className="saddprogramari__color-grid"
-            role="radiogroup"
-            aria-label="Culoare eveniment"
-         >
-            {COLOR_TOKENS.map((token) => {
-               const suffix = token.replace(/^--/, "");
-               const active = colorToken === token;
-               const name = COLOR_LABEL[suffix] || suffix;
-               const tip = COLOR_HINTS[suffix]
-                  ? `${COLOR_HINTS[suffix]}`
-                  : name;
-
-               return (
-                  <button
-                     key={token}
-                     type="button"
-                     role="radio"
-                     aria-checked={active}
-                     aria-label={tip}
-                     title={tip} // ✅ tooltip nativ desktop
-                     className={[
-                        "saddprogramari__color-swatch",
-                        `saddprogramari__color-swatch--${suffix}`,
-                        active ? "is-active" : "",
-                     ].join(" ")}
-                     onClick={() => setColorToken(token)}
-                     onFocus={() => setColorHoverText(tip)} // accesibilitate tastatură
-                     onBlur={() => setColorHoverText("")}
-                     onTouchStart={() => {
-                        // ✅ fallback pe mobil: afișăm eticheta 1.6s
-                        setColorHoverText(tip);
-                        if (colorHoverTimerRef.current)
-                           clearTimeout(colorHoverTimerRef.current);
-                        colorHoverTimerRef.current = setTimeout(() => {
-                           setColorHoverText("");
-                        }, 1600);
+      return (
+         <>
+            {/* Calendar + Ore */}
+            <div className="saddprogramari__selector">
+               {/* Calendar */}
+               <div className="saddprogramari__calendar">
+                  <h3 className="saddprogramari__title">
+                     Selectează data și ora:
+                  </h3>
+                  <DatePicker
+                     selected={selectedDate}
+                     onChange={(d) => {
+                        setSelectedDate(d);
+                        setSelectedTime(null);
                      }}
+                     inline
+                     locale="ro"
+                     openToDate={
+                        selectedDate ||
+                        (existing?.startTime
+                           ? new Date(existing.startTime)
+                           : undefined)
+                     }
+                     formatWeekDay={(name) =>
+                        name
+                           .substring(0, 2)
+                           .replace(/^./, (c) => c.toUpperCase())
+                     }
+                     filterDate={filterDate}
+                     dayClassName={(date) => {
+                        const key = localDateStr(date);
+                        return freeByDay.has(key) || key === currentDayKey
+                           ? ""
+                           : "saddprogramari__day--inactive";
+                     }}
+                     calendarClassName="aAddProg__datepicker"
                   />
-               );
-            })}
-         </div>
+               </div>
 
-         {/* eticheta scurtă sub grid (apare pe mobil / focus) */}
-         {colorHoverText ? (
-            <div
-               className="saddprogramari__color-hint"
-               style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}
-            >
-               {colorHoverText}
+               {/* Ore – LISTĂ simplă */}
+               <div className="saddprogramari__times">
+                  <h3 className="saddprogramari__title hide">Selectează:</h3>
+                  <div className="saddprogramari__times-list">
+                     {!selectedDate && (
+                        <div className="saddprogramari__disclaimer">
+                           Te rog să selectezi mai întâi o zi!
+                        </div>
+                     )}
+
+                     {oreDisponibile.map((ora) => {
+                        const key =
+                           selectedDate && ora?.oraStart
+                              ? localKeyForDateAndTime(
+                                   selectedDate,
+                                   ora.oraStart
+                                )
+                              : null;
+
+                        const isSelected =
+                           selectedTime?.oraStart === ora.oraStart;
+
+                        const isTodayLocal =
+                           selectedDate &&
+                           localDateStr(selectedDate) === nowDayLocal;
+                        const pastToday =
+                           isTodayLocal && ora.oraStart <= nowHHMM;
+
+                        const isExistingSlot = currentKey && key === currentKey;
+                        const studentUnchanged =
+                           String(studentId) === String(originalStudentId);
+
+                        const available =
+                           (isExistingSlot && studentUnchanged) ||
+                           (key ? freeLocalKeySet.has(key) : false);
+
+                        const disabled =
+                           !selectedDate || pastToday || !available;
+
+                        return (
+                           <button
+                              key={ora.eticheta}
+                              onClick={() => setSelectedTime(ora)}
+                              disabled={disabled}
+                              className={`saddprogramari__time-btn ${
+                                 isSelected
+                                    ? "saddprogramari__time-btn--selected"
+                                    : ""
+                              } ${
+                                 disabled
+                                    ? "saddprogramari__time-btn--disabled"
+                                    : ""
+                              }`}
+                              title={
+                                 !selectedDate
+                                    ? "Alege o zi"
+                                    : pastToday
+                                    ? "Ora a trecut deja pentru azi"
+                                    : isExistingSlot && !studentUnchanged
+                                    ? "Schimbi elevul: slotul actual trebuie să fie liber pentru elevul nou"
+                                    : !available
+                                    ? "Indisponibil pentru elevul/instructorul selectați"
+                                    : ""
+                              }
+                           >
+                              {ora.eticheta}
+                           </button>
+                        );
+                     })}
+                  </div>
+               </div>
             </div>
-         ) : null}
 
-         {/* Butoane */}
-         <div
-            className="instructors-popup__btns"
-            style={{ marginTop: 10, alignItems: "center" }}
-         >
-            <button
-               className="instructors-popup__form-button instructors-popup__form-button--edit"
-               onClick={() => setView("history")}
-               title="Vezi istoricul modificărilor"
-               style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            {/* Elev + Instructor */}
+            <div
+               className="instructors-popup__form-row"
+               style={{ marginTop: 10 }}
             >
-               Istoric
-            </button>
+               <label className="instructors-popup__field" style={{ flex: 1 }}>
+                  <span className="instructors-popup__label">Elev</span>
+                  <div className="picker__row">
+                     <input
+                        className="instructors-popup__input"
+                        type="text"
+                        readOnly
+                        value={
+                           studentDisplay +
+                           (studentPhone ? ` · ${studentPhone}` : "")
+                        }
+                        placeholder="Alege elev"
+                     />
+                     <button
+                        type="button"
+                        className="instructors-popup__form-button"
+                        onClick={() => setView("studentSearch")}
+                     >
+                        Caută elev
+                     </button>
+                  </div>
+               </label>
 
-            <div style={{ flex: 1 }} />
+               <label className="instructors-popup__field" style={{ flex: 1 }}>
+                  <span className="instructors-popup__label">Instructor</span>
+                  <div className="picker__row">
+                     <input
+                        className="instructors-popup__input"
+                        type="text"
+                        readOnly
+                        value={
+                           instructorDisplay +
+                           (instructorPhone ? ` · ${instructorPhone}` : "")
+                        }
+                        placeholder="Alege instructor"
+                     />
+                     <button
+                        type="button"
+                        className="instructors-popup__form-button"
+                        onClick={() => setView("instructorSearch")}
+                     >
+                        Caută instructor
+                     </button>
+                  </div>
+               </label>
+            </div>
 
-            <button
-               className="instructors-popup__form-button instructors-popup__form-button--delete"
-               onClick={onDelete}
+            {/* Notiță scurtă */}
+            <input
+               className="instructors-popup__input"
+               placeholder="Ex.: punct de întâlnire, cerințe speciale, progres etc."
+               value={privateMessage}
+               style={{ marginBottom: "6px" }}
+               onChange={(e) => setPrivateMessage(e.target.value)}
+            />
+
+            {/* Sector + Cutie */}
+            <div className="instructors-popup__form-row">
+               <div
+                  className={`instructors-popup__radio-wrapper addprog ${
+                     sector === "Botanica"
+                        ? "active-botanica"
+                        : "active-ciocana"
+                  }`}
+                  style={{ flex: 1 }}
+               >
+                  <label>
+                     <input
+                        type="radio"
+                        name="sector"
+                        value="Botanica"
+                        checked={sector === "Botanica"}
+                        onChange={(e) => setSector(e.target.value)}
+                     />
+                     Botanica
+                  </label>
+                  <label>
+                     <input
+                        type="radio"
+                        name="sector"
+                        value="Ciocana"
+                        checked={sector === "Ciocana"}
+                        onChange={(e) => setSector(e.target.value)}
+                     />
+                     Ciocana
+                  </label>
+               </div>
+
+               <div
+                  className={`instructors-popup__radio-wrapper addprog ${
+                     gearbox === "Manual" ? "active-botanica" : "active-ciocana"
+                  }`}
+                  style={{ flex: 1 }}
+               >
+                  <label>
+                     <input
+                        type="radio"
+                        name="gearbox"
+                        value="Manual"
+                        checked={gearbox === "Manual"}
+                        onChange={(e) => setGearbox(e.target.value)}
+                     />
+                     Manual
+                  </label>
+                  <label>
+                     <input
+                        type="radio"
+                        name="gearbox"
+                        value="Automat"
+                        checked={gearbox === "Automat"}
+                        onChange={(e) => setGearbox(e.target.value)}
+                     />
+                     Automat
+                  </label>
+               </div>
+            </div>
+
+            {/* Selector culoare */}
+            <div
+               className="saddprogramari__color-grid"
+               role="radiogroup"
+               aria-label="Culoare eveniment"
             >
-               Șterge
-            </button>
-            <button
-               className="instructors-popup__form-button instructors-popup__form-button--save"
-               onClick={onSave}
+               {COLOR_TOKENS.map((token) => {
+                  const suffix = token.replace(/^--/, "");
+                  const active = colorToken === token;
+                  const name = COLOR_LABEL[suffix] || suffix;
+                  const tip = COLOR_HINTS[suffix]
+                     ? `${COLOR_HINTS[suffix]}`
+                     : name;
+                  return (
+                     <button
+                        key={token}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        aria-label={tip}
+                        title={tip}
+                        className={[
+                           "saddprogramari__color-swatch",
+                           `saddprogramari__color-swatch--${suffix}`,
+                           active ? "is-active" : "",
+                        ].join(" ")}
+                        onClick={() => setColorToken(token)}
+                        onFocus={() => setColorHoverText(tip)}
+                        onBlur={() => setColorHoverText("")}
+                        onTouchStart={() => {
+                           setColorHoverText(tip);
+                           if (colorHoverTimerRef.current)
+                              clearTimeout(colorHoverTimerRef.current);
+                           colorHoverTimerRef.current = setTimeout(() => {
+                              setColorHoverText("");
+                           }, 1600);
+                        }}
+                     />
+                  );
+               })}
+            </div>
+
+            {colorHoverText ? (
+               <div
+                  className="saddprogramari__color-hint"
+                  style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}
+               >
+                  {colorHoverText}
+               </div>
+            ) : null}
+
+            {/* Butoane */}
+            <div
+               className="instructors-popup__btns"
+               style={{ marginTop: 10, alignItems: "center" }}
             >
-               Salvează
-            </button>
-         </div>
-      </>
-   );
+               <button
+                  className="instructors-popup__form-button instructors-popup__form-button--edit"
+                  onClick={() => setView("history")}
+                  title="Vezi istoricul modificărilor"
+                  style={{
+                     display: "inline-flex",
+                     alignItems: "center",
+                     gap: 6,
+                  }}
+               >
+                  Istoric
+               </button>
+
+               <div style={{ flex: 1 }} />
+
+               <button
+                  className="instructors-popup__form-button instructors-popup__form-button--delete"
+                  onClick={onDelete}
+               >
+                  Șterge
+               </button>
+               <button
+                  className="instructors-popup__form-button instructors-popup__form-button--save"
+                  onClick={onSave}
+               >
+                  Salvează
+               </button>
+            </div>
+         </>
+      );
+   };
 
    return (
       <>

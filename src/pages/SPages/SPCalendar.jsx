@@ -12,7 +12,6 @@ import "react-clock/dist/Clock.css";
 import Header from "../../components/Header/Header";
 import Popup from "../../components/Utils/Popup";
 import SCalendar from "../../components/SPanel/SCalendar";
-
 import { getReservations } from "../../api/reservationsService";
 
 // icoane
@@ -37,6 +36,56 @@ const localizer = dateFnsLocalizer({
    locales,
 });
 
+// ——— helper: parsează “floating” și păstrează HH:mm exact ca în string ———
+function toFloatingDate(val) {
+   if (!val) return null;
+
+   if (val instanceof Date && !isNaN(val)) {
+      // re-constituim ca local wall-clock (fără TZ)
+      return new Date(
+         val.getFullYear(),
+         val.getMonth(),
+         val.getDate(),
+         val.getHours(),
+         val.getMinutes(),
+         val.getSeconds(),
+         val.getMilliseconds()
+      );
+   }
+
+   if (typeof val === "string") {
+      // 2025-10-07T13:30[:ss][.sss][Z|±HH:MM]
+      const m = val.match(
+         /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?$/
+      );
+      if (m) {
+         const [, Y, Mo, D, h, mi, s] = m;
+         return new Date(+Y, +Mo - 1, +D, +h, +mi, s ? +s : 0, 0);
+      }
+      // doar data: 2025-10-07
+      const m2 = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m2) {
+         const [, Y, Mo, D] = m2;
+         return new Date(+Y, +Mo - 1, +D, 0, 0, 0, 0);
+      }
+   }
+
+   // fallback
+   const d = new Date(val);
+   if (!isNaN(d)) {
+      return new Date(
+         d.getFullYear(),
+         d.getMonth(),
+         d.getDate(),
+         d.getHours(),
+         d.getMinutes(),
+         d.getSeconds(),
+         d.getMilliseconds()
+      );
+   }
+   return null;
+}
+
 // titlu: 25–31 aug / 25 aug – 2 sept
 const shortMonth = (date, l, culture) =>
    l.format(date, "MMM", culture).replaceAll(".", "");
@@ -48,10 +97,8 @@ const formats = {
       const z = l.format(date, "EEE", culture).replaceAll(".", "");
       return `${d}\n${z}`;
    },
-   // Numele scurt al zilelor (folosit în Month view)
    weekdayFormat: (date, culture, l) =>
       l.format(date, "EEE", culture).replaceAll(".", ""),
-   // Titlul mare al săptămânii
    dayRangeHeaderFormat: ({ start, end }, culture, l) => {
       const sameMonth =
          l.format(start, "M", culture) === l.format(end, "M", culture);
@@ -107,8 +154,13 @@ function SPCalendar() {
          try {
             const data = await getReservations();
             const formatted = data.map((item) => {
-               const start = new Date(item.startTime);
-               const end = new Date(start.getTime() + 90 * 60 * 1000);
+               // IMPORTANT: parse “floating” → 13:30 rămâne 13:30 pe UI
+               const start = toFloatingDate(item.startTime);
+               // dacă backend dă și endTime, îl folosim; altfel 90'
+               const end = item.endTime
+                  ? toFloatingDate(item.endTime)
+                  : new Date(start.getTime() + 90 * 60 * 1000);
+
                return {
                   id: item.id,
                   title: "Programare",
@@ -127,9 +179,9 @@ function SPCalendar() {
          }
       })();
    }, []);
+
    const handleEventClick = (event) => {
-      openPopup("eventInfo", { event }); // sau "dayInfo" dacă așa vrei
-      //console.log("CLICK PE EVENIMENT:", event);
+      openPopup("eventInfo", { event });
    };
 
    // interval vizibil în Week view: 07:00–21:00

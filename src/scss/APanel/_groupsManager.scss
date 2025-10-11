@@ -204,6 +204,10 @@
       grid-auto-rows: min-content;
       gap: 6px;
    }
+   .picker__list {
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) !important;
+   }
+
    &__item {
       border-radius: 22px;
       background: var(--black-p);

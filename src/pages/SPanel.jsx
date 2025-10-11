@@ -40,6 +40,54 @@ const localizer = dateFnsLocalizer({
    locales,
 });
 
+// —— helper: “floating date” (păstrează HH:mm exact, ignoră Z/offset) ——
+function toFloatingDate(val) {
+   if (!val) return null;
+
+   if (val instanceof Date && !isNaN(val)) {
+      return new Date(
+         val.getFullYear(),
+         val.getMonth(),
+         val.getDate(),
+         val.getHours(),
+         val.getMinutes(),
+         val.getSeconds(),
+         val.getMilliseconds()
+      );
+   }
+
+   if (typeof val === "string") {
+      // 2025-10-07T13:30, 2025-10-07 13:30:00.000Z, 2025-10-07T13:30:00+03:00
+      const m = val.match(
+         /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?$/
+      );
+      if (m) {
+         const [, Y, Mo, D, h, mi, s] = m;
+         return new Date(+Y, +Mo - 1, +D, +h, +mi, s ? +s : 0, 0);
+      }
+      // doar data
+      const m2 = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m2) {
+         const [, Y, Mo, D] = m2;
+         return new Date(+Y, +Mo - 1, +D, 0, 0, 0, 0);
+      }
+   }
+
+   const d = new Date(val);
+   if (!isNaN(d)) {
+      return new Date(
+         d.getFullYear(),
+         d.getMonth(),
+         d.getDate(),
+         d.getHours(),
+         d.getMinutes(),
+         d.getSeconds(),
+         d.getMilliseconds()
+      );
+   }
+   return null;
+}
+
 // format dublu-rând "24\nlun" în Week view + titlu corect
 const shortMonth = (date, l, culture) =>
    l.format(date, "MMM", culture).replaceAll(".", "");
@@ -114,18 +162,21 @@ function SPanel() {
             const now = new Date();
 
             const formatted = data.map((item) => {
-               const start = new Date(item.startTime);
-               const end = new Date(start.getTime() + 90 * 60 * 1000);
+               // IMPORTANT: păstrăm ora exactă din string (fără TZ)
+               const start = toFloatingDate(item.startTime);
+               const end = item.endTime
+                  ? toFloatingDate(item.endTime)
+                  : new Date(start.getTime() + 90 * 60 * 1000);
+
                return {
                   id: item.id,
                   title: "Programare",
                   start,
                   end,
-                  // 🔽 adaugă detaliile pentru popup
                   instructor: item.instructor,
                   phone: item.phone || item.instructor?.phone,
                   isConfirmed: item.isConfirmed,
-                  gearbox: item.gearbox, // "manuală" / "automată"
+                  gearbox: item.gearbox,
                   sector: item.sector,
                };
             });
@@ -148,10 +199,11 @@ function SPanel() {
          }
       })();
    }, []);
+
    const handleEventClick = (event) => {
       openPopup("eventInfo", { event });
-      //console.log("CLICK PE EVENIMENT:", event);
    };
+
    // Week view: 07:00–21:00
    const MIN_TIME = new Date(1970, 0, 1, 7, 0, 0);
    const MAX_TIME = new Date(1970, 0, 1, 21, 0, 0);

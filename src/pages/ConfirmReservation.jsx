@@ -89,7 +89,7 @@ export default function ConfirmReservation() {
                      className="sign__img-btn"
                      type="accent"
                      icon={arrowIcon}
-                     link="/"
+                     link="https://instruire-auto.md/"
                   >
                      <span>Acasă</span>
                   </M3Link>
@@ -159,7 +159,7 @@ export default function ConfirmReservation() {
                         />
                      </div>
                      <div className="sign__links">
-                        <M3Link type="accent" icon={arrowIcon} link="/">
+                        <M3Link type="accent" icon={arrowIcon} link="https://instruire-auto.md/">
                            <span>Acasă</span>
                         </M3Link>
                         <M3Link type="succes" icon={addIcon} link="/login">

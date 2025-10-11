@@ -15,13 +15,16 @@ import { fetchAllReservations } from "../../store/reservationsSlice";
 import { createReservations } from "../../api/reservationsService";
 
 import apiClientService from "../../api/ApiClientService";
+import { getInstructorBlackouts } from "../../api/instructorsService";
 
 /* ===== Locale RO ===== */
 registerLocale("ro", ro);
 
 /* ===== Constante / Config ===== */
-const GROUP_TOKEN_FIXED = "ABCD1234"; // tokenul de grup furnizat
-const EMAIL_DOMAIN = "instrauto.com"; // domeniul pt. email-urile generate
+const GROUP_TOKEN_FIXED = "ABCD1234";
+const EMAIL_DOMAIN = "instrauto.com";
+const SLOT_MINUTES = 90;
+const MOLDOVA_TZ = "Europe/Chisinau";
 
 /* ===== Helpers pt. email generat ===== */
 const slugify = (s) =>
@@ -53,67 +56,158 @@ const oreDisponibile = [
    { eticheta: "18:00", oraStart: "18:00" },
 ];
 
+/* ========= TZ-safe utils ========= */
+function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
+   const p = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+   }).formatToParts(new Date(dateLike));
+   const get = (t) => +p.find((x) => x.type === t).value;
+   return {
+      y: get("year"),
+      m: get("month"),
+      d: get("day"),
+      H: get("hour"),
+      M: get("minute"),
+      S: get("second"),
+   };
+}
+function ymdStrInTZ(dateLike, timeZone = MOLDOVA_TZ) {
+   const { y, m, d } = partsInTZ(dateLike, timeZone);
+   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+function hhmmInTZ(dateLike, timeZone = MOLDOVA_TZ) {
+   const { H, M } = partsInTZ(dateLike, timeZone);
+   return `${String(H).padStart(2, "0")}:${String(M).padStart(2, "0")}`;
+}
+function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
+   const { y, m, d, H, M, S } = partsInTZ(tsMs, timeZone);
+   const asUTC = Date.UTC(y, m - 1, d, H, M, S);
+   return (asUTC - tsMs) / 60000;
+}
+function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
+   const [hh, mm] = (timeStrHHMM || "00:00").split(":").map(Number);
+   const utcGuess = Date.UTC(
+      localDateObj.getFullYear(),
+      localDateObj.getMonth(),
+      localDateObj.getDate(),
+      hh,
+      mm,
+      0,
+      0
+   );
+   const offMin = tzOffsetMinutesAt(utcGuess, MOLDOVA_TZ);
+   const fixedUtcMs = utcGuess - offMin * 60000;
+   return new Date(fixedUtcMs).toISOString();
+}
+function toUtcIsoFromLocal(localDateObj, timeStrHHMM) {
+   return toUtcIsoFromMoldova(localDateObj, timeStrHHMM);
+}
+
+const BUSY_KEYS_MODE = "local-match";
+
+/** 'YYYY-MM-DDTHH:mm:00+02:00/+03:00' pentru DB (păstrează ora locală) */
+function isoForDbMatchLocalHour(isoUtcFromMoldova) {
+   const base = new Date(isoUtcFromMoldova);
+   const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
+   const shifted = new Date(base.getTime() + offMin * 60000);
+
+   const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: MOLDOVA_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   }).formatToParts(shifted);
+
+   const Y = parts.find((p) => p.type === "year").value;
+   const Mo = parts.find((p) => p.type === "month").value;
+   const Da = parts.find((p) => p.type === "day").value;
+   const HH = parts.find((p) => p.type === "hour").value;
+   const MM = parts.find((p) => p.type === "minute").value;
+
+   const offMin2 = tzOffsetMinutesAt(shifted.getTime(), MOLDOVA_TZ);
+   const sign = offMin2 >= 0 ? "+" : "-";
+   const abs = Math.abs(offMin2);
+   const offHH = String(Math.floor(abs / 60)).padStart(2, "0");
+   const offMM = String(abs % 60).padStart(2, "0");
+
+   return `${Y}-${Mo}-${Da}T${HH}:${MM}:00${sign}${offHH}:${offMM}`;
+}
+
+/** Chei locale stabile: "YYYY-MM-DD|HH:mm" */
+function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
+   return `${ymdStrInTZ(tsMs, tz)}|${hhmmInTZ(tsMs, tz)}`;
+}
+const localKeyForIso = (iso) =>
+   localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+/** Din ce vine din DB (cu Z/offset sau simplu) -> cheie locală stabilă */
+function busyLocalKeyFromStored(st) {
+   const d = new Date(st);
+   const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
+   const base = new Date(d.getTime() - offMin * 60000);
+   return localKeyFromTs(base.getTime(), MOLDOVA_TZ);
+}
+
 /* ===== Helpers comune ===== */
-const SLOT_MINUTES = 90;
-
-const getDurationMin = (r) =>
-   r?.durationMinutes ??
-   r?.slotMinutes ??
-   r?.lengthMinutes ??
-   r?.duration ??
-   SLOT_MINUTES;
-
-const getStartFromReservation = (r) =>
-   r?.startTime ??
-   r?.start ??
-   r?.start_time ??
-   r?.dateTime ??
-   r?.datetime ??
-   r?.date ??
-   r?.begin ??
-   null;
-
-const getEndFromReservation = (r) => {
-   const st = getStartFromReservation(r);
-   if (!st) return null;
-   const start = new Date(st);
-   const end = new Date(start.getTime() + getDurationMin(r) * 60000);
-   return end.toISOString();
-};
+function getDurationMin(r) {
+   return (
+      r?.durationMinutes ??
+      r?.slotMinutes ??
+      r?.lengthMinutes ??
+      r?.duration ??
+      SLOT_MINUTES
+   );
+}
+function getStartFromReservation(r) {
+   return (
+      r?.startTime ??
+      r?.start ??
+      r?.start_time ??
+      r?.dateTime ??
+      r?.datetime ??
+      r?.date ??
+      r?.begin ??
+      null
+   );
+}
 
 const capRO = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const formatDateRO = (iso) => {
    const d = new Date(iso);
-   const zi = d.getDate();
-   const luna = capRO(d.toLocaleDateString("ro-RO", { month: "long" }));
-   const an = d.getFullYear();
-   return `${zi} ${luna} ${an}`;
+   const fmt = new Intl.DateTimeFormat("ro-RO", {
+      timeZone: MOLDOVA_TZ,
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+   }).format(d);
+   return fmt.replace(/\b([a-zăîâșț])/u, (m) => m.toUpperCase());
 };
 
-const localDateStr = (d) =>
-   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-      d.getDate()
-   ).padStart(2, "0")}`;
-
-const todayAt00 = () => {
+function localDateStr(d) {
+   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+      2,
+      "0"
+   )}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function todayAt00() {
    const t = new Date();
    t.setHours(0, 0, 0, 0);
    return t;
-};
-
-const toUtcIsoFromLocal = (localDateObj, timeStrHHMM) => {
-   const [hh, mm] = timeStrHHMM.split(":").map(Number);
-   const d = new Date(localDateObj);
-   d.setHours(hh, mm, 0, 0);
-   return d.toISOString();
-};
-
-const localDateObjFromStr = (s) => {
+}
+function localDateObjFromStr(s) {
    const [y, m, d] = s.split("-").map(Number);
    return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-};
-
-const nextNDays = (n, fromDate = new Date()) => {
+}
+function nextNDays(n, fromDate = new Date()) {
    const out = [];
    const base = new Date(fromDate);
    base.setHours(0, 0, 0, 0);
@@ -123,11 +217,15 @@ const nextNDays = (n, fromDate = new Date()) => {
       out.push(localDateStr(d));
    }
    return out;
-};
-
-const buildFullGridISO = (daysWindow = 60) => {
+}
+function buildFullGridISO(daysWindow = 60) {
+   // calendar pe zilele Moldova
    const startFrom = new Date();
-   const daysArr = nextNDays(daysWindow, startFrom);
+   const todayMD = ymdStrInTZ(startFrom, MOLDOVA_TZ);
+   const [y, m, d] = todayMD.split("-").map(Number);
+   const baseMD = new Date(y, m - 1, d, 0, 0, 0, 0);
+
+   const daysArr = nextNDays(daysWindow, baseMD);
    const out = [];
    for (const dayStr of daysArr) {
       const dObj = localDateObjFromStr(dayStr);
@@ -136,7 +234,7 @@ const buildFullGridISO = (daysWindow = 60) => {
       }
    }
    return out;
-};
+}
 
 function highlightText(text, query) {
    if (!text) return "";
@@ -158,12 +256,13 @@ const randId = (n = 16) =>
    Array.from({ length: n }, () => Math.random().toString(36).slice(2, 3)).join(
       ""
    );
-const splitFullName = (full = "") => {
+
+function splitFullName(full = "") {
    const parts = full.trim().split(/\s+/).filter(Boolean);
    if (!parts.length) return { firstName: "", lastName: "" };
    if (parts.length === 1) return { firstName: parts[0], lastName: "" };
    return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
-};
+}
 
 /* ===== Telefon cu prefix fix +373 ===== */
 const PREFIX = "+373";
@@ -175,7 +274,7 @@ function PhoneInput373({ value, onChange, ...props }) {
    const normalize = (v) => {
       const digits = onlyDigits(v);
       const rest = digits.startsWith("373") ? digits.slice(3) : digits;
-      return PREFIX + rest.slice(0, 8); // max 8 cifre după +373
+      return PREFIX + rest.slice(0, 8);
    };
 
    const handleChange = (e) => {
@@ -244,7 +343,6 @@ function PhoneInput373({ value, onChange, ...props }) {
 
 /* ===== Component ===== */
 export default function AAddProg({
-   // inițiale (opționale)
    initialStartTime,
    initialDate,
    initialTime,
@@ -335,20 +433,22 @@ export default function AAddProg({
       t.setHours(0, 0, 0, 0);
       return t;
    });
+
    const [selectedTime, setSelectedTime] = useState(() => {
       const hhmm = effectiveStartISO
-         ? new Date(effectiveStartISO).toTimeString().slice(0, 5)
+         ? hhmmInTZ(new Date(effectiveStartISO), MOLDOVA_TZ)
          : initialTime || "";
       const match = oreDisponibile.find((o) => o.oraStart === hhmm);
       return match || null;
    });
 
+   // preferință DST-safe (folosește TZ Moldova)
    const preferredIso = useMemo(() => {
       if (!effectiveStartISO) return null;
       const s = new Date(effectiveStartISO);
       const localMidnight = new Date(s);
       localMidnight.setHours(0, 0, 0, 0);
-      const hhmm = s.toTimeString().slice(0, 5);
+      const hhmm = hhmmInTZ(s, MOLDOVA_TZ);
       return toUtcIsoFromLocal(localMidnight, hhmm);
    }, [effectiveStartISO]);
 
@@ -426,10 +526,10 @@ export default function AAddProg({
          .slice(0, 8);
    }, [mode, phoneFull, students]);
 
-   /* ====== Creare elev pe „Continuă” (email generat + retry) ====== */
+   /* ====== Creare elev pe „Continuă” ====== */
    const ensureStudentCreated = async () => {
       if (mode !== "new") return true;
-      if (studentId) return true; // poate a fost ales din sugestii
+      if (studentId) return true;
 
       const { firstName, lastName } = splitFullName(newFullName);
       if (!firstName || !lastName) {
@@ -523,9 +623,9 @@ export default function AAddProg({
                      errJson?.message || "Nu am putut crea elevul.",
                      "error"
                   );
-                  break; // altă eroare – nu mai încercăm
+                  break;
                }
-               // dacă e duplicat de email, lasă bucla să mai încerce cu sufix
+               // altfel mai încearcă cu sufix
             }
          } catch (e) {
             pushPill(
@@ -536,7 +636,6 @@ export default function AAddProg({
          }
       }
 
-      // fallback: caută după telefon
       await dispatch(fetchStudents());
       const found = (studentsAll || []).find(
          (s) => onlyDigits(s.phone || "") === digits
@@ -555,14 +654,52 @@ export default function AAddProg({
       return false;
    };
 
-   /* ====== Disponibilitate — flux într-un singur click ====== */
+   /** Extrage câmpul datetime dintr-un blackout.
+    *  Pentru REPEAT preferă startDateTime (începutul seriei). */
+   function getBlackoutDT(b) {
+      if (typeof b === "string") return b;
+      const t = String(b?.type || "").toUpperCase();
+      if (t === "REPEAT") {
+         return b?.startDateTime || b?.dateTime || b?.datetime || null;
+      }
+      return (
+         b?.dateTime ||
+         b?.datetime ||
+         b?.startTime ||
+         b?.date ||
+         b?.begin ||
+         null
+      );
+   }
+
+   /** Expandează un blackout REPEAT în chei locale "YYYY-MM-DD|HH:mm", filtrate la grila curentă. */
+   function expandRepeatLocalKeys(b, allowedKeysSet) {
+      const out = [];
+      const t = String(b?.type || "").toUpperCase();
+      if (t !== "REPEAT") return out;
+
+      const stepDays = Math.max(1, Number(b?.repeatEveryDays || 1));
+      const first = b?.startDateTime || b?.dateTime;
+      const last = b?.endDateTime || first;
+      if (!first || !last) return out;
+
+      let cur = new Date(first).getTime();
+      const lastMs = new Date(last).getTime();
+      while (cur <= lastMs) {
+         const key = busyLocalKeyFromStored(new Date(cur).toISOString());
+         if (!allowedKeysSet || allowedKeysSet.has(key)) out.push(key);
+         cur += stepDays * 24 * 60 * 60 * 1000;
+      }
+      return out;
+   }
+
+   /* ====== Disponibilitate (cu rezervări + blackouts) ====== */
    const computeAvailability = async () => {
       if (!instructorId) return pushPill("Selectează instructorul.", "error");
       if (continuing) return;
 
       setContinuing(true);
       try {
-         // 1) dacă e „Student nou”, îl creăm ACUM
          if (mode === "new") {
             const okStudent = await ensureStudentCreated();
             if (!okStudent) return;
@@ -573,71 +710,78 @@ export default function AAddProg({
             }
          }
 
-         // 2) calculează sloturile libere (logica existentă)
          const fullGrid = buildFullGridISO(WINDOW_DAYS);
+         const allowedKeys = new Set(
+            fullGrid.map((iso) => localKeyForIso(iso))
+         );
+         const now = new Date();
 
-         const studentIntervals = (allReservations || [])
-            .filter(
-               (r) =>
-                  String(r?.userId ?? r?.studentId ?? "") === String(studentId)
-            )
-            .map((r) => {
-               const st = getStartFromReservation(r);
-               const en = getEndFromReservation(r);
-               return st && en ? [new Date(st), new Date(en)] : null;
-            })
-            .filter(Boolean);
+         // seturi 'busy' pe cheie locală (YYYY-MM-DD|HH:mm)
+         const busyStudent = new Set();
+         const busyInstructor = new Set();
 
-         const instructorIntervals = (allReservations || [])
-            .filter(
-               (r) => String(r?.instructorId ?? "") === String(instructorId)
-            )
-            .map((r) => {
-               const st = getStartFromReservation(r);
-               const en = getEndFromReservation(r);
-               return st && en ? [new Date(st), new Date(en)] : null;
-            })
-            .filter(Boolean);
+         // rezervări existente
+         for (const r of allReservations || []) {
+            const stRaw = getStartFromReservation(r);
+            if (!stRaw) continue;
+            const key = busyLocalKeyFromStored(stRaw);
+            const rStuId = String(r?.userId ?? r?.studentId ?? "");
+            const rInsId = String(r?.instructorId ?? "");
+            if (rStuId === String(studentId)) busyStudent.add(key);
+            if (rInsId === String(instructorId)) busyInstructor.add(key);
+         }
 
-         const conflictsAny = (start, end) => {
-            for (const [s, e] of studentIntervals)
-               if (start < e && end > s) return true;
-            for (const [s, e] of instructorIntervals)
-               if (start < e && end > s) return true;
-            return false;
-         };
+         // blackouts ale instructorului: REPEAT -> expandare completă; SINGLE -> o singură cheie
+         try {
+            const blackouts = await getInstructorBlackouts(instructorId);
+            for (const b of blackouts || []) {
+               const type = String(b?.type || "").toUpperCase();
 
+               if (type === "REPEAT") {
+                  const keys = expandRepeatLocalKeys(b, allowedKeys);
+                  for (const key of keys) {
+                     busyInstructor.add(key);
+                  }
+               } else {
+                  const dt = getBlackoutDT(b);
+                  if (!dt) continue;
+                  const key = busyLocalKeyFromStored(dt);
+                  if (allowedKeys.has(key)) busyInstructor.add(key);
+               }
+            }
+         } catch (e) {
+            pushPill(
+               "Nu am putut încărca orele blocate ale instructorului. Se afișează doar rezervările.",
+               "warning"
+            );
+         }
+
+         // slot liber = viitor + cheie locală nu e în busy-seturi
          const free = fullGrid.filter((iso) => {
-            const start = new Date(iso);
-            const end = new Date(start.getTime() + SLOT_MINUTES * 60000);
-            return !conflictsAny(start, end);
+            if (new Date(iso) <= now) return false;
+            const key = localKeyForIso(iso);
+            return !busyStudent.has(key) && !busyInstructor.has(key);
          });
 
-         const now = new Date();
-         const freeFuture = free.filter((iso) => new Date(iso) >= now);
-
-         if (!freeFuture.length) {
+         if (!free.length) {
             pushPill(
                "Nu s-au găsit sloturi libere în intervalul următor.",
                "info"
             );
          }
 
-         setFreeSlots(freeFuture);
+         setFreeSlots(free);
          setStage("pick");
          setView("formPick");
 
-         // safety: dacă data selectată e în trecut, mut pe azi
          const t00 = todayAt00();
          if (selectedDate < t00) setSelectedDate(t00);
 
-         // autoselectează slotul preferat dacă e liber
-         if (preferredIso && freeFuture.includes(preferredIso)) {
+         if (preferredIso && free.includes(preferredIso)) {
             const d = new Date(preferredIso);
-            setSelectedDate(localDateObjFromStr(localDateStr(d)));
-            const hh = String(d.getHours()).padStart(2, "0");
-            const mm = String(d.getMinutes()).padStart(2, "0");
-            const m = oreDisponibile.find((o) => o.oraStart === `${hh}:${mm}`);
+            setSelectedDate(localDateObjFromStr(ymdStrInTZ(d, MOLDOVA_TZ)));
+            const hh = hhmmInTZ(d, MOLDOVA_TZ);
+            const m = oreDisponibile.find((o) => o.oraStart === hh);
             setSelectedTime(m || null);
          } else {
             setSelectedTime(null);
@@ -647,26 +791,25 @@ export default function AAddProg({
       }
    };
 
+   // grupare sloturi libere pe zile în Moldova
    const freeByDay = useMemo(() => {
       const map = new Map();
       for (const iso of freeSlots) {
-         const key = localDateStr(new Date(iso));
+         const key = ymdStrInTZ(iso, MOLDOVA_TZ);
          map.set(key, (map.get(key) || 0) + 1);
       }
       return map;
    }, [freeSlots]);
 
-   const dayLocal = selectedDate ? localDateStr(selectedDate) : null;
+   const dayLocal = selectedDate ? ymdStrInTZ(selectedDate, MOLDOVA_TZ) : null;
 
    const freeTimesForDay = useMemo(() => {
       if (!selectedDate) return new Set();
       const set = new Set();
       for (const iso of freeSlots) {
          const d = new Date(iso);
-         if (localDateStr(d) === dayLocal) {
-            const hh = String(d.getHours()).padStart(2, "0");
-            const mm = String(d.getMinutes()).padStart(2, "0");
-            set.add(`${hh}:${mm}`);
+         if (ymdStrInTZ(d, MOLDOVA_TZ) === dayLocal) {
+            set.add(hhmmInTZ(d, MOLDOVA_TZ));
          }
       }
       return set;
@@ -690,6 +833,8 @@ export default function AAddProg({
             "Slot indisponibil pentru elevul și instructorul selectați."
          );
       }
+      const startTimeToSend =
+         BUSY_KEYS_MODE === "local-match" ? isoForDbMatchLocalHour(iso) : iso;
 
       setSaving(true);
       try {
@@ -698,7 +843,7 @@ export default function AAddProg({
             reservations: [
                {
                   userId: Number(studentId),
-                  startTime: iso,
+                  startTime: startTimeToSend,
                   sector: sector || "Botanica",
                   gearbox:
                      (gearbox || "Manual").toLowerCase() === "automat"
@@ -801,7 +946,6 @@ export default function AAddProg({
                            </span>
 
                            <div className="saddprogramari__new-grid">
-                              {/* Nume + Prenume */}
                               <input
                                  className="instructors-popup__input"
                                  placeholder="Nume Prenume"
@@ -811,14 +955,11 @@ export default function AAddProg({
                                  }
                                  disabled={continuing}
                               />
-                              {/* Telefon +373 fix */}
                               <PhoneInput373
                                  value={phoneFull}
                                  onChange={setPhoneFull}
                                  disabled={continuing}
                               />
-
-                              {/* Sugestii după telefon (dacă există în listă) */}
                            </div>
                         </div>
                      )}
@@ -850,6 +991,7 @@ export default function AAddProg({
                         </div>
                      </label>
                   </div>
+
                   {phoneMatches.length > 0 && !continuing && (
                      <ul className="phone-suggestions">
                         {phoneMatches.map((s) => {
@@ -880,6 +1022,7 @@ export default function AAddProg({
                         })}
                      </ul>
                   )}
+
                   {/* Sector + Cutie */}
                   <div className="instructors-popup__form-row">
                      <div
@@ -975,7 +1118,7 @@ export default function AAddProg({
                </>
             )}
 
-            {/* Căutare elev (fără email în filtrare/afișare) */}
+            {/* Căutare elev */}
             {view === "searchStudent" && (
                <>
                   <div className="instructors-popup__search-wrapper">
@@ -1103,7 +1246,7 @@ export default function AAddProg({
                            }
                            minDate={todayAt00()}
                            dayClassName={(date) => {
-                              const day = localDateStr(date);
+                              const day = ymdStrInTZ(date, MOLDOVA_TZ);
                               return freeByDay.has(day)
                                  ? ""
                                  : "saddprogramari__day--inactive";
@@ -1130,18 +1273,9 @@ export default function AAddProg({
 
                               const isToday =
                                  !!selectedDate &&
-                                 localDateStr(selectedDate) ===
-                                    localDateStr(new Date());
-                              const now = new Date();
-                              const nowHH = String(now.getHours()).padStart(
-                                 2,
-                                 "0"
-                              );
-                              const nowMM = String(now.getMinutes()).padStart(
-                                 2,
-                                 "0"
-                              );
-                              const nowHHMM = `${nowHH}:${nowMM}`;
+                                 ymdStrInTZ(selectedDate, MOLDOVA_TZ) ===
+                                    ymdStrInTZ(new Date(), MOLDOVA_TZ);
+                              const nowHHMM = hhmmInTZ(new Date(), MOLDOVA_TZ);
                               const pastToday =
                                  isToday && ora.oraStart <= nowHHMM;
 

@@ -32,7 +32,22 @@ function EventCard({
 }) {
    const colorToken = normalizeColor(ev.color);
    const colorClass = colorClassMap[colorToken];
+   const MOLDOVA_TZ = "Europe/Chisinau";
+   const fmtHHMM_MD = (val) =>
+      new Intl.DateTimeFormat("ro-RO", {
+         timeZone: MOLDOVA_TZ,
+         hour: "2-digit",
+         minute: "2-digit",
+         hour12: false,
+      }).format(val ? new Date(val) : new Date());
 
+   const strictHHMM = (val) => {
+      if (typeof val === "string") {
+         const m = val.match(/T(\d{2}):(\d{2})/);
+         if (m) return `${m[1]}:${m[2]}`; // păstrează HH:mm exact din string
+      }
+      return fmtHHMM_MD(val);
+   };
    const person = `${ev.studentFirst || ""} ${ev.studentLast || ""}`.trim();
    const studentObj = ev.studentId
       ? {
@@ -119,10 +134,7 @@ function EventCard({
          >
             <span className="dv-meta-pill">{ev.isConfirmed ? "Da" : "Nu"}</span>
             <span className="dv-meta-pill">
-               {new Date(ev.start).toLocaleTimeString("ro-RO", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-               })}
+               {strictHHMM(ev.raw?.startTime ?? ev.start)}
             </span>
             {ev.gearboxLabel && (
                <span className="dv-meta-pill">{ev.gearboxLabel}</span>

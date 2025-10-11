@@ -47,6 +47,52 @@ function startOfDayTs(d) {
    return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 }
 const DAY_MS = 24 * 60 * 60 * 1000;
+/* ——— parse “floating”: păstrează HH:mm exact din string, ignoră Z/offset ——— */
+function toFloatingDate(val) {
+   if (!val) return null;
+
+   if (val instanceof Date && !isNaN(val)) {
+      return new Date(
+         val.getFullYear(),
+         val.getMonth(),
+         val.getDate(),
+         val.getHours(),
+         val.getMinutes(),
+         val.getSeconds(),
+         val.getMilliseconds()
+      );
+   }
+
+   if (typeof val === "string") {
+      const m = val.match(
+         /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?$/
+      );
+      if (m) {
+         const [, Y, Mo, D, h, mi, s] = m;
+         return new Date(+Y, +Mo - 1, +D, +h, +mi, s ? +s : 0, 0);
+      }
+      const m2 = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m2) {
+         const [, Y, Mo, D] = m2;
+         return new Date(+Y, +Mo - 1, +D, 0, 0, 0, 0);
+      }
+   }
+
+   const d = new Date(val);
+   if (!isNaN(d)) {
+      return new Date(
+         d.getFullYear(),
+         d.getMonth(),
+         d.getDate(),
+         d.getHours(),
+         d.getMinutes(),
+         d.getSeconds(),
+         d.getMilliseconds()
+      );
+   }
+   return null;
+}
+
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 const genId = () => {
@@ -60,11 +106,14 @@ const genId = () => {
    return `ev_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 };
 
-const hhmm = (d) => {
-   const H = String(new Date(d).getHours()).padStart(2, "0");
-   const M = String(new Date(d).getMinutes()).padStart(2, "0");
-   return `${H}:${M}`;
-};
+const MOLDOVA_TZ = "Europe/Chisinau";
+const hhmm = (d) =>
+   new Intl.DateTimeFormat("en-GB", {
+      timeZone: MOLDOVA_TZ,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   }).format(d instanceof Date ? d : new Date(d));
 
 const escapeRegExp = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const norm = (s = "") =>
@@ -1092,7 +1141,7 @@ export default function CustomDayView(props = {}) {
             r.start_date ??
             null;
          if (!startRaw) continue;
-         const s = new Date(startRaw);
+         const s = toFloatingDate(startRaw);
          const ts = new Date(
             s.getFullYear(),
             s.getMonth(),
@@ -1117,7 +1166,7 @@ export default function CustomDayView(props = {}) {
             null;
          const endRaw =
             r.endTime ?? r.end ?? r.end_at ?? r.endDate ?? r.end_date ?? null;
-         const start = startRaw ? new Date(startRaw) : new Date();
+         const start = startRaw ? toFloatingDate(startRaw) : new Date();
          const durationMin =
             r.durationMinutes ??
             r.slotMinutes ??
@@ -1125,9 +1174,8 @@ export default function CustomDayView(props = {}) {
             r.duration ??
             90;
          const end = endRaw
-            ? new Date(endRaw)
+            ? toFloatingDate(endRaw)
             : new Date(start.getTime() + durationMin * 60000);
-
          const instructorIdRaw =
             r.instructorId ??
             r.instructor_id ??
@@ -1248,7 +1296,7 @@ export default function CustomDayView(props = {}) {
             r.start_date ??
             null;
          if (!sRaw) continue;
-         const s = new Date(sRaw);
+         const s = toFloatingDate(sRaw);
          const ts = new Date(
             s.getFullYear(),
             s.getMonth(),

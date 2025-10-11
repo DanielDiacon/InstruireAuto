@@ -254,7 +254,7 @@ function SignPage() {
                      className="sign__img-btn"
                      type="accent"
                      icon={arrowIcon}
-                     link="/"
+                     link="https://instruire-auto.md/"
                   >
                      <span>Acasă</span>
                   </M3Link>
@@ -648,7 +648,7 @@ function SignPage() {
                         />
                      </div>
                      <div className="sign__links">
-                        <M3Link type="accent" icon={arrowIcon} link="/">
+                        <M3Link type="accent" icon={arrowIcon} link="https://instruire-auto.md/">
                            <span>Acasă</span>
                         </M3Link>
                         {mode === "sign-in" ? (

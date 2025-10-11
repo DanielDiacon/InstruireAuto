@@ -12,6 +12,10 @@ import {
    getBusyForInstructor,
    getBusyForInstructorsGroup,
 } from "../../api/reservationsService";
+import {
+   getInstructorBlackouts,
+   getInstructorsGroupBlackouts,
+} from "../../api/instructorsService";
 import { UserContext } from "../../UserContext";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -23,7 +27,113 @@ import AlertPills from "../Utils/AlertPills";
 /* ===== Locale RO ===== */
 registerLocale("ro", ro);
 
-/* ————— Utilitare ————— */
+/* ============================================================================
+   TIMEZONE: totul pe ora Moldovei (Europe/Chisinau) pentru UI și ocupare
+   IMPORTANT pentru compatibilitate:
+   - BUSY_KEYS_MODE = 'local-match'  -> backend salvează „ora locală” prin hack
+   - BUSY_KEYS_MODE = 'utc'          -> backend salvează momentul corect UTC
+============================================================================ */
+const MOLDOVA_TZ = "Europe/Chisinau";
+const BUSY_KEYS_MODE = "local-match"; // <- pune 'utc' dacă trimiți UTC real
+
+/** 'YYYY-MM-DD' calculat în TZ dat */
+function localDateStrTZ(date, tz = MOLDOVA_TZ) {
+   const fmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+   });
+   const parts = fmt.formatToParts(date);
+   const day = parts.find((p) => p.type === "day")?.value ?? "01";
+   const month = parts.find((p) => p.type === "month")?.value ?? "01";
+   const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+   return `${year}-${month}-${day}`;
+}
+
+/** 'HH:mm' pentru un ISO, afișat în TZ dat */
+function timeHHMMInTZ(iso, tz = MOLDOVA_TZ) {
+   const d = new Date(iso);
+   const fmt = new Intl.DateTimeFormat("ro-RO", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   });
+   return fmt.format(d);
+}
+
+function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
+   const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+   });
+   const p = fmt.formatToParts(new Date(tsMs));
+   const y = +p.find((x) => x.type === "year").value;
+   const m = +p.find((x) => x.type === "month").value;
+   const d = +p.find((x) => x.type === "day").value;
+   const H = +p.find((x) => x.type === "hour").value;
+   const M = +p.find((x) => x.type === "minute").value;
+   const S = +p.find((x) => x.type === "second").value;
+   const asUTC = Date.UTC(y, m - 1, d, H, M, S);
+   return (asUTC - tsMs) / 60000;
+}
+
+/** Moldova (zi + "HH:mm") -> ISO UTC (…Z), stabil la DST */
+function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
+   const [hh, mm] = (timeStrHHMM || "00:00").split(":").map(Number);
+   const utcGuess = Date.UTC(
+      localDateObj.getFullYear(),
+      localDateObj.getMonth(),
+      localDateObj.getDate(),
+      hh,
+      mm,
+      0,
+      0
+   );
+   const offMin = tzOffsetMinutesAt(utcGuess, MOLDOVA_TZ);
+   const fixedUtcMs = utcGuess - offMin * 60000;
+   return new Date(fixedUtcMs).toISOString();
+}
+
+/** HACK: construiește "YYYY-MM-DDTHH:mm:+02/+03" care devine 07:00Z în DB */
+function isoForDbMatchLocalHour(isoUtcFromMoldova) {
+   const base = new Date(isoUtcFromMoldova);
+   const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
+   const shifted = new Date(base.getTime() + offMin * 60000);
+
+   const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: MOLDOVA_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   }).formatToParts(shifted);
+
+   const Y = parts.find((p) => p.type === "year").value;
+   const Mo = parts.find((p) => p.type === "month").value;
+   const Da = parts.find((p) => p.type === "day").value;
+   const HH = parts.find((p) => p.type === "hour").value;
+   const MM = parts.find((p) => p.type === "minute").value;
+
+   const offMin2 = tzOffsetMinutesAt(shifted.getTime(), MOLDOVA_TZ);
+   const sign = offMin2 >= 0 ? "+" : "-";
+   const abs = Math.abs(offMin2);
+   const offHH = String(Math.floor(abs / 60)).padStart(2, "0");
+   const offMM = String(abs % 60).padStart(2, "0");
+
+   return `${Y}-${Mo}-${Da}T${HH}:${MM}:00${sign}${offHH}:${offMM}`;
+}
+
+/* ————— Utilitare simple ————— */
 const oreDisponibile = [
    { eticheta: "07:00", oraStart: "07:00" },
    { eticheta: "08:30", oraStart: "08:30" },
@@ -34,30 +144,34 @@ const oreDisponibile = [
    { eticheta: "16:30", oraStart: "16:30" },
    { eticheta: "18:00", oraStart: "18:00" },
 ];
+const SLOT_LABELS = new Set(oreDisponibile.map((o) => o.oraStart));
 
 const SLOT_MINUTES = 90;
-
 const capRO = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+const localDateStr = (d) => localDateStrTZ(d, MOLDOVA_TZ);
+
 const formatDateRO = (iso) => {
    const d = new Date(iso);
-   const zi = d.getDate();
-   const luna = capRO(d.toLocaleDateString("ro-RO", { month: "short" }));
-   const an = d.getFullYear();
-   return `${zi} ${luna} ${an}`;
+   const str = d.toLocaleDateString("ro-RO", {
+      timeZone: MOLDOVA_TZ,
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+   });
+   return capRO(str);
 };
-const formatTimeRO = (iso) =>
-   new Date(iso).toLocaleTimeString("ro-RO", {
+const formatTimeRO = (iso) => {
+   const d = new Date(iso);
+   return d.toLocaleTimeString("ro-RO", {
+      timeZone: MOLDOVA_TZ,
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
    });
+};
 
 const asStr = (v) => (v == null ? "" : String(v));
 const asStrLower = (v) => asStr(v).trim().toLowerCase();
-const localDateStr = (d) =>
-   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-      d.getDate()
-   ).padStart(2, "0")}`;
 const addDays = (d, n) => {
    const x = new Date(d);
    x.setDate(x.getDate() + n);
@@ -65,31 +179,71 @@ const addDays = (d, n) => {
 };
 const nextNDays = (n, fromDate = new Date()) => {
    const out = [];
-   const base = new Date(fromDate);
-   base.setHours(0, 0, 0, 0);
+   const base = new Date(
+      fromDate.getFullYear(),
+      fromDate.getMonth(),
+      fromDate.getDate(),
+      0,
+      0,
+      0,
+      0
+   );
    for (let i = 0; i < n; i++) {
       const d = new Date(base);
       d.setDate(base.getDate() + i);
-      out.push(localDateStr(d));
+      out.push(localDateStr(d)); // în Moldova
    }
    return out;
 };
 
-/** Construiește ISO (UTC "Z") din data LOCALĂ + HH:mm (ex: 07:00 ora RO) */
-const toUtcIsoFromLocal = (localDateObj, timeStrHHMM) => {
-   const [hh, mm] = timeStrHHMM.split(":").map(Number);
-   const d = new Date(localDateObj); // 00:00 local
-   d.setHours(hh, mm, 0, 0); // setăm ora locală
-   return d.toISOString(); // serializăm în ISO "Z"
-};
-
-/** Date local (00:00) din "YYYY-MM-DD" */
+/** Date local (00:00) din "YYYY-MM-DD" pentru Moldova */
 const localDateObjFromStr = (s) => {
    const [y, m, d] = s.split("-").map(Number);
    return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
 };
 
-/** extrage startTime din obiecte cu forme variabile */
+/* === Chei locale pentru ocupare (fără decalaj) ============================ */
+function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
+   const fmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   });
+   const parts = fmt.formatToParts(new Date(tsMs));
+   const Y = parts.find((p) => p.type === "year").value;
+   const Mo = parts.find((p) => p.type === "month").value;
+   const Da = parts.find((p) => p.type === "day").value;
+   const HH = parts.find((p) => p.type === "hour").value;
+   const MM = parts.find((p) => p.type === "minute").value;
+   return `${Y}-${Mo}-${Da}|${HH}:${MM}`;
+}
+const localKeyForIso = (iso) =>
+   localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+const localKeyForDateAndTime = (localDateObj, hhmm) =>
+   `${localDateStr(localDateObj)}|${hhmm}`;
+
+/** Derivă cheia locală din ceea ce vine din DB pentru BUSY */
+function busyLocalKeyFromStored(st) {
+   const d = new Date(st);
+   if (BUSY_KEYS_MODE === "local-match") {
+      // backend-ul a împins ora „în sus” ca să iasă 07:00Z => d e "shifted"
+      // revenim la baza locală: scădem offsetul din Moldova la acel moment
+      const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
+      const base = new Date(d.getTime() - offMin * 60000);
+      const key = localKeyFromTs(base.getTime(), MOLDOVA_TZ);
+      const hhmm = key.slice(-5);
+      if (SLOT_LABELS.has(hhmm)) return key;
+      return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
+   }
+   // 'utc': DB stochează momentul corect UTC → doar formatez în Moldova
+   return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
+}
+
+/* ——— Extractoare diverse ——— */
 const getStartFromReservation = (r) =>
    r?.startTime ??
    r?.start ??
@@ -115,15 +269,27 @@ const getEndFromReservation = (r) => {
    return end.toISOString();
 };
 
-/** grilă completă (ISO corect), pornind de mâine — azi este blocat */
+/** blackout: câmpuri pentru data/ora */
+const getBlackoutDT = (b) => {
+   if (typeof b === "string") return b;
+   const t = String(b?.type || "").toUpperCase();
+   if (t === "REPEAT") {
+      return b?.startDateTime || b?.dateTime || b?.datetime || null;
+   }
+   return (
+      b?.dateTime ?? b?.startTime ?? b?.start ?? b?.datetime ?? b?.date ?? null
+   );
+};
+
+/** grilă completă (ISO corect), dar vom folosi „chei locale” pentru busy/free */
 function buildFullGridISO(daysWindow = 120) {
    const startFrom = addDays(new Date(), 1);
-   const daysArr = nextNDays(daysWindow, startFrom);
+   const daysArr = nextNDays(daysWindow, startFrom); // "YYYY-MM-DD" în Moldova
    const out = [];
    for (const day of daysArr) {
       const dObj = localDateObjFromStr(day);
       for (const t of oreDisponibile) {
-         out.push(toUtcIsoFromLocal(dObj, t.oraStart)); // local -> UTC ISO
+         out.push(toUtcIsoFromMoldova(dObj, t.oraStart));
       }
    }
    return out;
@@ -145,20 +311,17 @@ const keyForReservation = (r) => {
 };
 
 function findDominantAnchor(resList = []) {
-   // 1) sortăm desc după start
    const withStart = (resList || [])
       .map((r) => ({ r, st: getStartFromReservation(r) }))
       .filter((x) => !!x.st)
       .map((x) => ({ ...x, iso: new Date(x.st).toISOString() }))
       .sort((a, b) => (a.iso < b.iso ? 1 : a.iso > b.iso ? -1 : 0));
 
-   // 2) ultimele 15
    const recent = withStart.slice(0, 15);
    const n = recent.length;
    if (n === 0) return null;
 
-   // 3) grupăm după entitate (group/instructor)
-   const counts = new Map(); // key -> { type, id, count, sample }
+   const counts = new Map();
    const keyFor = (r) => {
       const gid = r?.instructorsGroupId ?? r?.groupId ?? r?.group?.id ?? null;
       const iid =
@@ -178,13 +341,12 @@ function findDominantAnchor(resList = []) {
       const key = `${k.type}:${k.id}`;
       const cur = counts.get(key) || { ...k, count: 0, sample: r };
       cur.count += 1;
-      if (!counts.has(key)) cur.sample = r; // cel mai recent e deja în față
+      if (!counts.has(key)) cur.sample = r;
       counts.set(key, cur);
    }
 
    if (counts.size === 0) return null;
 
-   // 4) majoritate (>50%) sau fallback: cea mai recentă
    let best = null;
    for (const v of counts.values()) if (!best || v.count > best.count) best = v;
    const majority = best.count > Math.floor(n / 2);
@@ -199,7 +361,6 @@ function findDominantAnchor(resList = []) {
       }
    }
 
-   // 5) sector/cutie din sample
    const same = chosen.sample;
    const sectorRaw = same?.sector ?? "Botanica";
    const sector =
@@ -217,70 +378,190 @@ function findDominantAnchor(resList = []) {
    };
 }
 
-/**
- * Busy pentru o entitate: întoarce
- * - busySet: set de start-uri ISO
- * - startCount: Map(isoStart -> număr programări EXACT la acea oră)
- * - busyIntervals: păstrat pentru compatibilitate
- * - capacity: 1 pt instructor; la group luăm total_instructors (fallback 1)
- */
-async function fetchBusyForEntity(entityType, entityId) {
-   if (!entityType || !entityId)
-      return {
-         busySet: new Set(),
-         busyIntervals: [],
-         startCount: new Map(),
-         capacity: 1,
-      };
+/* ===================== BLACKOUTS: REPEAT expander ======================= */
+function expandRepeatLocalKeys(blackout, allowedKeysSet) {
+   const out = [];
+   const t = String(blackout?.type || "").toUpperCase();
+   if (t !== "REPEAT") return out;
 
-   const payload =
+   const stepDays = Math.max(1, Number(blackout?.repeatEveryDays || 1));
+   const first = blackout?.startDateTime || blackout?.dateTime;
+   const last = blackout?.endDateTime || first;
+   if (!first || !last) return out;
+
+   let cur = new Date(first).getTime();
+   const lastMs = new Date(last).getTime();
+   while (cur <= lastMs) {
+      const key = busyLocalKeyFromStored(new Date(cur).toISOString());
+      if (!allowedKeysSet || allowedKeysSet.has(key)) out.push(key);
+      cur += stepDays * 24 * 60 * 60 * 1000;
+   }
+   return out;
+}
+
+/* ===================== Busy map pe SET-uri de instructori ================== */
+/**
+ * Integrează BLACKOUT-urile într-o hartă:
+ *   startBusyLocal: Map("YYYY-MM-DD|HH:mm" -> Set<instructorId | "__ALL__">)
+ * - Pentru REPEAT, extinde pe toată fereastra (allowedKeysSet).
+ * - Dacă blackout-ul e de grup și nu are instructorId => "__ALL__" (blochează toți).
+ */
+async function mergeBlackoutsIntoStartSets(
+   entityType,
+   entityId,
+   startBusyLocal,
+   allowedKeysSet,
+   allInstructorIdsSet
+) {
+   const map = new Map(startBusyLocal);
+   try {
+      const blacks =
+         entityType === "group"
+            ? await getInstructorsGroupBlackouts(entityId)
+            : await getInstructorBlackouts(entityId);
+
+      const items = Array.isArray(blacks)
+         ? blacks
+         : Array.isArray(blacks?.items)
+         ? blacks.items
+         : [];
+
+      for (const b of items) {
+         const t = String(b?.type || "").toUpperCase();
+         const instructId =
+            b?.instructorId ??
+            b?.teacherId ??
+            b?.instructor?.id ??
+            b?.teacher?.id ??
+            null;
+
+         if (t === "REPEAT") {
+            const keys = expandRepeatLocalKeys(b, allowedKeysSet);
+            for (const key of keys) {
+               const set = map.get(key) || new Set();
+               if (entityType === "group") {
+                  if (instructId != null) set.add(Number(instructId));
+                  else set.add("__ALL__");
+               } else {
+                  set.add(Number(instructId ?? entityId));
+               }
+               map.set(key, set);
+            }
+         } else {
+            const dt = getBlackoutDT(b);
+            if (!dt) continue;
+            const key = busyLocalKeyFromStored(dt);
+            if (allowedKeysSet && !allowedKeysSet.has(key)) continue;
+
+            const set = map.get(key) || new Set();
+            if (entityType === "group") {
+               if (instructId != null) set.add(Number(instructId));
+               else set.add("__ALL__");
+            } else {
+               set.add(Number(instructId ?? entityId));
+            }
+            map.set(key, set);
+         }
+      }
+
+      // Dacă avem "__ALL__", nu trebuie să populăm cu toți instructorii:
+      // în evaluare vom trata "__ALL__" ca 'used = capacity'
+   } catch {
+      // dacă endpoint-ul pică, rămânem doar cu rezervările
+   }
+   return map;
+}
+
+/**
+ * Busy pentru o entitate:
+ *  - startBusyLocal: Map("YYYY-MM-DD|HH:mm" -> Set<instructorId | "__ALL__">)
+ *  - capacity: 1 pt instructor; la group = numărul de instructori unici
+ *  - allInstructorIdsSet: toți instructorii din grup (dacă îi avem)
+ */
+async function fetchBusyForEntity(entityType, entityId, allowedKeysSet) {
+   if (!entityType || !entityId) {
+      return {
+         startBusyLocal: new Map(),
+         capacity: 1,
+         allInstructorIdsSet: new Set(),
+      };
+   }
+
+   // Busy din rezervări
+   const raw =
       entityType === "group"
          ? await getBusyForInstructorsGroup(entityId)
          : await getBusyForInstructor(entityId);
 
-   const src = Array.isArray(payload)
-      ? payload
-      : Array.isArray(payload?.reservations)
-      ? payload.reservations
-      : [];
+   const items = Array.isArray(raw) ? raw : [raw];
+   const startBusyLocal = new Map();
+   const allInstructorIdsSet = new Set();
 
-   const starts = [];
-   const intervals = [];
-   const startCount = new Map();
-   for (const r of src) {
-      const st = getStartFromReservation(r);
-      const en = getEndFromReservation(r);
-      if (st) {
-         const iso = new Date(st).toISOString();
-         starts.push(iso);
-         startCount.set(iso, (startCount.get(iso) || 0) + 1);
+   for (const item of items) {
+      const reservations = Array.isArray(item?.reservations)
+         ? item.reservations
+         : [];
+
+      // Strângem toți instructorii raportați de backend pentru capacitate
+      if (Array.isArray(item?.instructorsIds)) {
+         for (const iid of item.instructorsIds) {
+            if (iid != null) allInstructorIdsSet.add(Number(iid));
+         }
       }
-      if (st && en) intervals.push([new Date(st), new Date(en)]);
+
+      for (const r of reservations) {
+         const st = getStartFromReservation(r);
+         if (!st) continue;
+         const key = busyLocalKeyFromStored(st);
+         if (allowedKeysSet && !allowedKeysSet.has(key)) continue;
+
+         const set = startBusyLocal.get(key) || new Set();
+         const rInstr =
+            r?.instructorId ??
+            r?.teacherId ??
+            r?.instructor?.id ??
+            r?.teacher?.id ??
+            (entityType === "instructor" ? Number(entityId) : null);
+
+         if (rInstr != null) set.add(Number(rInstr));
+         startBusyLocal.set(key, set);
+      }
    }
 
-   const capacity =
-      entityType === "group"
-         ? Number(
-              payload?.total_instructors ??
-                 payload?.total_instrucors ?? // fallback typo
-                 payload?.totalInstructors ??
-                 payload?.instructorsCount ??
-                 payload?.capacity ??
-                 1
-           ) || 1
-         : 1;
+   // Capacitate: pentru grup = numărul de instructori unici (fallback diverse câmpuri)
+   let capacity = 1;
+   if (entityType === "group") {
+      const capCandidates = [
+         allInstructorIdsSet.size,
+         Number(raw?.instructorsIds?.length ?? 0),
+         Number(raw?.total_instructors),
+         Number(raw?.total_instrucors),
+         Number(raw?.totalInstructors),
+         Number(raw?.instructorsCount),
+         Number(raw?.capacity),
+      ].filter((x) => Number.isFinite(x) && x > 0);
+      capacity = Math.max(1, ...(capCandidates.length ? capCandidates : [1]));
+   }
 
-   return {
-      busySet: new Set(starts),
-      busyIntervals: intervals,
-      startCount,
-      capacity,
-   };
+   // Integrează BLACKOUTS (cu REPEAT expandat)
+   const merged = await mergeBlackoutsIntoStartSets(
+      entityType,
+      entityId,
+      startBusyLocal,
+      allowedKeysSet,
+      allInstructorIdsSet
+   );
+
+   return { startBusyLocal: merged, capacity, allInstructorIdsSet };
 }
 
-// verificare strictă „ACEEAȘI ORĂ” (nu suprapuneri pe 90min)
-function isStartFull(isoStart, startCountMap, capacity = 1) {
-   const used = startCountMap?.get(isoStart) || 0;
+// verificare strictă „ACEEAȘI ORĂ” pe CHEIE LOCALĂ cu seturi de instructori
+function isStartFullLocal(isoStart, startBusyLocal, capacity = 1) {
+   const key = localKeyForIso(isoStart);
+   const set = startBusyLocal?.get(key);
+   if (!set || set.size === 0) return false;
+   if (set.has("__ALL__")) return true; // blackout de grup fără instructorId => blochează toți
+   const used = set.size; // număr DISTINCT de instructori ocupați în acel slot
    return used >= capacity;
 }
 
@@ -304,23 +585,20 @@ export default function SAddProg({ onClose }) {
    const [sector, setSector] = useState("Botanica");
    const [tip, setTip] = useState("group");
    const WINDOW_DAYS = 120;
-   const [anchor, setAnchor] = useState(null); // { tip, entityId, sector, gearbox }
+   const [anchor, setAnchor] = useState(null);
    const [hardLock30, setHardLock30] = useState(false);
 
-   /* AUTOSWITCH: Ciocana => single (și rămâne blocat pe single) */
    useEffect(() => {
-      if (sector === "Ciocana" && tip !== "single") {
-         setTip("single");
-      }
+      if (sector === "Ciocana" && tip !== "single") setTip("single");
    }, [sector, tip]);
 
    /* Etapa 2 */
    const [stage, setStage] = useState("setup"); // setup | pick
    const [assignedGroupId, setAssignedGroupId] = useState(null);
    const [assignedInstructorId, setAssignedInstructorId] = useState(null);
-   const [freeSlotsForAssigned, setFreeSlotsForAssigned] = useState([]); // ISO[]
-   const [selectedDates, setSelectedDates] = useState([]); // ISO[]
-   const [rejectedDates, setRejectedDates] = useState([]); // ISO[] (conflicte)
+   const [freeSlotsForAssigned, setFreeSlotsForAssigned] = useState([]); // ISO UTC[]
+   const [selectedDates, setSelectedDates] = useState([]); // ISO UTC[]
+   const [rejectedDates, setRejectedDates] = useState([]); // ISO UTC[]
    const [loading, setLoading] = useState(false);
    const [initLoading, setInitLoading] = useState(true);
    const [showList, setShowList] = useState(false);
@@ -345,11 +623,22 @@ export default function SAddProg({ onClose }) {
       );
    }, []);
 
+   /* ——— Sets bazate pe CHEI LOCALE ——— */
+   const freeLocalKeySet = useMemo(
+      () => new Set(freeSlotsForAssigned.map((iso) => localKeyForIso(iso))),
+      [freeSlotsForAssigned]
+   );
+   const selectedLocalKeySet = useMemo(
+      () => new Set(selectedDates.map((iso) => localKeyForIso(iso))),
+      [selectedDates]
+   );
+
    const freeByDay = useMemo(() => {
       const map = new Map();
       for (const iso of freeSlotsForAssigned) {
-         const key = localDateStr(new Date(iso));
-         map.set(key, (map.get(key) || 0) + 1);
+         const key = localKeyForIso(iso); // YYYY-MM-DD|HH:mm
+         const day = key.split("|")[0];
+         map.set(day, (map.get(day) || 0) + 1);
       }
       return map;
    }, [freeSlotsForAssigned]);
@@ -359,30 +648,22 @@ export default function SAddProg({ onClose }) {
    const freeTimesForDay = useMemo(() => {
       if (!data) return new Set();
       const set = new Set();
-      for (const iso of freeSlotsForAssigned) {
-         const d = new Date(iso);
-         if (localDateStr(d) === dayLocal) {
-            const hh = String(d.getHours()).padStart(2, "0"); // LOCAL
-            const mm = String(d.getMinutes()).padStart(2, "0");
-            set.add(`${hh}:${mm}`);
-         }
+      for (const o of oreDisponibile) {
+         const key = localKeyForDateAndTime(data, o.oraStart);
+         if (freeLocalKeySet.has(key)) set.add(o.oraStart);
       }
       return set;
-   }, [data, freeSlotsForAssigned, dayLocal]);
+   }, [data, freeLocalKeySet]);
 
    const selectedTimesForDay = useMemo(() => {
       if (!data) return new Set();
       const set = new Set();
-      for (const iso of selectedDates) {
-         const d = new Date(iso);
-         if (localDateStr(d) === dayLocal) {
-            const hh = String(d.getHours()).padStart(2, "0");
-            const mm = String(d.getMinutes()).padStart(2, "0");
-            set.add(`${hh}:${mm}`);
-         }
+      for (const o of oreDisponibile) {
+         const key = localKeyForDateAndTime(data, o.oraStart);
+         if (selectedLocalKeySet.has(key)) set.add(o.oraStart);
       }
       return set;
-   }, [data, selectedDates, dayLocal]);
+   }, [data, selectedLocalKeySet]);
 
    /* La montare: istoric + „ancoră” */
    useEffect(() => {
@@ -408,10 +689,6 @@ export default function SAddProg({ onClose }) {
             const dom = findDominantAnchor(existing);
             if (dom) {
                setAnchor(dom);
-               setCutie(dom.gearbox); // "manual"/"automat"
-               setSector(dom.sector); // "Botanica"/"Ciocana"
-               setTip(dom.tip); // "group"/"single"
-
                if (dom.tip === "group") {
                   setAssignedGroupId(String(dom.entityId));
                   setAssignedInstructorId(null);
@@ -421,8 +698,10 @@ export default function SAddProg({ onClose }) {
                }
 
                const fullGrid = buildFullGridISO(WINDOW_DAYS);
+               const allowedKeys = new Set(
+                  fullGrid.map((iso) => localKeyForIso(iso))
+               );
 
-               // Regula 1-per-zi: determinăm zilele deja rezervate de utilizator
                const userBookedDaySet = new Set();
                for (const r of existing || []) {
                   const st = getStartFromReservation(r);
@@ -432,35 +711,21 @@ export default function SAddProg({ onClose }) {
                   userBookedDaySet.add(localDateStr(new Date(iso)));
                }
 
-               const { startCount, capacity } = await fetchBusyForEntity(
+               const { startBusyLocal, capacity } = await fetchBusyForEntity(
                   dom.tip,
-                  dom.entityId
+                  dom.entityId,
+                  allowedKeys
                );
 
                const free = fullGrid.filter((iso) => {
                   const day = localDateStr(new Date(iso));
-                  if (userBookedDaySet.has(day)) return false; // 1-per-zi
-                  return !isStartFull(iso, startCount, capacity);
+                  if (userBookedDaySet.has(day)) return false;
+                  return !isStartFullLocal(iso, startBusyLocal, capacity);
                });
 
                setFreeSlotsForAssigned(free);
                setStage("pick");
             } else {
-               if (existing?.length) {
-                  const R = existing[0];
-                  const sectorRaw = R?.sector ?? "Botanica";
-                  const gearboxRaw = R?.gearbox ?? "Manual";
-                  setCutie(
-                     String(gearboxRaw).toLowerCase().includes("auto")
-                        ? "automat"
-                        : "manual"
-                  );
-                  setSector(
-                     String(sectorRaw).toLowerCase() === "ciocana"
-                        ? "Ciocana"
-                        : "Botanica"
-                  );
-               }
                setStage("setup");
                setAnchor(null);
             }
@@ -471,7 +736,7 @@ export default function SAddProg({ onClose }) {
       return () => {
          alive = false;
       };
-   }, [user?.id, dispatch, selectedDates]);
+   }, [user?.id, dispatch]); // eslint-disable-line
 
    // reset UI dacă nu avem ancoră
    useEffect(() => {
@@ -485,7 +750,7 @@ export default function SAddProg({ onClose }) {
       setData(null);
       setOraSelectata(null);
       setShowList(false);
-   }, [sector, cutie, tip, anchor]);
+   }, [sector, anchor]);
 
    useEffect(() => {
       if (!showList) setConfirmDeleteKey(null);
@@ -493,7 +758,7 @@ export default function SAddProg({ onClose }) {
 
    const isLocked = !!anchor;
 
-   /* === Câte trebuie trimise ACUM, exact === */
+   /* === Limite === */
    const remainingTo30 = useMemo(
       () => Math.max(0, 30 - lectiiExistente),
       [lectiiExistente]
@@ -502,7 +767,6 @@ export default function SAddProg({ onClose }) {
       () => Math.min(numarLectii, remainingTo30),
       [numarLectii, remainingTo30]
    );
-
    const reachedMax30 = useMemo(
       () => lectiiExistente + selectedDates.length >= 30,
       [lectiiExistente, selectedDates.length]
@@ -512,7 +776,6 @@ export default function SAddProg({ onClose }) {
       [requiredSubmitCount, selectedDates.length]
    );
 
-   // zile deja ocupate (UI: dezactivează ziua)
    const bookedDaySet = useMemo(() => {
       const set = new Set();
       for (const iso of selectedDates) set.add(localDateStr(new Date(iso)));
@@ -528,7 +791,7 @@ export default function SAddProg({ onClose }) {
       await continuaEtapa2();
    };
 
-   /** încarcă grila liberă pentru entitatea aleasă/ancoră folosind REGULA "ACEEAȘI ORĂ" + CAPACITATE + O-zi-pe-zi */
+   /** încarcă grila liberă pe baza cheilor locale */
    const continuaEtapa2 = async () => {
       if (hardLock30 || lectiiExistente >= 30) {
          notify("warn", "Ai deja 30 de lecții programate.");
@@ -537,8 +800,10 @@ export default function SAddProg({ onClose }) {
       setLoading(true);
       try {
          const fullGrid = buildFullGridISO(WINDOW_DAYS);
+         const allowedKeys = new Set(
+            fullGrid.map((iso) => localKeyForIso(iso))
+         );
 
-         // Zile deja ocupate de utilizator (din server + selecțiile curente)
          const userBookedDaySet = new Set();
          for (const r of rezervariExistente || []) {
             const st = getStartFromReservation(r);
@@ -548,16 +813,16 @@ export default function SAddProg({ onClose }) {
             userBookedDaySet.add(localDateStr(new Date(iso)));
          }
 
-         // 1) avem ancoră → busy + filtrare
          if (anchor?.tip && anchor?.entityId) {
-            const { startCount, capacity } = await fetchBusyForEntity(
+            const { startBusyLocal, capacity } = await fetchBusyForEntity(
                anchor.tip,
-               anchor.entityId
+               anchor.entityId,
+               allowedKeys
             );
             const free = fullGrid.filter((iso) => {
                const day = localDateStr(new Date(iso));
-               if (userBookedDaySet.has(day)) return false; // 1-per-zi
-               return !isStartFull(iso, startCount, capacity); // capacitate
+               if (userBookedDaySet.has(day)) return false;
+               return !isStartFullLocal(iso, startBusyLocal, capacity);
             });
             if (!free.length) {
                notify("warn", "Nu există sloturi libere pentru entitatea ta.");
@@ -576,7 +841,6 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         // 2) fără ancoră: agregare + scorare
          const query = {
             days: asStr(numarLectii),
             gearbox: asStrLower(cutie),
@@ -585,75 +849,99 @@ export default function SAddProg({ onClose }) {
          };
          const res = await dispatch(fetchBusy(query)).unwrap();
 
-         // normalizează: listă de { entityType, entityId, startCount, capacity }
+         // ——— Normalizăm candidații și construim SET-uri distincte per slot ———
          const normalizeBusy = (raw) => {
             const out = [];
+
             const pushVariant = (
                entityType,
                entityId,
                reservations,
-               total_instructors
+               instructorsIds
             ) => {
-               const startCount = new Map();
+               const startBusyLocal = new Map();
+               const allIds = new Set(
+                  Array.isArray(instructorsIds)
+                     ? instructorsIds
+                          .filter((x) => x != null)
+                          .map((x) => Number(x))
+                     : []
+               );
+
                for (const r of reservations || []) {
                   const st = getStartFromReservation(r);
-                  if (st) {
-                     const iso = new Date(st).toISOString();
-                     startCount.set(iso, (startCount.get(iso) || 0) + 1);
-                  }
+                  if (!st) continue;
+                  const key = busyLocalKeyFromStored(st);
+                  if (allowedKeys.size && !allowedKeys.has(key)) continue;
+
+                  const set = startBusyLocal.get(key) || new Set();
+                  const rInstr =
+                     r?.instructorId ??
+                     r?.teacherId ??
+                     r?.instructor?.id ??
+                     r?.teacher?.id ??
+                     (entityType === "instructor" ? Number(entityId) : null);
+                  if (rInstr != null) set.add(Number(rInstr));
+                  startBusyLocal.set(key, set);
                }
+
+               const capacity =
+                  entityType === "group" ? Math.max(1, allIds.size) : 1;
+
                out.push({
                   entityType,
                   entityId: entityId != null ? String(entityId) : null,
-                  startCount,
-                  capacity:
-                     entityType === "group"
-                        ? Number(total_instructors) || 1
-                        : 1,
+                  startBusyLocal,
+                  capacity,
+                  allInstructorIdsSet: allIds,
                });
             };
 
-            if (Array.isArray(raw)) {
-               for (const item of raw) {
-                  if (item && Array.isArray(item.reservations)) {
-                     if (item.groupId != null)
-                        pushVariant(
-                           "group",
-                           item.groupId,
-                           item.reservations,
-                           item.total_instructors ??
-                              item.total_instrucors ??
-                              item.totalInstructors ??
-                              item.instructorsCount ??
-                              item.capacity
-                        );
-                     else if (item.instructorId != null)
-                        pushVariant(
-                           "instructor",
-                           item.instructorId,
-                           item.reservations,
-                           1
-                        );
-                  }
+            const list = Array.isArray(raw)
+               ? raw
+               : raw &&
+                 (Array.isArray(raw.reservations) ||
+                    raw.groupId != null ||
+                    raw.instructorId != null ||
+                    Array.isArray(raw.instructorsIds))
+               ? [raw]
+               : [];
+
+            for (const item of list) {
+               const reservations = Array.isArray(item?.reservations)
+                  ? item.reservations
+                  : [];
+
+               if (item?.groupId != null) {
+                  pushVariant(
+                     "group",
+                     item.groupId,
+                     reservations,
+                     item?.instructorsIds || []
+                  );
+                  continue;
                }
-            } else if (raw && Array.isArray(raw.reservations)) {
-               const t =
-                  raw.groupId != null
-                     ? "group"
-                     : raw.instructorId != null
-                     ? "instructor"
-                     : null;
-               const id = raw.groupId ?? raw.instructorId ?? null;
-               pushVariant(
-                  t,
-                  id,
-                  raw.reservations,
-                  raw.total_instructors ??
-                     raw.total_instrucors ??
-                     raw.totalInstructors ??
-                     raw.instructorsCount ??
-                     raw.capacity
-               );
+               if (item?.instructorId != null) {
+                  pushVariant(
+                     "instructor",
+                     item.instructorId,
+                     reservations,
+                     null
+                  );
+                  continue;
+               }
+               if (
+                  Array.isArray(item?.instructorsIds) &&
+                  item.instructorsIds.length === 1
+               ) {
+                  pushVariant(
+                     "instructor",
+                     item.instructorsIds[0],
+                     reservations,
+                     null
+                  );
+                  continue;
+               }
             }
             return out;
          };
@@ -668,12 +956,26 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
+         // Integrează blackouts (cu REPEAT extins) în contorul pe SET pentru fiecare candidat
+         list = await Promise.all(
+            list.map(async (v) => ({
+               ...v,
+               startBusyLocal: await mergeBlackoutsIntoStartSets(
+                  v.entityType,
+                  v.entityId,
+                  v.startBusyLocal,
+                  allowedKeys,
+                  v.allInstructorIdsSet
+               ),
+            }))
+         );
+
          const scored = list
             .map((v) => {
                const free = fullGrid.filter((iso) => {
                   const day = localDateStr(new Date(iso));
-                  if (userBookedDaySet.has(day)) return false; // 1-per-zi
-                  return !isStartFull(iso, v.startCount, v.capacity);
+                  if (userBookedDaySet.has(day)) return false;
+                  return !isStartFullLocal(iso, v.startBusyLocal, v.capacity);
                });
                return { ...v, free };
             })
@@ -702,11 +1004,6 @@ export default function SAddProg({ onClose }) {
       }
    };
 
-   const freeSet = useMemo(
-      () => new Set(freeSlotsForAssigned),
-      [freeSlotsForAssigned]
-   );
-
    const adaugaProgramare = () => {
       if (hardLock30 || lectiiExistente >= 30) {
          notify("warn", "Ai deja 30 de lecții programate.", { force: true });
@@ -721,7 +1018,6 @@ export default function SAddProg({ onClose }) {
          return;
       }
 
-      // Regula 1-per-zi: dacă ai deja o programare în acea zi, ziua e inactivă
       if (bookedDaySet.has(dayLocalStr)) {
          notify("warn", "Ai deja o programare în această zi.", { force: true });
          return;
@@ -742,8 +1038,9 @@ export default function SAddProg({ onClose }) {
          return;
       }
 
-      const iso = toUtcIsoFromLocal(data, oraSelectata.oraStart);
-      if (!freeSet.has(iso)) {
+      const iso = toUtcIsoFromMoldova(data, oraSelectata.oraStart);
+      const key = localKeyForIso(iso);
+      if (!freeLocalKeySet.has(key)) {
          notify(
             "error",
             "Slot indisponibil (ocupat sau retras). Alege altă oră.",
@@ -753,9 +1050,9 @@ export default function SAddProg({ onClose }) {
          );
          return;
       }
-      if (selectedDates.includes(iso)) return;
+      if (selectedLocalKeySet.has(key)) return;
 
-      setRejectedDates((prev) => prev.filter((p) => p !== iso));
+      setRejectedDates((prev) => prev.filter((p) => localKeyForIso(p) !== key));
       setSelectedDates((prev) => [...prev, iso]);
       notify(
          "success",
@@ -768,7 +1065,7 @@ export default function SAddProg({ onClose }) {
       setOraSelectata(null);
    };
 
-   /** preflight: EXACT ACEEAȘI ORĂ + CAPACITATE + o singură lecție/zi */
+   /** preflight pe CHEI LOCALE: aceeași oră, capacitate, o lecție/zi */
    const preflightConflicts = async (datesISO) => {
       const entityType =
          anchor?.tip || (assignedGroupId ? "group" : "instructor");
@@ -776,32 +1073,34 @@ export default function SAddProg({ onClose }) {
          anchor?.entityId || assignedGroupId || assignedInstructorId;
       if (!entityType || !entityId) return { free: datesISO, conflicts: [] };
 
-      const { startCount, capacity } = await fetchBusyForEntity(
+      const allowedKeys = new Set(datesISO.map((iso) => localKeyForIso(iso)));
+      const { startBusyLocal, capacity } = await fetchBusyForEntity(
          entityType,
-         entityId
+         entityId,
+         allowedKeys
       );
       const cap = capacity || 1;
 
-      // Zile deja rezervate de utilizator (server)
       const userBookedDaySet = new Set();
       for (const r of rezervariExistente || []) {
          const st = getStartFromReservation(r);
          if (st) userBookedDaySet.add(localDateStr(new Date(st)));
       }
-      // În același batch, per zi acceptăm o singură intrare
       const daysInBatch = new Set();
 
       const conflicts = [];
       const free = [];
       for (const iso of datesISO) {
          const day = localDateStr(new Date(iso));
+         const key = localKeyForIso(iso);
          if (userBookedDaySet.has(day) || daysInBatch.has(day)) {
             conflicts.push(iso);
             continue;
          }
-         if (isStartFull(iso, startCount, cap)) {
-            conflicts.push(iso);
-         } else {
+         const set = startBusyLocal.get(key);
+         const used = set?.has("__ALL__") ? cap : set?.size || 0;
+         if (used >= cap) conflicts.push(iso);
+         else {
             free.push(iso);
             daysInBatch.add(day);
          }
@@ -821,7 +1120,6 @@ export default function SAddProg({ onClose }) {
    const trimiteProgramari = async () => {
       setLoading(true);
       try {
-         // limite 30
          let latest = [];
          if (user?.id) {
             latest = await dispatch(fetchUserReservations(user.id))
@@ -842,7 +1140,6 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         // EXACT câte trebuie acum
          const remain = Math.max(0, 30 - existingCount);
          const mustSubmitExactly = Math.min(numarLectii, remain);
 
@@ -856,7 +1153,6 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         // entitatea finală
          const type =
             (anchor?.tip || (assignedGroupId ? "group" : "instructor")) ===
             "group"
@@ -872,7 +1168,6 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         // ==== PRE-FLIGHT exact-oră + capacitate + 1-per-zi ====
          const { free: preflightFree, conflicts: preflightTaken } =
             await preflightConflicts(selectedDates);
 
@@ -890,7 +1185,6 @@ export default function SAddProg({ onClose }) {
             );
          }
 
-         // trebuie să rămână EXACT câte trebuie
          if (preflightFree.length !== mustSubmitExactly) {
             if (preflightFree.length === 0) return;
             notify(
@@ -907,10 +1201,14 @@ export default function SAddProg({ onClose }) {
             type === "group"
                ? { instructorsGroupId: Number(chosenId) }
                : { instructorId: Number(chosenId) };
+
          const payload = {
             ...topLevel,
             reservations: preflightFree.map((isoDate) => ({
-               startTime: String(isoDate),
+               startTime:
+                  BUSY_KEYS_MODE === "local-match"
+                     ? isoForDbMatchLocalHour(isoDate)
+                     : isoDate, // UTC real
                sector: String(sector || "Botanica"),
                gearbox: normalizedGearbox,
                privateMessage: "",
@@ -931,15 +1229,18 @@ export default function SAddProg({ onClose }) {
             else setShowList(true);
             setSelectedDates([]);
          } catch (e) {
-            // concurență: revalidăm acum pe REGULA exact-oră + capacitate
-            const { startCount: startCount2, capacity: cap2Raw } =
-               await fetchBusyForEntity(type, chosenId);
-            const cap2 = cap2Raw || 1;
+            // Re-verifică live cu modelul pe SET-uri
+            const allowedKeys = new Set(
+               preflightFree.map((iso) => localKeyForIso(iso))
+            );
+            const { startBusyLocal: startBusy2, capacity: cap2 } =
+               await fetchBusyForEntity(type, chosenId, allowedKeys);
 
             const nowConflicts = [];
             const stillOk = [];
             for (const iso of preflightFree) {
-               if (isStartFull(iso, startCount2, cap2)) nowConflicts.push(iso);
+               if (isStartFullLocal(iso, startBusy2, cap2))
+                  nowConflicts.push(iso);
                else stillOk.push(iso);
             }
 
@@ -968,7 +1269,10 @@ export default function SAddProg({ onClose }) {
                const retryPayload = {
                   ...topLevel,
                   reservations: stillOk.map((isoDate) => ({
-                     startTime: String(isoDate),
+                     startTime:
+                        BUSY_KEYS_MODE === "local-match"
+                           ? isoForDbMatchLocalHour(isoDate)
+                           : isoDate,
                      sector: String(sector || "Botanica"),
                      gearbox: normalizedGearbox,
                      privateMessage: "",
@@ -1026,7 +1330,6 @@ export default function SAddProg({ onClose }) {
                      <b>Ai deja 30 de lecții programate.</b> Nu mai poți adăuga
                      alte programări.
                   </div>
-              
                </div>
             ) : showLoadingScreen ? (
                <div className="saddprogramari__loading">
@@ -1356,7 +1659,6 @@ export default function SAddProg({ onClose }) {
                                  </div>
                               ) : (
                                  <ul className="saddprogramari__added-list">
-                                    {/* întâi conflictele (roșii) */}
                                     {rejectedDates.map((iso, i) => {
                                        const key = makeKey(iso, i);
                                        const isConfirming =
@@ -1448,7 +1750,6 @@ export default function SAddProg({ onClose }) {
                                        );
                                     })}
 
-                                    {/* apoi cele ok */}
                                     {selectedDates.map((iso, i) => {
                                        const key = makeKey(iso, i);
                                        const isConfirming =
