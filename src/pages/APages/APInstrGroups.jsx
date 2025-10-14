@@ -10,6 +10,7 @@ import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
+import managerIcon from "../../assets/svg/mdi--account-star-outline.svg";
 
 import GroupManager from "../../components/APanel/GroupManager";
 import SubPopup from "../../components/Utils/SubPopup";
@@ -17,14 +18,14 @@ import InstructorsGroupManager from "../../components/APanel/InstructorsGroupMan
 
 function APInstrGroups() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
+      { link: "/admin", text: "Acasă", icon: homeIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
+      { popup: "addManager", text: "Manageri", icon: managerIcon },
       { link: "/admin/groups", text: "Grupe", icon: groupsIcon },
-      { link: "/admin", text: "Acasă", icon: homeIcon },
-
       { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    return (

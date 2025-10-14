@@ -26,6 +26,7 @@ import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
 import testIcon from "../assets/svg/material-symbols--book-outline.svg";
 import examIcon from "../assets/svg/mdi--book-clock-outline.svg";
 import { openPopup } from "../components/Utils/popupStore";
+import Footer from "../components/Footer";
 
 /* ========= Localizer + RO formats/messages ========= */
 const locales = { ro, "ro-RO": ro };
@@ -248,7 +249,10 @@ function SPanel() {
                   onSelectEvent={handleEventClick}
                />
             </section>
+            <Footer />
+
          </main>
+
       </>
    );
 }

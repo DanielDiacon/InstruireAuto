@@ -263,6 +263,36 @@ body.popup-open .main {
       touch-action: none;
    }
 }
+
+// footer
+.footer {
+   padding: 0 24px 24px 24px;
+   @media only screen and (max-width: $mobile) {
+      padding: 0 6px 6px 6px;
+   }
+   &__body {
+      padding: 20px;
+      background: var(--black-s);
+      border-radius: 35px;
+      width: 100%;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 400;
+      color: var(--white-s);
+      a {
+         color: var(--white-s);
+      }
+      svg {
+         height: 14px;
+         width: auto;
+         color: var(--white-s);
+         margin-bottom: -1px;
+      }
+   }
+}
+
 // imports
 @import "./scss/_utils";
 @import "./scss/_popup";

@@ -38,6 +38,7 @@ import InstructorsGroupManager from "../components/APanel/InstructorsGroupManage
 import SubPopup from "../components/Utils/SubPopup";
 import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
 import PreloadAppData from "../components/Utils/PreloadAppData";
+import Footer from "../components/Footer";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -51,7 +52,7 @@ const localizer = dateFnsLocalizer({
 
 function APanel() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
+      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
       { popup: "addManager", text: "Manageri", icon: managerIcon },
@@ -61,8 +62,8 @@ function APanel() {
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
    ];
    const dispatch = useDispatch();
 
@@ -208,14 +209,7 @@ function APanel() {
                />
                <InstructorsGroupManager></InstructorsGroupManager>
             </section>
-            {/*<ACalendarView
-               events={events}
-               localizer={localizer}
-               currentView={currentView}
-               onSelectSlot={handleDayClick}
-               onSelectEvent={handleEventClick}
-               onViewChange={handleViewChange}
-            />*/}
+            <Footer />
          </main>
       </>
    );

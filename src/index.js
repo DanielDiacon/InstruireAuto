@@ -1,11 +1,12 @@
+// src/main.jsx
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { UserProvider } from "./UserContext";
 
-// 🟢 importuri Redux
 import { Provider } from "react-redux";
-import { store } from "./store"; // fișierul store/index.js creat anterior
+import { store, persistor } from "./store";
+import { PersistGate } from "redux-persist/integration/react";
 
 const container = document.getElementById("root");
 const root = createRoot(container);
@@ -13,9 +14,11 @@ const root = createRoot(container);
 root.render(
    <React.StrictMode>
       <Provider store={store}>
-         <UserProvider>
-            <App />
-         </UserProvider>
+         <PersistGate loading={null} persistor={persistor}>
+            <UserProvider>
+               <App />
+            </UserProvider>
+         </PersistGate>
       </Provider>
    </React.StrictMode>
 );

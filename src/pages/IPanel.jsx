@@ -32,6 +32,7 @@ import { openPopup } from "../components/Utils/popupStore";
 import InstrGroups from "../components/IPanel/InstrGroups";
 import TodayInfo from "../components/IPanel/TodayInfo";
 import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
+import Footer from "../components/Footer";
 
 /* ========= Localizer + RO formats/messages ========= */
 const locales = { ro, "ro-RO": ro };
@@ -320,6 +321,8 @@ function IPanel() {
                   onSelectEvent={handleEventClick}
                />
             </section>
+            <Footer />
+
          </main>
       </>
    );

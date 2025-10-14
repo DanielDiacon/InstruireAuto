@@ -9,6 +9,18 @@
    padding: 0 !important;
    border-radius: 35px !important;
    overflow: hidden;
+   & {
+      @media only screen and (max-width: $mobile) {
+         border-radius: 22px 22px 35px 35px !important;
+      }
+   }
+}
+@media only screen and (max-width: $mobile) {
+   .admin-manager {
+      .rbc-calendar {
+         border-radius: 26px 26px 35px 35px !important;
+      }
+   }
 }
 
 .rbc-toolbar {

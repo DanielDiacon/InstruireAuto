@@ -11,6 +11,7 @@ import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
 import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
+import managerIcon from "../../assets/svg/mdi--account-star-outline.svg";
 
 import { getAllReservations } from "../../api/reservationsService";
 import { getUsers } from "../../api/usersService";
@@ -22,9 +23,10 @@ import { UserContext } from "../../UserContext";
 
 function APHistory() {
    const links = [
-      { popup: "profile", text: "Profil", icon: accIcon },
+      { link: "/admin", text: "Acasă", icon: homeIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
+      { popup: "addManager", text: "Manageri", icon: managerIcon },
       { link: "/admin/groups", text: "Grupe", icon: groupsIcon },
       {
          link: "/admin/instr-groups",
@@ -32,7 +34,8 @@ function APHistory() {
          icon: instrGroupsIcon,
       },
       { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
-      { link: "/admin", text: "Acasă", icon: homeIcon },
+      { popup: "profile", text: "Profil", icon: accIcon },
+
    ];
    const dispatch = useDispatch();
    const [reservations, setReservations] = useState([]);

@@ -39,6 +39,7 @@ import InstructorsGroupManager from "../components/APanel/InstructorsGroupManage
 import SubPopup from "../components/Utils/SubPopup";
 import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
 import PreloadAppData from "../components/Utils/PreloadAppData";
+import Footer from "../components/Footer";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -211,6 +212,8 @@ function MPanel() {
                />
                <InstructorsGroupManager></InstructorsGroupManager>
             </section>
+            <Footer />
+
          </main>
       </>
    );
