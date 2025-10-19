@@ -9,7 +9,6 @@ export const CalendarBusCtx = createContext({
 });
 
 export function CalendarBusProvider({ actions, children }) {
-   // păstrează referințe stabile pentru a evita re-randări în copii
    const stable = useMemo(
       () => ({
          editReservation: actions?.editReservation ?? (() => {}),

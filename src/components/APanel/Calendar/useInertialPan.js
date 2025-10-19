@@ -4,11 +4,20 @@ import { useEffect, useRef } from "react";
 /**
  * options:
  *  - suspendFlagsRef?: React.MutableRefObject<any>
- *  - shouldIgnore?: (eventTarget: Element) => boolean  // ex: isInteractiveTarget
+ *  - shouldIgnore?: (eventTarget: Element) => boolean
+ *  - pixelScaleX?: number  // compensare pentru zoom pe axa X (ex: zoom)
+ *  - pixelScaleY?: number  // compensare pentru zoom pe axa Y (de obicei 1)
+ *  - slopPx?: number       // prag de separare click/drag
  */
 export default function useInertialPan(
    scrollRef,
-   { suspendFlagsRef, shouldIgnore } = {}
+   {
+      suspendFlagsRef,
+      shouldIgnore,
+      pixelScaleX = 1,
+      pixelScaleY = 1,
+      slopPx = 8,
+   } = {}
 ) {
    const isDown = useRef(false);
    const isPanning = useRef(false);
@@ -21,7 +30,7 @@ export default function useInertialPan(
    // suprimă primul click care vine imediat după un pan
    const suppressClickOnce = useRef(false);
 
-   const SLOP_PX = 12; // prag pentru a separa click de drag (mai safe)
+   const SLOP_PX = slopPx;
 
    const scheduleApply = () => {
       if (raf.current) return;
@@ -43,7 +52,7 @@ export default function useInertialPan(
       if (!el) return;
 
       const onPointerDown = (e) => {
-         // lasă elementele interactive în pace (buton, link, input, event card)
+         // lasă elementele interactive în pace (buton, link, input, card etc.)
          if (shouldIgnore?.(e.target)) return;
          // doar primary / touch / pen
          if (e.button !== undefined && e.button !== 0) return;
@@ -52,9 +61,20 @@ export default function useInertialPan(
          isPanning.current = false;
          suppressClickOnce.current = false;
 
+         // marcăm că a început interacțiunea (vom îngheța datele din UI)
+         if (suspendFlagsRef?.current) {
+            suspendFlagsRef.current.isInteracting = true;
+         }
+
          const c = e.getCoalescedEvents?.()?.at(-1) ?? e;
          last.current.x = c.clientX;
          last.current.y = c.clientY;
+
+         // capture imediat (nu aștepta să depășești slop-ul)
+         try {
+            el.setPointerCapture?.(e.pointerId);
+         } catch {}
+         el.style.cursor = "grabbing";
 
          // oprește inerția dacă există
          if (inertiaRaf.current) {
@@ -73,17 +93,18 @@ export default function useInertialPan(
          const cx = c.clientX;
          const cy = c.clientY;
 
-         const dx = cx - last.current.x;
-         const dy = cy - last.current.y;
+         let dx = cx - last.current.x;
+         let dy = cy - last.current.y;
+
+         // compensează zoom-ul (pixel vizual -> pixel de scrollbox)
+         dx = dx / (pixelScaleX || 1);
+         dy = dy / (pixelScaleY || 1);
 
          // declanșăm pan abia după SLOP_PX
          if (!isPanning.current) {
             if (Math.hypot(dx, dy) < SLOP_PX) return;
             isPanning.current = true;
             suppressClickOnce.current = true; // vom mânca PRIMUL click după pan
-            try {
-               el.setPointerCapture?.(e.pointerId);
-            } catch {}
             // semnalăm UI-ului să suspende snap/auto-jump dacă vrei
             if (suspendFlagsRef?.current) {
                suspendFlagsRef.current.suspendScrollSnap = true;
@@ -107,11 +128,24 @@ export default function useInertialPan(
          scheduleApply();
       };
 
+      const endInteraction = () => {
+         if (suspendFlagsRef?.current) {
+            suspendFlagsRef.current.isInteracting = false;
+         }
+         // anunță componenta că s-a terminat pan/inerția
+         el.dispatchEvent(new CustomEvent("dvpanend"));
+      };
+
       const onPointerUp = (e) => {
          if (!isDown.current) return;
          if (shouldIgnore?.(e.target)) {
             isDown.current = false;
             isPanning.current = false;
+            try {
+               el.releasePointerCapture?.(e.pointerId);
+            } catch {}
+            el.style.cursor = "grab";
+            endInteraction();
             return;
          }
 
@@ -120,9 +154,11 @@ export default function useInertialPan(
          try {
             el.releasePointerCapture?.(e.pointerId);
          } catch {}
+         el.style.cursor = "grab";
 
          if (!isPanning.current) {
-            // a fost click / tap simplu => nu porni inerția, nu suprima click
+            // a fost click / tap simplu => nu porni inerția, dar închidem interacțiunea
+            endInteraction();
             return;
          }
 
@@ -137,6 +173,7 @@ export default function useInertialPan(
             vy *= friction;
             if (Math.abs(vx) < stopSpeed && Math.abs(vy) < stopSpeed) {
                inertiaRaf.current = null;
+               endInteraction();
                return;
             }
             el.scrollLeft -= vx;
@@ -166,7 +203,7 @@ export default function useInertialPan(
       };
 
       const onWheel = () => {
-         // orice interacțiune de tip wheel anulează inerția (opțional, dar util)
+         // orice interacțiune de tip wheel anulează inerția
          if (inertiaRaf.current) {
             cancelAnimationFrame(inertiaRaf.current);
             inertiaRaf.current = null;
@@ -200,7 +237,14 @@ export default function useInertialPan(
          });
          el.removeEventListener("wheel", onWheel);
       };
-   }, [scrollRef, suspendFlagsRef, shouldIgnore]);
+   }, [
+      scrollRef,
+      suspendFlagsRef,
+      shouldIgnore,
+      pixelScaleX,
+      pixelScaleY,
+      slopPx,
+   ]);
 
    // API-ul rămâne pentru compatibilitate (nu e necesar să-l apelezi)
    return {

@@ -1,5 +1,5 @@
 // src/components/Popups/AAddProg.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useContext } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import DatePicker, { registerLocale } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -12,10 +12,13 @@ import arrowIcon from "../../assets/svg/arrow.svg";
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
 import { fetchAllReservations } from "../../store/reservationsSlice";
-import { createReservations } from "../../api/reservationsService";
+import { createReservationsForUser } from "../../api/reservationsService";
 
 import apiClientService from "../../api/ApiClientService";
 import { getInstructorBlackouts } from "../../api/instructorsService";
+
+// Ajustează dacă la tine calea e alta
+import { CalendarBusCtx } from "../APanel/Calendar/CalendarBus";
 
 /* ===== Locale RO ===== */
 registerLocale("ro", ro);
@@ -26,7 +29,7 @@ const EMAIL_DOMAIN = "instrauto.com";
 const SLOT_MINUTES = 90;
 const MOLDOVA_TZ = "Europe/Chisinau";
 
-/* ===== Helpers pt. email generat ===== */
+/* ===== Helpers ===== */
 const slugify = (s) =>
    (s || "")
       .normalize("NFD")
@@ -44,7 +47,6 @@ const makeEmail = (firstName, lastName, phoneDigits, extra = "") => {
    return `${fn}.${ln}.ia${last3}${suffix}@${EMAIL_DOMAIN}`;
 };
 
-/* ===== Intervale ore ===== */
 const oreDisponibile = [
    { eticheta: "07:00", oraStart: "07:00" },
    { eticheta: "08:30", oraStart: "08:30" },
@@ -106,18 +108,14 @@ function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
    const fixedUtcMs = utcGuess - offMin * 60000;
    return new Date(fixedUtcMs).toISOString();
 }
-function toUtcIsoFromLocal(localDateObj, timeStrHHMM) {
-   return toUtcIsoFromMoldova(localDateObj, timeStrHHMM);
-}
+const toUtcIsoFromLocal = toUtcIsoFromMoldova;
 
 const BUSY_KEYS_MODE = "local-match";
 
-/** 'YYYY-MM-DDTHH:mm:00+02:00/+03:00' pentru DB (păstrează ora locală) */
 function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    const base = new Date(isoUtcFromMoldova);
    const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
    const shifted = new Date(base.getTime() + offMin * 60000);
-
    const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: MOLDOVA_TZ,
       year: "numeric",
@@ -149,7 +147,6 @@ function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
 }
 const localKeyForIso = (iso) =>
    localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
-/** Din ce vine din DB (cu Z/offset sau simplu) -> cheie locală stabilă */
 function busyLocalKeyFromStored(st) {
    const d = new Date(st);
    const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
@@ -158,15 +155,6 @@ function busyLocalKeyFromStored(st) {
 }
 
 /* ===== Helpers comune ===== */
-function getDurationMin(r) {
-   return (
-      r?.durationMinutes ??
-      r?.slotMinutes ??
-      r?.lengthMinutes ??
-      r?.duration ??
-      SLOT_MINUTES
-   );
-}
 function getStartFromReservation(r) {
    return (
       r?.startTime ??
@@ -179,8 +167,6 @@ function getStartFromReservation(r) {
       null
    );
 }
-
-const capRO = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const formatDateRO = (iso) => {
    const d = new Date(iso);
    const fmt = new Intl.DateTimeFormat("ro-RO", {
@@ -191,7 +177,6 @@ const formatDateRO = (iso) => {
    }).format(d);
    return fmt.replace(/\b([a-zăîâșț])/u, (m) => m.toUpperCase());
 };
-
 function localDateStr(d) {
    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
       2,
@@ -219,23 +204,19 @@ function nextNDays(n, fromDate = new Date()) {
    return out;
 }
 function buildFullGridISO(daysWindow = 60) {
-   // calendar pe zilele Moldova
    const startFrom = new Date();
    const todayMD = ymdStrInTZ(startFrom, MOLDOVA_TZ);
    const [y, m, d] = todayMD.split("-").map(Number);
    const baseMD = new Date(y, m - 1, d, 0, 0, 0, 0);
-
    const daysArr = nextNDays(daysWindow, baseMD);
    const out = [];
    for (const dayStr of daysArr) {
       const dObj = localDateObjFromStr(dayStr);
-      for (const t of oreDisponibile) {
+      for (const t of oreDisponibile)
          out.push(toUtcIsoFromLocal(dObj, t.oraStart));
-      }
    }
    return out;
 }
-
 function highlightText(text, query) {
    if (!text) return "";
    if (!query) return text;
@@ -250,18 +231,20 @@ function highlightText(text, query) {
       )
    );
 }
-
 const onlyDigits = (s = "") => (s || "").replace(/\D/g, "");
 const randId = (n = 16) =>
    Array.from({ length: n }, () => Math.random().toString(36).slice(2, 3)).join(
       ""
    );
-
 function splitFullName(full = "") {
    const parts = full.trim().split(/\s+/).filter(Boolean);
    if (!parts.length) return { firstName: "", lastName: "" };
    if (parts.length === 1) return { firstName: parts[0], lastName: "" };
    return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+function isValidPhone373(value) {
+   const d = onlyDigits(value);
+   return d.startsWith("373") && d.length === 11;
 }
 
 /* ===== Telefon cu prefix fix +373 ===== */
@@ -270,25 +253,21 @@ const PREFIX_LEN = PREFIX.length;
 
 function PhoneInput373({ value, onChange, ...props }) {
    const inputRef = useRef(null);
-
    const normalize = (v) => {
       const digits = onlyDigits(v);
       const rest = digits.startsWith("373") ? digits.slice(3) : digits;
       return PREFIX + rest.slice(0, 8);
    };
-
    const handleChange = (e) => {
       const next = normalize(e.target.value);
       onChange(next);
       requestAnimationFrame(() => {
          const el = inputRef.current;
          if (!el) return;
-         if (el.selectionStart < PREFIX_LEN) {
+         if (el.selectionStart < PREFIX_LEN)
             el.setSelectionRange(PREFIX_LEN, PREFIX_LEN);
-         }
       });
    };
-
    const guardCaret = (e) => {
       const el = e.target;
       const start = el.selectionStart ?? 0;
@@ -305,13 +284,11 @@ function PhoneInput373({ value, onChange, ...props }) {
          el.setSelectionRange(PREFIX_LEN, PREFIX_LEN);
       }
    };
-
    const keepCaretAfterPrefix = (e) => {
       const el = e.target;
       const pos = el.selectionStart ?? 0;
       if (pos < PREFIX_LEN) el.setSelectionRange(PREFIX_LEN, PREFIX_LEN);
    };
-
    const handlePaste = (e) => {
       e.preventDefault();
       const text = (e.clipboardData.getData("text") || "").toString();
@@ -361,11 +338,18 @@ export default function AAddProg({
    onClose,
 }) {
    const dispatch = useDispatch();
+   const { refresh, jumpToDate } = useContext(CalendarBusCtx) || {};
 
    // store
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
    const allReservations = useSelector((s) => s.reservations?.list || []);
+
+   // 🔁 ref mereu la zi pentru studentsAll (folosit în polling)
+   const studentsAllRef = useRef(studentsAll);
+   useEffect(() => {
+      studentsAllRef.current = studentsAll;
+   }, [studentsAll]);
 
    // doar elevi cu rol USER
    const students = useMemo(() => {
@@ -422,7 +406,7 @@ export default function AAddProg({
    const [newFullName, setNewFullName] = useState("");
    const [phoneFull, setPhoneFull] = useState(PREFIX);
 
-   // anti dublu-click pe „Continuă”
+   // anti dublu-click
    const [continuing, setContinuing] = useState(false);
 
    // Pick state
@@ -442,7 +426,6 @@ export default function AAddProg({
       return match || null;
    });
 
-   // preferință DST-safe (folosește TZ Moldova)
    const preferredIso = useMemo(() => {
       if (!effectiveStartISO) return null;
       const s = new Date(effectiveStartISO);
@@ -455,7 +438,7 @@ export default function AAddProg({
    // ecrane search
    const [view, setView] = useState("formSelect"); // formSelect | searchStudent | searchInstructor | formPick
    const [qStudent, setQStudent] = useState("");
-   const [qInstructor, setQInstructor] = useState("");
+   const [qInstructor, setQInstructor] = useState(""); // ✅ FIX: definit corect
 
    // disponibilități
    const [freeSlots, setFreeSlots] = useState([]); // ISO[]
@@ -483,7 +466,6 @@ export default function AAddProg({
       [instructors, instructorId]
    );
 
-   // căutarea elevilor NU mai ia în calcul emailul
    const filteredStudents = useMemo(() => {
       const q = (qStudent || "").trim().toLowerCase();
       const base = students;
@@ -516,7 +498,6 @@ export default function AAddProg({
         }`.trim()
       : "ne ales";
 
-   // sugestii după telefon (în modul NEW)
    const phoneMatches = useMemo(() => {
       if (mode !== "new") return [];
       const typedDigits = onlyDigits(phoneFull);
@@ -526,23 +507,40 @@ export default function AAddProg({
          .slice(0, 8);
    }, [mode, phoneFull, students]);
 
-   /* ====== Creare elev pe „Continuă” ====== */
-   const ensureStudentCreated = async () => {
-      if (mode !== "new") return true;
-      if (studentId) return true;
+   /* === așteaptă apariția elevului în listă, apoi auto-selectează === */
+   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+   async function waitUntilStudentInListByPhone(
+      phoneDigits,
+      tries = 12,
+      delayMs = 250
+   ) {
+      const digits = (phoneDigits || "").replace(/\D/g, "");
+      for (let i = 0; i < tries; i++) {
+         try {
+            await dispatch(fetchStudents());
+         } catch {}
+         const found = (studentsAllRef.current || []).find(
+            (s) => onlyDigits(s.phone || "") === digits
+         );
+         if (found?.id) return String(found.id);
+         await sleep(delayMs);
+      }
+      return "";
+   }
 
+   /* ====== Creare elev (pas separat) ====== */
+   const ensureStudentCreated = async () => {
       const { firstName, lastName } = splitFullName(newFullName);
       if (!firstName || !lastName) {
          pushPill("Scrie numele complet (ex.: Ion Popescu).");
          return false;
       }
-
-      const digits = onlyDigits(phoneFull);
-      if (!digits.startsWith("373") || digits.length !== 11) {
+      if (!isValidPhone373(phoneFull)) {
          pushPill("Telefon invalid. Format: +373 urmat de 8 cifre.");
          return false;
       }
 
+      const digits = onlyDigits(phoneFull);
       const password = randId(16);
 
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -570,10 +568,7 @@ export default function AAddProg({
                let created = {};
                try {
                   created = await res.json();
-               } catch {
-                  created = {};
-               }
-
+               } catch {}
                let newId =
                   String(
                      created?.user?.id ??
@@ -584,16 +579,12 @@ export default function AAddProg({
                   ) || "";
 
                if (!newId) {
-                  await dispatch(fetchStudents());
-                  const found = (studentsAll || []).find(
-                     (s) => onlyDigits(s.phone || "") === digits
-                  );
-                  if (found?.id) newId = String(found.id);
+                  newId = await waitUntilStudentInListByPhone(digits);
                }
 
                if (!newId) {
                   pushPill(
-                     "Elev creat, dar nu am putut extrage ID-ul.",
+                     "Elev creat, dar nu am putut extrage/identifica ID-ul.",
                      "warning"
                   );
                   return false;
@@ -601,10 +592,7 @@ export default function AAddProg({
 
                setStudentId(newId);
                setMode("existing");
-               pushPill(
-                  `Cont creat (${email}). Continuăm la alegerea orei.`,
-                  "success"
-               );
+               pushPill("Elev nou adăugat.", "success");
                return true;
             } else {
                let errJson = null;
@@ -625,7 +613,7 @@ export default function AAddProg({
                   );
                   break;
                }
-               // altfel mai încearcă cu sufix
+               // reîncearcă cu alt sufix de email
             }
          } catch (e) {
             pushPill(
@@ -636,12 +624,10 @@ export default function AAddProg({
          }
       }
 
-      await dispatch(fetchStudents());
-      const found = (studentsAll || []).find(
-         (s) => onlyDigits(s.phone || "") === digits
-      );
-      if (found?.id) {
-         setStudentId(String(found.id));
+      // fallback: ultim polling
+      const fallbackId = await waitUntilStudentInListByPhone(digits);
+      if (fallbackId) {
+         setStudentId(fallbackId);
          setMode("existing");
          pushPill("Elev existent selectat automat după telefon.", "success");
          return true;
@@ -654,8 +640,7 @@ export default function AAddProg({
       return false;
    };
 
-   /** Extrage câmpul datetime dintr-un blackout.
-    *  Pentru REPEAT preferă startDateTime (începutul seriei). */
+   /** Blackouts helpers */
    function getBlackoutDT(b) {
       if (typeof b === "string") return b;
       const t = String(b?.type || "").toUpperCase();
@@ -671,8 +656,6 @@ export default function AAddProg({
          null
       );
    }
-
-   /** Expandează un blackout REPEAT în chei locale "YYYY-MM-DD|HH:mm", filtrate la grila curentă. */
    function expandRepeatLocalKeys(b, allowedKeysSet) {
       const out = [];
       const t = String(b?.type || "").toUpperCase();
@@ -693,34 +676,29 @@ export default function AAddProg({
       return out;
    }
 
-   /* ====== Disponibilitate (cu rezervări + blackouts) ====== */
+   /* ====== Disponibilitate ====== */
    const computeAvailability = async () => {
       if (!instructorId) return pushPill("Selectează instructorul.", "error");
+      if (mode === "new" && !studentId) {
+         return pushPill(
+            "Creează elevul și așteaptă să fie selectat automat, apoi continuă.",
+            "error"
+         );
+      }
+      if (!studentId) return pushPill("Selectează elevul.", "error");
       if (continuing) return;
 
       setContinuing(true);
       try {
-         if (mode === "new") {
-            const okStudent = await ensureStudentCreated();
-            if (!okStudent) return;
-         } else {
-            if (!studentId) {
-               pushPill("Selectează elevul.", "error");
-               return;
-            }
-         }
-
          const fullGrid = buildFullGridISO(WINDOW_DAYS);
          const allowedKeys = new Set(
             fullGrid.map((iso) => localKeyForIso(iso))
          );
          const now = new Date();
 
-         // seturi 'busy' pe cheie locală (YYYY-MM-DD|HH:mm)
          const busyStudent = new Set();
          const busyInstructor = new Set();
 
-         // rezervări existente
          for (const r of allReservations || []) {
             const stRaw = getStartFromReservation(r);
             if (!stRaw) continue;
@@ -731,17 +709,13 @@ export default function AAddProg({
             if (rInsId === String(instructorId)) busyInstructor.add(key);
          }
 
-         // blackouts ale instructorului: REPEAT -> expandare completă; SINGLE -> o singură cheie
          try {
             const blackouts = await getInstructorBlackouts(instructorId);
             for (const b of blackouts || []) {
                const type = String(b?.type || "").toUpperCase();
-
                if (type === "REPEAT") {
                   const keys = expandRepeatLocalKeys(b, allowedKeys);
-                  for (const key of keys) {
-                     busyInstructor.add(key);
-                  }
+                  for (const key of keys) busyInstructor.add(key);
                } else {
                   const dt = getBlackoutDT(b);
                   if (!dt) continue;
@@ -749,26 +723,24 @@ export default function AAddProg({
                   if (allowedKeys.has(key)) busyInstructor.add(key);
                }
             }
-         } catch (e) {
+         } catch {
             pushPill(
                "Nu am putut încărca orele blocate ale instructorului. Se afișează doar rezervările.",
                "warning"
             );
          }
 
-         // slot liber = viitor + cheie locală nu e în busy-seturi
          const free = fullGrid.filter((iso) => {
             if (new Date(iso) <= now) return false;
             const key = localKeyForIso(iso);
             return !busyStudent.has(key) && !busyInstructor.has(key);
          });
 
-         if (!free.length) {
+         if (!free.length)
             pushPill(
                "Nu s-au găsit sloturi libere în intervalul următor.",
                "info"
             );
-         }
 
          setFreeSlots(free);
          setStage("pick");
@@ -791,7 +763,7 @@ export default function AAddProg({
       }
    };
 
-   // grupare sloturi libere pe zile în Moldova
+   // grupare sloturi libere pe zile
    const freeByDay = useMemo(() => {
       const map = new Map();
       for (const iso of freeSlots) {
@@ -802,18 +774,6 @@ export default function AAddProg({
    }, [freeSlots]);
 
    const dayLocal = selectedDate ? ymdStrInTZ(selectedDate, MOLDOVA_TZ) : null;
-
-   const freeTimesForDay = useMemo(() => {
-      if (!selectedDate) return new Set();
-      const set = new Set();
-      for (const iso of freeSlots) {
-         const d = new Date(iso);
-         if (ymdStrInTZ(d, MOLDOVA_TZ) === dayLocal) {
-            set.add(hhmmInTZ(d, MOLDOVA_TZ));
-         }
-      }
-      return set;
-   }, [selectedDate, freeSlots, dayLocal]);
 
    /* ====== SAVE ====== */
    const [saving, setSaving] = useState(false);
@@ -833,16 +793,28 @@ export default function AAddProg({
             "Slot indisponibil pentru elevul și instructorul selectați."
          );
       }
+
       const startTimeToSend =
          BUSY_KEYS_MODE === "local-match" ? isoForDbMatchLocalHour(iso) : iso;
 
       setSaving(true);
       try {
+         const inferredGroupId = Number(
+            selectedInstructor?.instructorsGroupId ??
+               selectedInstructor?.instructorGroupId ??
+               selectedInstructor?.groupId ??
+               selectedInstructor?.group?.id ??
+               NaN
+         );
+
          const payload = {
             instructorId: Number(instructorId),
+            ...(Number.isFinite(inferredGroupId)
+               ? { instructorsGroupId: inferredGroupId }
+               : {}),
+            userId: Number(studentId),
             reservations: [
                {
-                  userId: Number(studentId),
                   startTime: startTimeToSend,
                   sector: sector || "Botanica",
                   gearbox:
@@ -854,11 +826,22 @@ export default function AAddProg({
                },
             ],
          };
-         await createReservations(payload);
+
+         await createReservationsForUser(payload);
+
          setMessages([
             { id: Date.now(), type: "success", text: "Programare creată." },
          ]);
-         setTimeout(() => onClose?.(), 250);
+
+         try {
+            await dispatch(fetchAllReservations());
+         } catch {}
+         try {
+            refresh?.();
+            jumpToDate?.(new Date(iso));
+         } catch {}
+
+         onClose?.();
       } catch (e) {
          pushPill(e?.message || "Nu am putut crea programarea.");
       } finally {
@@ -866,13 +849,45 @@ export default function AAddProg({
       }
    };
 
-   /* ============ RENDER ============ */
-   const continueLabel = continuing
-      ? mode === "new" && !studentId
+   /* ====== UI: buton primar — „Creează elev” -> „Continuă” ====== */
+   const canCreateStudent = mode === "new" && !studentId;
+   const validNewName = newFullName.trim().split(/\s+/).length >= 2;
+   const validNewPhone = isValidPhone373(phoneFull);
+
+   const primaryBtnMode = canCreateStudent ? "create" : "continue";
+   const primaryBtnLabel = continuing
+      ? primaryBtnMode === "create"
          ? "Se creează elevul…"
          : "Se verifică disponibilitatea…"
+      : primaryBtnMode === "create"
+      ? "Creează elev"
       : "Continuă";
 
+   const primaryDisabled = continuing
+      ? true
+      : primaryBtnMode === "create"
+      ? !(validNewName && validNewPhone)
+      : !instructorId ||
+        (mode === "existing" && !studentId) ||
+        (mode === "new" && !studentId);
+
+   const handleCreateStudentClick = async () => {
+      if (continuing) return;
+      setContinuing(true);
+      try {
+         await ensureStudentCreated(); // așteaptă până se creează și e selectat
+         // la succes: butonul devine automat „Continuă”
+      } finally {
+         setContinuing(false);
+      }
+   };
+
+   const handlePrimaryClick = () => {
+      if (primaryBtnMode === "create") return handleCreateStudentClick();
+      return computeAvailability();
+   };
+
+   /* ============ RENDER ============ */
    return (
       <>
          <AlertPills messages={messages} onDismiss={popPill} />
@@ -944,7 +959,6 @@ export default function AAddProg({
                            <span className="instructors-popup__label">
                               Elev nou
                            </span>
-
                            <div className="saddprogramari__new-grid">
                               <input
                                  className="instructors-popup__input"
@@ -992,7 +1006,7 @@ export default function AAddProg({
                      </label>
                   </div>
 
-                  {phoneMatches.length > 0 && !continuing && (
+                  {phoneMatches.length > 0 && !continuing && mode === "new" && (
                      <ul className="phone-suggestions">
                         {phoneMatches.map((s) => {
                            const label = `${s.firstName || ""} ${
@@ -1092,23 +1106,19 @@ export default function AAddProg({
 
                   <div className="saddprogramari__add-btns">
                      <button
-                        onClick={computeAvailability}
+                        onClick={handlePrimaryClick}
                         className="saddprogramari__add-btn arrow"
                         type="button"
-                        disabled={
-                           !instructorId ||
-                           continuing ||
-                           (mode === "existing" && !studentId)
-                        }
+                        disabled={primaryDisabled}
                         title={
-                           !instructorId
+                           primaryBtnMode === "create"
+                              ? "Creează elevul"
+                              : !instructorId
                               ? "Selectează instructorul"
-                              : mode === "existing" && !studentId
-                              ? "Selectează elevul"
                               : ""
                         }
                      >
-                        <span>{continueLabel}</span>
+                        <span>{primaryBtnLabel}</span>
                         <ReactSVG
                            src={arrowIcon}
                            className="saddprogramari__add-btn-icon"
@@ -1267,7 +1277,6 @@ export default function AAddProg({
                               const iso = selectedDate
                                  ? toUtcIsoFromLocal(selectedDate, ora.oraStart)
                                  : null;
-
                               const isSelected =
                                  selectedTime?.oraStart === ora.oraStart;
 

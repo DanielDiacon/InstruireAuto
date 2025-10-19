@@ -212,9 +212,10 @@ body,
       cursor: grab;
       touch-action: pan-x;
       scrollbar-width: none;
-      height: 100% !important;
+      //height: 100% !important;
+
       border-radius: 35px;
-      flex: 1 1 auto !important;
+      //flex: 1 1 auto !important;
    }
    &__row.dv-pan.is-dragging {
       cursor: grabbing;
@@ -775,3 +776,9 @@ body,
       background-position: 0 0;
    }
 }
+.dayview__group-wrap.cv-auto{
+  content-visibility:auto;
+  contain-intrinsic-size:auto 1000px; /* ajustează după înălțimea medie a unei zile */
+  contain:layout paint style size;
+}
+.dayview__row.dv-pan { overscroll-behavior: contain; }

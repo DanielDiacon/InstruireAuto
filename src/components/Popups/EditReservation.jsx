@@ -504,7 +504,8 @@ function expandRepeatLocalKeys(b, allowedKeysSet) {
    return out;
 }
 
-export default function ReservationEditPopup({ reservationId }) {
+// ⬇️ Acceptă onClose pentru a închide cu aceeași funcție peste tot
+export default function ReservationEditPopup({ reservationId, onClose }) {
    const dispatch = useDispatch();
 
    // ===== Alert pills =====
@@ -512,6 +513,16 @@ export default function ReservationEditPopup({ reservationId }) {
    const pushAlert = (type, text) =>
       setAlerts((prev) => [...prev, { id: Date.now(), type, text }]);
    const popAlert = () => setAlerts((prev) => prev.slice(0, -1));
+
+   // ⬇️ Funcție unificată de închidere popup
+   const closeSelf = useCallback(() => {
+      try {
+         if (typeof onClose === "function") onClose();
+         else closePopupStore();
+      } catch {
+         closePopupStore();
+      }
+   }, [onClose]);
 
    // Store
    const reservations = useSelector((s) => s.reservations?.list || []);
@@ -795,7 +806,8 @@ export default function ReservationEditPopup({ reservationId }) {
       const ok = window.confirm("Ștergi această rezervare?");
       if (!ok) return;
 
-      closePopupStore();
+      // Închidem popup-ul cu aceeași funcție
+      closeSelf();
       setTimeout(() => {
          dispatch(removeReservation(existing.id))
             .then(() => dispatch(fetchAllReservations()))
@@ -934,7 +946,8 @@ export default function ReservationEditPopup({ reservationId }) {
             ],
          };
 
-         closePopupStore();
+         // Închidem popup-ul cu aceeași funcție
+         closeSelf();
 
          try {
             await dispatch(removeReservation(existing.id));
@@ -973,7 +986,9 @@ export default function ReservationEditPopup({ reservationId }) {
             : {}),
       };
 
-      closePopupStore();
+      // Închidem popup-ul cu aceeași funcție
+      closeSelf();
+
       setTimeout(() => {
          dispatch(updateReservation({ id: existing.id, data: payload }))
             .then(() => dispatch(fetchAllReservations()))
@@ -1533,14 +1548,7 @@ export default function ReservationEditPopup({ reservationId }) {
                })}
             </div>
 
-            {colorHoverText ? (
-               <div
-                  className="saddprogramari__color-hint"
-                  style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}
-               >
-                  {colorHoverText}
-               </div>
-            ) : null}
+           
 
             {/* Butoane */}
             <div

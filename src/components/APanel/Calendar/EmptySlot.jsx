@@ -1,4 +1,3 @@
-// src/components/Calendar/Day/EmptySlot.jsx
 import React from "react";
 
 const MOLDOVA_TZ = "Europe/Chisinau";
@@ -29,7 +28,6 @@ export default function EmptySlot({ slot, onCreate }) {
          }}
          onClick={(e) => {
             e.stopPropagation();
-            // fallback pentru unele browsere care raportează dublu-click prin detail
             if (e.detail >= 2) {
                e.preventDefault();
                onCreate();

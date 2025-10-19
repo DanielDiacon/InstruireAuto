@@ -23,6 +23,7 @@ import {
    fetchBusy,
 } from "../../store/reservationsSlice";
 import AlertPills from "../Utils/AlertPills";
+import { closePopup as closePopupStore } from "../Utils/popupStore";
 
 /* ===== Locale RO ===== */
 registerLocale("ro", ro);
@@ -230,8 +231,6 @@ const localKeyForDateAndTime = (localDateObj, hhmm) =>
 function busyLocalKeyFromStored(st) {
    const d = new Date(st);
    if (BUSY_KEYS_MODE === "local-match") {
-      // backend-ul a împins ora „în sus” ca să iasă 07:00Z => d e "shifted"
-      // revenim la baza locală: scădem offsetul din Moldova la acel moment
       const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
       const base = new Date(d.getTime() - offMin * 60000);
       const key = localKeyFromTs(base.getTime(), MOLDOVA_TZ);
@@ -239,7 +238,6 @@ function busyLocalKeyFromStored(st) {
       if (SLOT_LABELS.has(hhmm)) return key;
       return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
    }
-   // 'utc': DB stochează momentul corect UTC → doar formatez în Moldova
    return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
 }
 
@@ -400,12 +398,6 @@ function expandRepeatLocalKeys(blackout, allowedKeysSet) {
 }
 
 /* ===================== Busy map pe SET-uri de instructori ================== */
-/**
- * Integrează BLACKOUT-urile într-o hartă:
- *   startBusyLocal: Map("YYYY-MM-DD|HH:mm" -> Set<instructorId | "__ALL__">)
- * - Pentru REPEAT, extinde pe toată fereastra (allowedKeysSet).
- * - Dacă blackout-ul e de grup și nu are instructorId => "__ALL__" (blochează toți).
- */
 async function mergeBlackoutsIntoStartSets(
    entityType,
    entityId,
@@ -463,21 +455,12 @@ async function mergeBlackoutsIntoStartSets(
             map.set(key, set);
          }
       }
-
-      // Dacă avem "__ALL__", nu trebuie să populăm cu toți instructorii:
-      // în evaluare vom trata "__ALL__" ca 'used = capacity'
    } catch {
       // dacă endpoint-ul pică, rămânem doar cu rezervările
    }
    return map;
 }
 
-/**
- * Busy pentru o entitate:
- *  - startBusyLocal: Map("YYYY-MM-DD|HH:mm" -> Set<instructorId | "__ALL__">)
- *  - capacity: 1 pt instructor; la group = numărul de instructori unici
- *  - allInstructorIdsSet: toți instructorii din grup (dacă îi avem)
- */
 async function fetchBusyForEntity(entityType, entityId, allowedKeysSet) {
    if (!entityType || !entityId) {
       return {
@@ -502,7 +485,6 @@ async function fetchBusyForEntity(entityType, entityId, allowedKeysSet) {
          ? item.reservations
          : [];
 
-      // Strângem toți instructorii raportați de backend pentru capacitate
       if (Array.isArray(item?.instructorsIds)) {
          for (const iid of item.instructorsIds) {
             if (iid != null) allInstructorIdsSet.add(Number(iid));
@@ -528,7 +510,6 @@ async function fetchBusyForEntity(entityType, entityId, allowedKeysSet) {
       }
    }
 
-   // Capacitate: pentru grup = numărul de instructori unici (fallback diverse câmpuri)
    let capacity = 1;
    if (entityType === "group") {
       const capCandidates = [
@@ -543,7 +524,6 @@ async function fetchBusyForEntity(entityType, entityId, allowedKeysSet) {
       capacity = Math.max(1, ...(capCandidates.length ? capCandidates : [1]));
    }
 
-   // Integrează BLACKOUTS (cu REPEAT expandat)
    const merged = await mergeBlackoutsIntoStartSets(
       entityType,
       entityId,
@@ -560,8 +540,8 @@ function isStartFullLocal(isoStart, startBusyLocal, capacity = 1) {
    const key = localKeyForIso(isoStart);
    const set = startBusyLocal?.get(key);
    if (!set || set.size === 0) return false;
-   if (set.has("__ALL__")) return true; // blackout de grup fără instructorId => blochează toți
-   const used = set.size; // număr DISTINCT de instructori ocupați în acel slot
+   if (set.has("__ALL__")) return true;
+   const used = set.size;
    return used >= capacity;
 }
 
@@ -578,6 +558,12 @@ export default function SAddProg({ onClose }) {
       ]);
    };
    const dismissLast = () => setMessages((prev) => prev.slice(0, -1));
+
+   // ✅ Fallback sigur pentru închiderea popup-ului
+   const safeClose = React.useCallback(() => {
+      if (typeof onClose === "function") onClose();
+      else closePopupStore();
+   }, [onClose]);
 
    /* Etapa 1: opțiuni */
    const [numarLectii, setNumarLectii] = useState(15);
@@ -799,6 +785,7 @@ export default function SAddProg({ onClose }) {
       }
       setLoading(true);
       try {
+         // ← prima (și singura) declarare
          const fullGrid = buildFullGridISO(WINDOW_DAYS);
          const allowedKeys = new Set(
             fullGrid.map((iso) => localKeyForIso(iso))
@@ -849,10 +836,9 @@ export default function SAddProg({ onClose }) {
          };
          const res = await dispatch(fetchBusy(query)).unwrap();
 
-         // ——— Normalizăm candidații și construim SET-uri distincte per slot ———
+         // ——— Normalizăm candidații ———
          const normalizeBusy = (raw) => {
             const out = [];
-
             const pushVariant = (
                entityType,
                entityId,
@@ -873,7 +859,6 @@ export default function SAddProg({ onClose }) {
                   if (!st) continue;
                   const key = busyLocalKeyFromStored(st);
                   if (allowedKeys.size && !allowedKeys.has(key)) continue;
-
                   const set = startBusyLocal.get(key) || new Set();
                   const rInstr =
                      r?.instructorId ??
@@ -911,7 +896,6 @@ export default function SAddProg({ onClose }) {
                const reservations = Array.isArray(item?.reservations)
                   ? item.reservations
                   : [];
-
                if (item?.groupId != null) {
                   pushVariant(
                      "group",
@@ -956,7 +940,7 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
-         // Integrează blackouts (cu REPEAT extins) în contorul pe SET pentru fiecare candidat
+         // Integrează blackouts
          list = await Promise.all(
             list.map(async (v) => ({
                ...v,
@@ -970,6 +954,7 @@ export default function SAddProg({ onClose }) {
             }))
          );
 
+         // ⚠️ NU redeclara fullGrid aici – folosește-l pe cel de la început
          const scored = list
             .map((v) => {
                const free = fullGrid.filter((iso) => {
@@ -1033,7 +1018,9 @@ export default function SAddProg({ onClose }) {
          notify(
             "warn",
             `Ai atins limita pachetului curent (${requiredSubmitCount}).`,
-            { force: true }
+            {
+               force: true,
+            }
          );
          return;
       }
@@ -1208,7 +1195,7 @@ export default function SAddProg({ onClose }) {
                startTime:
                   BUSY_KEYS_MODE === "local-match"
                      ? isoForDbMatchLocalHour(isoDate)
-                     : isoDate, // UTC real
+                     : isoDate,
                sector: String(sector || "Botanica"),
                gearbox: normalizedGearbox,
                privateMessage: "",
@@ -1225,11 +1212,12 @@ export default function SAddProg({ onClose }) {
             notify("success", `Trimis ${preflightFree.length} programări.`, {
                force: true,
             });
-            if (rejectedDates.length === 0) onClose?.();
-            else setShowList(true);
-            setSelectedDates([]);
+
+            // ✅ Închide popup-ul DOAR la succes
+            safeClose();
+            return;
          } catch (e) {
-            // Re-verifică live cu modelul pe SET-uri
+            // Re-verificare live
             const allowedKeys = new Set(
                preflightFree.map((iso) => localKeyForIso(iso))
             );
@@ -1279,6 +1267,7 @@ export default function SAddProg({ onClose }) {
                      color: "#FF5733",
                   })),
                };
+
                await createReservations(retryPayload);
                try {
                   await dispatch(fetchUserReservations(user.id)).unwrap();
@@ -1286,8 +1275,10 @@ export default function SAddProg({ onClose }) {
                notify("success", `Trimis ${stillOk.length} programări.`, {
                   force: true,
                });
-               setSelectedDates([]);
-               setShowList(true);
+
+               // ✅ Închide popup-ul DOAR la succes (și aici)
+               safeClose();
+               return;
             }
          }
       } catch (e) {
@@ -1311,7 +1302,7 @@ export default function SAddProg({ onClose }) {
    const handleBack = () => {
       if (stage === "pick" && showList) setShowList(false);
       else if (stage === "pick") setStage("setup");
-      else onClose?.();
+      else safeClose(); // ✅ fallback la store dacă nu avem onClose
    };
 
    return (

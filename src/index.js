@@ -1,4 +1,3 @@
-// src/main.jsx
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
@@ -12,13 +11,12 @@ const container = document.getElementById("root");
 const root = createRoot(container);
 
 root.render(
-   <React.StrictMode>
-      <Provider store={store}>
-         <PersistGate loading={null} persistor={persistor}>
-            <UserProvider>
-               <App />
-            </UserProvider>
-         </PersistGate>
-      </Provider>
-   </React.StrictMode>
+   // ⛔️ SCOS StrictMode – evita dublarea render-urilor în dev
+   <Provider store={store}>
+      <PersistGate loading={null} persistor={persistor}>
+         <UserProvider>
+            <App />
+         </UserProvider>
+      </PersistGate>
+   </Provider>
 );

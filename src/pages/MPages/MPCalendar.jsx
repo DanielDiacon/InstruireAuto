@@ -26,11 +26,10 @@ import { getUsers } from "../../api/usersService";
 import { useSelector, useDispatch } from "react-redux";
 import { fetchInstructors } from "../../store/instructorsSlice";
 
-import ACalendarView from "../../components/APanel/ACalendar";
-
 import { UserContext } from "../../UserContext";
 import SubPopup from "../../components/Utils/SubPopup";
 import PreloadAppData from "../../components/Utils/PreloadAppData";
+import ACalendarViewOptimized from "../../components/APanel/ACalendarOptimized";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -201,7 +200,7 @@ function MPCalendar() {
             <Popup />
          </Header>
          <main className="main">
-            <ACalendarView
+            <ACalendarViewOptimized
                events={events} // ← DIRECT, fără conversii
                localizer={localizer}
                currentView={currentView}

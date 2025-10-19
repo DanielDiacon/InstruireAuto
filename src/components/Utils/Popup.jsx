@@ -154,9 +154,21 @@ export default function Popup() {
    const renderContent = () => {
       switch (popupState.type) {
          case "addProg":
-            return <AAddProg key={openKey} {...popupState.props} />;
+            return (
+               <AAddProg
+                  key={openKey}
+                  {...popupState.props}
+                  onClose={handleCloseClick}
+               />
+            );
          case "sAddProg":
-            return <SAddProg key={openKey} {...popupState.props} />;
+            return (
+               <SAddProg
+                  key={openKey}
+                  {...popupState.props}
+                  onClose={handleCloseClick}
+               />
+            );
          case "addInstr":
             return <AddInstr key={openKey} {...popupState.props} />;
          case "dayInfo":
@@ -164,7 +176,13 @@ export default function Popup() {
          case "studentDetails":
             return <StudentInfo key={openKey} {...popupState.props} />;
          case "reservationEdit":
-            return <ReservationEdit key={openKey} {...popupState.props} />;
+            return (
+               <ReservationEdit
+                  key={openKey}
+                  {...popupState.props}
+                  onClose={handleCloseClick}
+               />
+            );
          case "profile":
             return <Profile key={openKey} {...popupState.props} />;
          case "eventInfo":
@@ -174,7 +192,9 @@ export default function Popup() {
          case "addManager":
             return <AddManager key={openKey} {...popupState.props} />;
          case "startExam":
-            return <StudentsMultiSelectPopup key={openKey} {...popupState.props} />;
+            return (
+               <StudentsMultiSelectPopup key={openKey} {...popupState.props} />
+            );
          default:
             return null;
       }

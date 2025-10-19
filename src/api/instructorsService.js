@@ -23,9 +23,8 @@ export async function patchInstructors(id, payload) {
 }
 
 export async function patchInstructorOrder(id, order) {
-   const res = await apiClientService.patch(`/instructors/${id}`, { order });
-   if (!res.ok) throw new Error(await res.text());
-   return res.json();
+   // Trimitem obiect simplu; ApiClientService se ocupă de JSON & headers
+   return patchInstructors(id, { order });
 }
 
 export async function deleteInstructors(id) {

@@ -1,4 +1,3 @@
-// src/components/Calendar/Day/EventCard.jsx
 import React from "react";
 import { openPopup } from "../../Utils/popupStore";
 
@@ -23,41 +22,45 @@ function normalizeColor(t) {
    return colorClassMap[s] ? s : "--default";
 }
 
-function EventCard({
+function HHMM(val) {
+   return new Intl.DateTimeFormat("ro-RO", {
+      timeZone: "Europe/Chisinau",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   }).format(val instanceof Date ? val : new Date(val));
+}
+
+export default function EventCard({
    ev,
    editMode,
    highlightTokens,
-   tokens,
    onOpenReservation,
 }) {
-   const colorToken = normalizeColor(ev.color);
-   const colorClass = colorClassMap[colorToken];
-   const MOLDOVA_TZ = "Europe/Chisinau";
-   const fmtHHMM_MD = (val) =>
-      new Intl.DateTimeFormat("ro-RO", {
-         timeZone: MOLDOVA_TZ,
-         hour: "2-digit",
-         minute: "2-digit",
-         hour12: false,
-      }).format(val ? new Date(val) : new Date());
+   if (!ev) return null;
 
-   const strictHHMM = (val) => {
-      if (typeof val === "string") {
-         const m = val.match(/T(\d{2}):(\d{2})/);
-         if (m) return `${m[1]}:${m[2]}`; // păstrează HH:mm exact din string
-      }
-      return fmtHHMM_MD(val);
-   };
-   const person = `${ev.studentFirst || ""} ${ev.studentLast || ""}`.trim();
-   const studentObj = ev.studentId
-      ? {
-           id: ev.studentId,
-           firstName: ev.studentFirst,
-           lastName: ev.studentLast,
-           phone: ev.studentPhone,
-           isConfirmed: ev.isConfirmed,
-        }
-      : null;
+   const colorClass =
+      colorClassMap[normalizeColor(ev.color)] ?? colorClassMap["--default"];
+   const startLabel = HHMM(ev.raw?.startTime ?? ev.start);
+   const endLabel = HHMM(ev.raw?.endTime ?? ev.end);
+
+   const fallbackName =
+      ev.raw?.clientName ||
+      ev.raw?.customerName ||
+      ev.raw?.name ||
+      ev.title ||
+      "Programare";
+
+   const person = (
+      `${ev.studentFirst || ""} ${ev.studentLast || ""}`.trim() || fallbackName
+   ).trim();
+
+   const phone =
+      ev.studentPhone ||
+      ev.raw?.clientPhone ||
+      ev.raw?.phoneNumber ||
+      ev.raw?.phone ||
+      "";
 
    const reservationId = ev.raw?.id ?? ev.id;
 
@@ -71,11 +74,22 @@ function EventCard({
    };
 
    const openStudent = () => {
-      if (editMode || !studentObj) return;
-      openPopup("studentDetails", { student: studentObj });
+      if (editMode) return;
+      if (ev.studentId) {
+         openPopup("studentDetails", {
+            student: {
+               id: ev.studentId,
+               firstName: ev.studentFirst || "",
+               lastName: ev.studentLast || "",
+               phone: phone || "",
+               isConfirmed: !!ev.isConfirmed,
+            },
+         });
+      }
    };
 
-   const stopAll = (e) => e.stopPropagation();
+   const H = (t) =>
+      typeof highlightTokens === "function" ? highlightTokens(t) : t;
 
    return (
       <div
@@ -83,80 +97,60 @@ function EventCard({
          role="button"
          tabIndex={0}
          draggable={false}
-         style={{ pointerEvents: "auto" }}
-         onPointerDown={stopAll}
-         onMouseDown={stopAll}
-         onMouseUp={stopAll}
          onDoubleClick={(e) => {
-            if (e.target.closest(".dayview__event-person-name")) return;
             e.stopPropagation();
             openReservation();
          }}
       >
          <span
-            type="button"
-            className="dayview__event-person-name dayview__event-person-name--link"
-            onClick={(e) => e.stopPropagation()}
+            className="dayview__event-person-name"
             onDoubleClick={(e) => {
                e.stopPropagation();
                openStudent();
             }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
          >
-            {highlightTokens(person, tokens)}
+            {H(person)}
          </span>
 
-         {ev.studentPhone && (
-            <span
-               className="dv-phone"
+         {phone ? (
+            <div
+               className="dayview__event-phone"
                onDoubleClick={(e) => {
-                  if (editMode) return;
                   e.stopPropagation();
                   openReservation();
                }}
-               onPointerDown={(e) => e.stopPropagation()}
-               onMouseDown={(e) => e.stopPropagation()}
             >
-               {highlightTokens(ev.studentPhone, tokens)}
-            </span>
-         )}
+               {H(phone)}
+            </div>
+         ) : null}
 
          <div
             className="dv-meta-row"
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
-               if (editMode) return;
                e.stopPropagation();
                openReservation();
             }}
          >
-            <span className="dv-meta-pill">{ev.isConfirmed ? "Da" : "Nu"}</span>
+            <span className="dv-meta-pill">{ev.isConfirmed ? "DA" : "Nu"}</span>
             <span className="dv-meta-pill">
-               {strictHHMM(ev.raw?.startTime ?? ev.start)}
+               {startLabel}–{endLabel}
             </span>
-            {ev.gearboxLabel && (
+            {ev.gearboxLabel ? (
                <span className="dv-meta-pill">{ev.gearboxLabel}</span>
-            )}
+            ) : null}
          </div>
 
-         {ev.privateMessage && (
+         {ev.privateMessage ? (
             <p
                className="dayview__event-note"
-               onClick={(e) => {
-                  if (editMode) return;
+               onDoubleClick={(e) => {
                   e.stopPropagation();
                   openReservation();
                }}
-               onPointerDown={(e) => e.stopPropagation()}
-               onMouseDown={(e) => e.stopPropagation()}
             >
-               {highlightTokens(ev.privateMessage, tokens)}
+               {H(ev.privateMessage)}
             </p>
-         )}
+         ) : null}
       </div>
    );
 }
-
-export default React.memo(EventCard);
