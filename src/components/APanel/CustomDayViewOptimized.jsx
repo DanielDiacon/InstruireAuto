@@ -415,6 +415,41 @@ export default function CustomDayViewOptimized(props = {}) {
          dispatch(fetchReservationsDelta());
       }
    }, [dispatch, reservationsLive?.length]);
+   // Auto-refresh la 10s (pauză când interacționează / tab ascuns; fără suprapuneri)
+   useEffect(() => {
+      if (typeof window === "undefined") return;
+      let inFlight = false;
+      const T = 10_000;
+
+      const tick = async () => {
+         if (document.hidden) return; // nu refresha în fundal
+         if (suspendFlagsRef.current?.isInteracting) return; // nu deranja drag/inerția
+         if (inFlight) return; // evită dublurile
+         inFlight = true;
+         try {
+            await dispatch(fetchReservationsDelta());
+         } finally {
+            inFlight = false;
+         }
+      };
+
+      const id = setInterval(tick, T);
+      return () => clearInterval(id);
+   }, [dispatch]);
+   // Refresh instant când revii pe fereastră sau tab-ul devine vizibil
+   useEffect(() => {
+      const onFocusVisible = () => {
+         if (!document.hidden && !suspendFlagsRef.current?.isInteracting) {
+            dispatch(fetchReservationsDelta());
+         }
+      };
+      window.addEventListener("focus", onFocusVisible);
+      document.addEventListener("visibilitychange", onFocusVisible);
+      return () => {
+         window.removeEventListener("focus", onFocusVisible);
+         document.removeEventListener("visibilitychange", onFocusVisible);
+      };
+   }, [dispatch]);
 
    const instructorsGroups = useSelector(
       (s) => s.instructorsGroups?.list ?? [],
