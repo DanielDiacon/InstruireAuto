@@ -10,6 +10,8 @@ import EventCard from "./EventCard";
 import EmptySlot from "./EmptySlot";
 import { updateUser } from "../../../store/usersSlice";
 
+const MOLDOVA_TZ = "Europe/Chisinau"; // ⬅️ NOU
+
 const digits = (s = "") => String(s).replace(/\D+/g, "");
 const norm = (s = "") =>
    s
@@ -88,6 +90,8 @@ function InstructorColumnConnected({
    rowsCount,
    onOpenReservation,
    onCreateFromEmpty,
+   blockedKeySet, // ⬅️ NOU
+   blackoutVer, // ⬅️ NOU (doar pt. comparator)
 }) {
    const dispatch = useDispatch();
 
@@ -258,6 +262,24 @@ function InstructorColumnConnected({
       (typeof highlightTokens === "function" ? highlightTokens(txt) : txt) ||
       "\u00A0";
 
+   // ⬇️ cheie locală "YYYY-MM-DD|HH:mm" dintr-un Date (MD timezone)
+   const keyFromDateMD = (dateLike) => {
+      const d = dateLike instanceof Date ? dateLike : new Date(dateLike);
+      const dayStr = new Intl.DateTimeFormat("en-CA", {
+         timeZone: MOLDOVA_TZ,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+      }).format(d); // 2025-02-03
+      const hm = new Intl.DateTimeFormat("en-GB", {
+         timeZone: MOLDOVA_TZ,
+         hour: "2-digit",
+         minute: "2-digit",
+         hour12: false,
+      }).format(d); // 08:30
+      return `${dayStr}|${hm}`;
+   };
+
    return (
       <div
          className={`dayview__event-col${
@@ -407,6 +429,12 @@ function InstructorColumnConnected({
                            editMode={editMode}
                            highlightTokens={highlightTokens}
                            onOpenReservation={onOpenReservation}
+                           isBlackout={
+                              !!(
+                                 blockedKeySet &&
+                                 blockedKeySet.has(keyFromDateMD(ev.start))
+                              )
+                           }
                         />
                      ) : (
                         <EmptySlot
@@ -420,6 +448,13 @@ function InstructorColumnConnected({
                                  groupId: null,
                                  sector: "",
                               })
+                           }
+                           // ⬇️ NOU: marcăm și slotul gol ca „blocat” dacă ora e în blackouts
+                           isBlackout={
+                              !!(
+                                 blockedKeySet &&
+                                 blockedKeySet.has(keyFromDateMD(slot.start))
+                              )
                            }
                         />
                      )}

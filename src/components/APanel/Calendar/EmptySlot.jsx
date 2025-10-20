@@ -12,15 +12,22 @@ function formatHMChisinau(dateLike) {
    }).format(d);
 }
 
-export default function EmptySlot({ slot, onCreate }) {
+// ⬇️ doar am adăugat isBlackout (implicit false)
+export default function EmptySlot({ slot, onCreate, isBlackout = false }) {
    const label = slot?.start ? formatHMChisinau(slot.start) : "--:--";
 
    return (
       <div
-         className="eventcard dayview__event dayview__event--default"
+         className={
+            // ⬇️ păstrez clasele tale EXACT și adaug condițional marcajul vizual
+            `eventcard dayview__event dayview__event--default${
+               isBlackout ? " dayview__event--blocked" : ""
+            }`
+         }
          data-empty="1"
          role="button"
          tabIndex={0}
+         title={isBlackout ? "Oră blocată (vizual)" : "Slot liber"}
          onDoubleClick={(e) => {
             e.stopPropagation();
             e.preventDefault();

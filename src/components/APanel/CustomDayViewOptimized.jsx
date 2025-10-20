@@ -27,6 +27,7 @@ import arrow from "../../assets/svg/arrow-s.svg";
 
 import useInertialPan from "./Calendar/useInertialPan";
 import InstructorColumnConnected from "./Calendar/InstructorColumnConnected";
+import { getInstructorBlackouts } from "../../api/instructorsService"; // ⬅️ NOU
 
 /* ====== NAV STATE GLOBAL ====== */
 let __DV_NAV_STATE__ = {
@@ -227,7 +228,8 @@ const MemoInstructorColumn = memo(InstructorColumnConnected, (prev, next) => {
       prev.day?.id === next.day?.id &&
       prev.tokensKey === next.tokensKey &&
       prev.eventsKey === next.eventsKey &&
-      prev.getOrderStringForInst === next.getOrderStringForInst
+      prev.getOrderStringForInst === next.getOrderStringForInst &&
+      prev.blackoutVer === next.blackoutVer // ⬅️ NOU
    );
 });
 
@@ -1517,6 +1519,151 @@ export default function CustomDayViewOptimized(props = {}) {
       ]
    );
 
+   /* ======== BLACKOUTS (outline vizual pentru evenimente) ======== */
+   // Helpers TZ (compatibile cu AAddProg)
+   function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
+      const p = new Intl.DateTimeFormat("en-GB", {
+         timeZone,
+         hour12: false,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+         hour: "2-digit",
+         minute: "2-digit",
+         second: "2-digit",
+      }).formatToParts(new Date(dateLike));
+      const get = (t) => +p.find((x) => x.type === t).value;
+      return {
+         y: get("year"),
+         m: get("month"),
+         d: get("day"),
+         H: get("hour"),
+         M: get("minute"),
+         S: get("second"),
+      };
+   }
+   function ymdStrInTZ(dateLike, timeZone = MOLDOVA_TZ) {
+      const { y, m, d } = partsInTZ(dateLike, timeZone);
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+   }
+   function hhmmInTZ(dateLike, timeZone = MOLDOVA_TZ) {
+      const { H, M } = partsInTZ(dateLike, timeZone);
+      return `${String(H).padStart(2, "0")}:${String(M).padStart(2, "0")}`;
+   }
+   function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
+      const { y, m, d, H, M, S } = partsInTZ(tsMs, timeZone);
+      const asUTC = Date.UTC(y, m - 1, d, H, M, S);
+      return (asUTC - tsMs) / 60000;
+   }
+   function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
+      return `${ymdStrInTZ(tsMs, tz)}|${hhmmInTZ(tsMs, tz)}`;
+   }
+   function busyLocalKeyFromStored(st) {
+      const d = new Date(st);
+      const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
+      const base = new Date(d.getTime() - offMin * 60000);
+      return localKeyFromTs(base.getTime(), MOLDOVA_TZ);
+   }
+   function getBlackoutDT(b) {
+      if (typeof b === "string") return b;
+      const t = String(b?.type || "").toUpperCase();
+      if (t === "REPEAT") {
+         return b?.startDateTime || b?.dateTime || b?.datetime || null;
+      }
+      return (
+         b?.dateTime ||
+         b?.datetime ||
+         b?.startTime ||
+         b?.date ||
+         b?.begin ||
+         null
+      );
+   }
+   function expandRepeatLocalKeys(b, allowedKeysSet) {
+      const out = [];
+      const t = String(b?.type || "").toUpperCase();
+      if (t !== "REPEAT") return out;
+
+      const stepDays = Math.max(1, Number(b?.repeatEveryDays || 1));
+      const first = b?.startDateTime || b?.dateTime;
+      const last = b?.endDateTime || first;
+      if (!first || !last) return out;
+
+      let cur = new Date(first).getTime();
+      const lastMs = new Date(last).getTime();
+      while (cur <= lastMs) {
+         const key = busyLocalKeyFromStored(new Date(cur).toISOString());
+         if (!allowedKeysSet || allowedKeysSet.has(key)) out.push(key);
+         cur += stepDays * 24 * 60 * 60 * 1000;
+      }
+      return out;
+   }
+
+   // 1) Cheile permise în fereastra vizibilă
+   const fromIdx = Math.max(0, win.from);
+   const toIdx = Math.max(fromIdx, win.to);
+   const allowedKeysSet = useMemo(() => {
+      const set = new Set();
+      for (let i = fromIdx; i <= toIdx; i++) {
+         const d = visibleDaysForAll[i];
+         if (!d) continue;
+         const ts = startOfDayTs(d);
+         const slots = getSlotsForTs(ts);
+         for (const s of slots) set.add(localKeyFromTs(s.start));
+      }
+      return set;
+   }, [fromIdx, toIdx, visibleDaysForAll, getSlotsForTs]);
+
+   // 2) Cache: instructorId -> Set(localKeys)
+   const blackoutKeyMapRef = useRef(new Map()); // Map<string, Set<string>>
+   const [blackoutVer, setBlackoutVer] = useState(0);
+
+   // 3) Instructorii din fereastra curentă
+   const instIdsInWindow = useMemo(() => {
+      const ids = new Set();
+      for (let i = fromIdx; i <= toIdx; i++) {
+         const day = buildUiDay(visibleDaysForAll[i]);
+         (day?.instructors || []).forEach(({ inst }) => {
+            const iid = String(inst?.id || "");
+            if (!iid.startsWith("__pad_")) ids.add(iid);
+         });
+      }
+      return Array.from(ids);
+   }, [fromIdx, toIdx, visibleDaysForAll, buildUiDay]);
+
+   // 4) Load lazy pentru fiecare instructor
+   const ensureBlackoutsFor = useCallback(
+      async (instId) => {
+         const key = String(instId);
+         if (blackoutKeyMapRef.current.has(key)) return;
+         try {
+            const list = await getInstructorBlackouts(key);
+            const set = new Set();
+            for (const b of list || []) {
+               const type = String(b?.type || "").toUpperCase();
+               if (type === "REPEAT") {
+                  for (const k of expandRepeatLocalKeys(b, allowedKeysSet))
+                     set.add(k);
+               } else {
+                  const dt = getBlackoutDT(b);
+                  if (!dt) continue;
+                  const k = busyLocalKeyFromStored(dt);
+                  if (!allowedKeysSet.size || allowedKeysSet.has(k)) set.add(k);
+               }
+            }
+            blackoutKeyMapRef.current.set(key, set);
+            setBlackoutVer((v) => v + 1);
+         } catch {}
+      },
+      [allowedKeysSet]
+   );
+
+   useEffect(() => {
+      instIdsInWindow.forEach((iid) => {
+         ensureBlackoutsFor(iid);
+      });
+   }, [instIdsInWindow, ensureBlackoutsFor]);
+
    /* ===== Toolbar / handlers ===== */
    const [editMode, setEditMode] = useState(false);
    const handleManualRefresh = useCallback(() => {
@@ -1543,8 +1690,6 @@ export default function CustomDayViewOptimized(props = {}) {
    const showFullToolbar = !isMobile && !compact;
 
    /* ================= Render ================= */
-   const fromIdx = Math.max(0, win.from);
-   const toIdx = Math.max(fromIdx, win.to);
    const count = visibleDaysForAll.length;
 
    return (
@@ -1788,7 +1933,7 @@ export default function CustomDayViewOptimized(props = {}) {
                      willChange: "transform",
                   }}
                >
-                  {/* Randăm DOAR zilele [fromIdx..toIdx], poziționate absolut */}
+                  {/* Randăm DOAR zilele [from..to], poziționate absolut */}
                   {count > 0 &&
                      Array.from(
                         { length: toIdx - fromIdx + 1 },
@@ -1811,8 +1956,7 @@ export default function CustomDayViewOptimized(props = {}) {
                               style={{
                                  position: "absolute",
                                  left:
-                                    absIdx *
-                                    (baseMetrics.dayWidth + 12 + DAY_GAP),
+                                    absIdx * (baseMetrics.dayWidth + 12 + 32),
                                  top: 0,
                                  width: `${baseMetrics.dayWidth + 12}px`,
                                  "--cols": maxColsPerGroup,
@@ -1837,7 +1981,7 @@ export default function CustomDayViewOptimized(props = {}) {
                                     key={`${day.id}__block__${rowIdxLocal}`}
                                     className="dayview__block"
                                     style={{
-                                       marginTop: rowIdxLocal ? ROW_GAP : 0,
+                                       marginTop: rowIdxLocal ? 32 : 0,
                                     }}
                                  >
                                     <div className="dayview__group-content dayview__group-content--row">
@@ -1912,6 +2056,12 @@ export default function CustomDayViewOptimized(props = {}) {
                                                       onCreateFromEmpty={
                                                          createFromEmptyOnDbl
                                                       }
+                                                      blockedKeySet={
+                                                         blackoutKeyMapRef.current.get(
+                                                            String(inst.id)
+                                                         ) || null
+                                                      } // ⬅️ NOU
+                                                      blackoutVer={blackoutVer} // ⬅️ NOU
                                                    />
                                                 );
                                              }
