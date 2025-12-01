@@ -125,10 +125,18 @@ export default function SubPopup() {
    const renderContent = () => {
       switch (popupState.type) {
          case "reservationEdit":
-            return <ReservationEditPopup key={openKey} {...popupState.props} />;
+            return (
+               <ReservationEditPopup
+                  key={openKey}
+                  onClose={handleClose}
+                  {...popupState.props}
+               />
+            );
          default: {
             const Cmp = popupState.props?.component;
-            return Cmp ? <Cmp key={openKey} {...popupState.props} /> : null;
+            return Cmp ? (
+               <Cmp key={openKey} onClose={handleClose} {...popupState.props} />
+            ) : null;
          }
       }
    };

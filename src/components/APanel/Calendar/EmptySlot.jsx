@@ -1,3 +1,4 @@
+// src/components/APanel/Calendar/EmptySlot.jsx
 import React from "react";
 
 const MOLDOVA_TZ = "Europe/Chisinau";
@@ -12,14 +13,13 @@ function formatHMChisinau(dateLike) {
    }).format(d);
 }
 
-// ⬇️ doar am adăugat isBlackout (implicit false)
+// doar am adăugat isBlackout (implicit false)
 export default function EmptySlot({ slot, onCreate, isBlackout = false }) {
    const label = slot?.start ? formatHMChisinau(slot.start) : "--:--";
 
    return (
       <div
          className={
-            // ⬇️ păstrez clasele tale EXACT și adaug condițional marcajul vizual
             `eventcard dayview__event dayview__event--default${
                isBlackout ? " dayview__event--blocked" : ""
             }`

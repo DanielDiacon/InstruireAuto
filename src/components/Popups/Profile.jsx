@@ -108,6 +108,32 @@ const PRIMARY_KEYS = new Set([
    "phone",
    "role",
 ]);
+// === Format ISO -> "DD MM YYYY - HH:MM" fără schimbare de oră (fără timezone) ===
+function fmtIsoDDMMYYYY_HHMM_Plain(val) {
+   if (val == null) return "–";
+
+   // Dacă e string: extragem direct, fără a crea Date (deci fără offset)
+   if (typeof val === "string") {
+      // Acceptă: "YYYY-MM-DDTHH:MM[:SS[.ms]][Z|±HH:MM]" sau cu spațiu în loc de "T"
+      const m = val.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2}))/);
+      if (m) {
+         const [, Y, M, D, h, min] = m;
+         return `${D} ${M} ${Y} - ${h}:${min}`;
+      }
+      return String(val);
+   }
+
+   // Dacă ajunge Date/număr, folosim UTC ca să nu aplicăm fus local
+   const d = val instanceof Date ? val : new Date(val);
+   if (isNaN(d)) return "–";
+   const pad = (n) => String(n).padStart(2, "0");
+   const Y = d.getUTCFullYear();
+   const M = pad(d.getUTCMonth() + 1);
+   const D = pad(d.getUTCDate());
+   const h = pad(d.getUTCHours());
+   const min = pad(d.getUTCMinutes());
+   return `${D} ${M} ${Y} - ${h}:${min}`;
+}
 
 export default function Profile() {
    const navigate = useNavigate();
@@ -291,14 +317,8 @@ export default function Profile() {
                                  >
                                     <div className="students-info__item-left">
                                        <h3>{studentName}</h3>
-                                       <p>{instructorName}</p>
-                                       <span>
-                                          {res.startTime
-                                             ? new Date(
-                                                  res.startTime
-                                               ).toLocaleString()
-                                             : "–"}
-                                       </span>
+                                       {/*<p>{instructorName}</p>*/}
+                                      <span>{fmtIsoDDMMYYYY_HHMM_Plain(res.startTime)}</span>
                                     </div>
 
                                     <div className="students-info__item-right">

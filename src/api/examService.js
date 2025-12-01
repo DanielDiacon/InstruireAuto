@@ -1,4 +1,3 @@
-// src/api/examService.js
 import apiClientService from "./ApiClientService";
 
 /* ============================================================================
@@ -101,7 +100,7 @@ export async function grantExamPermissionExact({
    userId,
    validUntil,
    maxAttempts = 1,
-   grantedById, // dacă nu e valid INT, îl omitem
+   grantedById,
 }) {
    const uid = Number.parseInt(String(userId), 10);
    if (!Number.isInteger(uid) || uid <= 0) {
@@ -112,7 +111,6 @@ export async function grantExamPermissionExact({
    if (!Number.isInteger(attempts) || attempts < 1) attempts = 1;
    if (!validUntil) throw new Error("validUntil lipsă (ISO).");
 
-   // determină actorul/grantedById
    let gby = Number.parseInt(String(grantedById), 10);
    if (!Number.isInteger(gby) || gby <= 0) {
       try {
@@ -159,7 +157,7 @@ export async function grantExamPermissionExact({
 
 export async function grantExamPermissionBulk({
    userIds = [],
-   validUntil, // ISO (UTC) — dacă lipsește, +60 min
+   validUntil,
    maxAttempts = 1,
    grantedById,
    skipRoleCheck = false,
@@ -229,7 +227,7 @@ export async function grantMyExamPermission() {
 /* ============================================================================
    EXAM
 ============================================================================ */
-export async function startExam({ userId, timeLimit, passScore } = {}) {
+export async function startExam({ userId, timeLimit, passScore, lang } = {}) {
    const uid = Number.parseInt(String(userId), 10);
    if (!Number.isInteger(uid) || uid <= 0) {
       throw new Error("startExam: userId invalid (trebuie INT > 0).");
@@ -241,8 +239,14 @@ export async function startExam({ userId, timeLimit, passScore } = {}) {
    if (Number.isInteger(tl) && tl > 0) body.timeLimit = tl;
    if (Number.isInteger(ps) && ps > 0) body.passScore = ps;
 
+   const langSafe = String(lang) === "ru" ? "ru" : "ro";
+   const qs = new URLSearchParams();
+   if (langSafe) qs.set("lang", langSafe);
+
+   const url = `/exams${qs.toString() ? `?${qs.toString()}` : ""}`;
+
    const res = await apiClientService.post(
-      "/exams",
+      url,
       JSON.stringify(body),
       "application/json; charset=UTF-8"
    );
@@ -275,7 +279,6 @@ export async function getExam(examId) {
    return await res.json();
 }
 
-// POST /exams/:id/answers – întoarce { correct } (și passthrough alte câmpuri)
 export async function submitExamAnswer(
    examId,
    { questionId, selectedAnswer, image }
@@ -323,9 +326,10 @@ async function __getTicketCorrectMap(ticketId) {
    const map = new Map();
    (qs || []).forEach((q) => {
       const qid = Number(q?.id);
-      const ci = Number(q?.correctAnswer);
-      if (Number.isInteger(qid) && q?.correctAnswer != null) {
-         map.set(qid, ci);
+      const answersLen = Array.isArray(q?.answers) ? q.answers.length : 0;
+      const ci = normalizeCorrectIdx(q?.correctAnswer, answersLen);
+      if (Number.isInteger(qid) && Number.isInteger(ci)) {
+         map.set(qid, ci); // 0-based
       }
    });
    __ticketCorrectCache.set(tid, map);
@@ -338,7 +342,7 @@ export async function verifyAndSubmitExamAnswer(examId, ticketId, payload) {
    }
    try {
       const cmap = await __getTicketCorrectMap(ticketId);
-      const expected = cmap.get(Number(payload.questionId));
+      const expected = cmap.get(Number(payload.questionId)); // 0-based
       if (Number.isInteger(expected)) {
          const isCorrect = Number(payload.selectedAnswer) === Number(expected);
          return { ...serverResp, correct: isCorrect };
@@ -418,7 +422,6 @@ export async function getInstructorExamHistory({ page = 1, limit = 10 } = {}) {
    return await res.json();
 }
 
-// Istoricul pentru un elev anume (smart, încearcă mai multe rute)
 export async function getExamHistoryForUser(
    userId,
    { page = 1, limit = 20 } = {}
@@ -602,11 +605,29 @@ export async function getAllExamTickets({ pageSize = 50, maxPages = 20 } = {}) {
 /* ============================================================================
    PRACTICE
 ============================================================================ */
-// POST /exams/practice { ticketId }
-export async function startPracticeSession(ticketId) {
+function safeLang(lang) {
+   return String(lang) === "ru" ? "ru" : "ro";
+}
+
+// Acceptă fie string, fie { lang }
+function extractLang(langOrOpts) {
+   if (!langOrOpts) return undefined;
+   if (typeof langOrOpts === "string") return langOrOpts;
+   if (typeof langOrOpts === "object" && langOrOpts.lang)
+      return langOrOpts.lang;
+   return undefined;
+}
+
+// POST /exams/practice { ticketId }  + ?lang=ro|ru
+export async function startPracticeSession(ticketId, langOrOpts) {
+   const lang = extractLang(langOrOpts);
+   const qs = new URLSearchParams();
+   if (lang) qs.set("lang", safeLang(lang));
+   const url = `/exams/practice${qs.toString() ? `?${qs.toString()}` : ""}`;
+
    const body = JSON.stringify({ ticketId: Number(ticketId) });
    const res = await apiClientService.post(
-      "/exams/practice",
+      url,
       body,
       "application/json; charset=UTF-8"
    );
@@ -623,13 +644,20 @@ export async function startPracticeSession(ticketId) {
       if (res.status === 403) throw new Error("AUTH_403");
       throw new Error(`startPracticeSession ${res.status}: ${text}`);
    }
-   return data; // { id, ticketId, ... }
+   return data;
 }
 
-// GET /exams/practice/{id}
-export async function getPracticeSession(sessionId) {
+// GET /exams/practice/{id}  + ?lang=ro|ru
+export async function getPracticeSession(sessionId, langOrOpts) {
+   const lang = extractLang(langOrOpts);
    const sid = encodeURIComponent(String(sessionId));
-   const res = await apiClientService.get(`/exams/practice/${sid}`);
+   const qs = new URLSearchParams();
+   if (lang) qs.set("lang", safeLang(lang));
+   const url = `/exams/practice/${sid}${
+      qs.toString() ? `?${qs.toString()}` : ""
+   }`;
+
+   const res = await apiClientService.get(url);
    const text = await res.text().catch(() => "");
    if (!res.ok) {
       if (res.status === 401) throw new Error("AUTH_401");
@@ -787,7 +815,6 @@ export function normalizePracticeHistoryItem(item) {
    };
 }
 
-// fallback local (în caz de offline sau 401/403)
 export function loadLocalPracticeResults() {
    try {
       if (typeof localStorage === "undefined") return [];
@@ -831,7 +858,6 @@ export function loadLocalPracticeResults() {
    });
 }
 
-// agregare statistică pentru PracticeStatistics.jsx
 export async function getPracticeStats({ pageSize = 50, maxPages = 10 } = {}) {
    try {
       const srv = await getAllMyPracticeHistory({ pageSize, maxPages });
@@ -895,7 +921,6 @@ export async function ensureUserExists(userId) {
    return true;
 }
 
-// (opțional în alte locuri; nu o folosi pe post de validare de rol)
 export async function pingInstructorRole() {
    const res = await apiClientService.get(
       "/exams/history/instructor?page=1&limit=1"
@@ -909,67 +934,75 @@ export async function pingInstructorRole() {
    }
    return true;
 }
-// === Istoric pentru un student specific (ADMIN/MANAGER) ===
-export async function getExamHistoryForStudentId(studentId, { page = 1, limit = 20 } = {}) {
-  const sid = encodeURIComponent(String(studentId));
-  const params = new URLSearchParams();
-  params.set("page", String(page));
-  params.set("limit", String(limit));
 
-  const res = await apiClientService.get(`/exams/history/student/${sid}?${params.toString()}`);
-  const text = await res.text().catch(() => "");
-  let data;
-  try { data = text ? JSON.parse(text) : undefined; } catch { data = text; }
+export async function getExamHistoryForStudentId(
+   studentId,
+   { page = 1, limit = 20 } = {}
+) {
+   const sid = encodeURIComponent(String(studentId));
+   const params = new URLSearchParams();
+   params.set("page", String(page));
+   params.set("limit", String(limit));
 
-  if (!res.ok) {
-    if (res.status === 401) throw new Error("AUTH_401");
-    if (res.status === 403) throw new Error("AUTH_403");
-    if (res.status === 404) throw new Error("HISTORY_404");
-    throw new Error(`getExamHistoryForStudentId ${res.status}: ${text}`);
-  }
+   const res = await apiClientService.get(
+      `/exams/history/student/${sid}?${params.toString()}`
+   );
+   const text = await res.text().catch(() => "");
+   let data;
+   try {
+      data = text ? JSON.parse(text) : undefined;
+   } catch {
+      data = text;
+   }
 
-  const items = Array.isArray(data) ? data : (data?.data || data?.items || data?.results || []);
-  const pagination = data?.pagination || data?.meta || { totalPages: 1 };
-  return { items, pagination };
+   if (!res.ok) {
+      if (res.status === 401) throw new Error("AUTH_401");
+      if (res.status === 403) throw new Error("AUTH_403");
+      if (res.status === 404) throw new Error("HISTORY_404");
+      throw new Error(`getExamHistoryForStudentId ${res.status}: ${text}`);
+   }
+
+   const items = Array.isArray(data)
+      ? data
+      : data?.data || data?.items || data?.results || [];
+   const pagination = data?.pagination || data?.meta || { totalPages: 1 };
+   return { items, pagination };
 }
 
-export async function getExamHistoryForStudentIdAll(studentId, { pageSize = 50, maxPages = 10 } = {}) {
-  const all = [];
-  for (let page = 1; page <= maxPages; page++) {
-    const batch = await getExamHistoryForStudentId(studentId, { page, limit: pageSize });
-    const items = batch?.items || [];
-    if (!items.length) break;
-    all.push(...items);
+export async function getExamHistoryForStudentIdAll(
+   studentId,
+   { pageSize = 50, maxPages = 10 } = {}
+) {
+   const all = [];
+   for (let page = 1; page <= maxPages; page++) {
+      const batch = await getExamHistoryForStudentId(studentId, {
+         page,
+         limit: pageSize,
+      });
+      const items = batch?.items || [];
+      if (!items.length) break;
+      all.push(...items);
 
-    const totalPages = batch?.pagination?.totalPages ?? null;
-    if (totalPages ? page >= totalPages : items.length < pageSize) break;
-  }
-  return all;
+      const totalPages = batch?.pagination?.totalPages ?? null;
+      if (totalPages ? page >= totalPages : items.length < pageSize) break;
+   }
+   return all;
 }
 
-// src/api/examService.js
 // === PDF results (manager/admin) ===
 export const getExamPdfUrl = (examId) =>
    `/exams/${encodeURIComponent(String(examId))}/download-pdf`;
 
-/**
- * Descarcă PDF-ul pentru un examen:
- * - folosește apiClientService ca să trimită aceiași headers de auth
- * - dacă backend trimite JSON/HTML (eroare/login), citește și aruncă mesaj clar
- * - dacă e PDF, salvează cu nume din Content-Disposition sau fallback
- */
 export async function downloadExamPdf(examId, filename) {
    if (!examId) throw new Error("Lipsește examId.");
    const url = getExamPdfUrl(examId);
 
-   // IMPORTANT: folosim apiClientService.get ca în restul API-urilor (trimite Authorization)
    const res = await apiClientService.get(url);
 
    const ct = String(res.headers.get("content-type") || "");
    const cd = String(res.headers.get("content-disposition") || "");
 
    if (!res.ok) {
-      // dacă serverul a răspuns cu JSON de eroare -> extragem mesajul
       if (ct.includes("application/json")) {
          const j = await res.json().catch(() => ({}));
          const msg =
@@ -981,7 +1014,6 @@ export async function downloadExamPdf(examId, filename) {
          throw new Error(`${msg} (HTTP ${res.status})`);
       }
       const txt = await res.text().catch(() => "");
-      // mesaje mai prietenoase pentru cele frecvente
       if (res.status === 401)
          throw new Error(
             "Sesiune expirată sau neautorizat (401). Autentifică-te din nou."
@@ -992,7 +1024,6 @@ export async function downloadExamPdf(examId, filename) {
 
    const blob = await res.blob();
 
-   // Dacă nu e PDF, probabil e HTML de login sau JSON
    if (!/pdf/i.test(ct)) {
       if (ct.includes("text/html") && blob.size < 200_000) {
          const html = await blob.text().catch(() => "");
@@ -1011,14 +1042,12 @@ export async function downloadExamPdf(examId, filename) {
       throw new Error(`Tip neașteptat de răspuns: ${ct || "necunoscut"}.`);
    }
 
-   // Numele fișierului din Content-Disposition (dacă există)
    const m =
       cd.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i) ||
       cd.match(/filename="?([^"]+)"?/i);
    const nameFromServer = m ? decodeURIComponent(m[1]) : null;
    const finalName = filename || nameFromServer || `exam-${examId}.pdf`;
 
-   // Salvează
    const a = document.createElement("a");
    const href = URL.createObjectURL(blob);
    a.href = href;

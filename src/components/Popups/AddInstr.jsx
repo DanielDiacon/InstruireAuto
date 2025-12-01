@@ -2,9 +2,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { ReactSVG } from "react-svg";
-import DatePicker, { registerLocale } from "react-datepicker";
-import "react-datepicker/dist/react-datepicker.css";
-import ro from "date-fns/locale/ro";
 
 import {
    fetchInstructors,
@@ -24,13 +21,8 @@ import {
 /* ICONS */
 import editIcon from "../../assets/svg/edit.svg";
 import scheduleIcon from "../../assets/svg/material-symbols--today-outline.svg";
-import repeatOnIcon from "../../assets/svg/repeat-on.svg";
-import repeatOffIcon from "../../assets/svg/repeat-off.svg";
 
 import AlertPills from "../Utils/AlertPills";
-
-/* ===== Locale RO ===== */
-registerLocale("ro", ro);
 
 /* helpers */
 const clean = (o = {}) =>
@@ -77,7 +69,8 @@ function extractServerErrors(err) {
       .filter(Boolean);
 }
 
-/* === BLACKOUTS (fără DST) === */
+/* === BLACKOUTS (simplificat – doar REPEAT săptămânal) === */
+
 const oreDisponibile = [
    { eticheta: "07:00", oraStart: "07:00" },
    { eticheta: "08:30", oraStart: "08:30" },
@@ -89,33 +82,23 @@ const oreDisponibile = [
    { eticheta: "18:00", oraStart: "18:00" },
 ];
 
-/* Date utils (pentru <input type="date"> și obiecte Date) */
 const pad2 = (n) => String(n).padStart(2, "0");
+
 function todayAt00() {
    const t = new Date();
    t.setHours(0, 0, 0, 0);
    return t;
 }
-function todayYmd() {
-   const t = new Date();
-   return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
-}
-function dateFromYmd(ymd) {
-   const [y, m, d] = String(ymd || "")
-      .split("-")
-      .map(Number);
-   const x = new Date();
-   x.setFullYear(y || 1970, (m || 1) - 1, d || 1);
-   x.setHours(0, 0, 0, 0);
-   return x;
-}
-function addDaysYmd(ymd, n) {
-   const x = dateFromYmd(ymd);
-   x.setDate(x.getDate() + (n || 0));
-   return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+
+/** yyyy-MM-dd pentru input[type="date"] */
+function toDateInputValue(d) {
+   const y = d.getFullYear();
+   const m = pad2(d.getMonth() + 1);
+   const day = pad2(d.getDate());
+   return `${y}-${m}-${day}`;
 }
 
-/** Construiește ISO UTC “raw” (zi selectată + HH:mm) */
+/** Construiește ISO UTC “raw” (zi locală + HH:mm) */
 function toIsoUtcRaw(localDateObj, timeStrHHMM) {
    const [hh, mm] = (timeStrHHMM || "00:00").split(":").map(Number);
    return new Date(
@@ -130,35 +113,71 @@ function toIsoUtcRaw(localDateObj, timeStrHHMM) {
       )
    ).toISOString();
 }
-const toIsoUtcRawFromYmd = (ymd, hhmm) => toIsoUtcRaw(dateFromYmd(ymd), hhmm);
 
-/** Cheie “server raw” dintr-un ISO: YYYY-MM-DD|HH:mm (UTC) */
-function serverKeyFromIso(iso) {
+/** HH:mm dintr-un ISO UTC */
+const hhmmFromIso = (iso) => {
    const d = new Date(iso);
-   const y = d.getUTCFullYear();
-   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-   const da = String(d.getUTCDate()).padStart(2, "0");
-   const H = String(d.getUTCHours()).padStart(2, "0");
-   const M = String(d.getUTCMinutes()).padStart(2, "0");
-   return `${y}-${m}-${da}|${H}:${M}`;
-}
-const ymdFromIso = (iso) => serverKeyFromIso(iso).split("|")[0];
-const hhmmFromIso = (iso) => serverKeyFromIso(iso).split("|")[1];
-const ymdFromLocalDate = (d) =>
-   `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+   const H = pad2(d.getUTCHours());
+   const M = pad2(d.getUTCMinutes());
+   return `${H}:${M}`;
+};
 
+/** DOW (0..6) pe baza unei date locale (folosit pentru calcul serie săptămânală) */
 const serverDowFromLocalDate = (localDateObj) => {
    const y = localDateObj.getFullYear();
    const m = localDateObj.getMonth();
    const d = localDateObj.getDate();
    return new Date(Date.UTC(y, m, d)).getUTCDay(); // 0..6
 };
-const dowFromIsoUTC = (iso) => new Date(iso).getUTCDay(); // 0..6
 
-const dateYmdWithinRange = (dateYmd, startIso, endIso) => {
-   const s = ymdFromIso(startIso);
-   const e = ymdFromIso(endIso);
-   return dateYmd >= s && dateYmd <= e;
+/** DOW (0..6) din ISO UTC */
+const dowFromIsoUTC = (iso) => new Date(iso).getUTCDay();
+
+/** Folosim startDateTime pentru REPEAT, altfel dateTime */
+const getBlackoutDT = (b) => {
+   if (typeof b === "string") return b;
+   const t = String(b?.type || "").toUpperCase();
+   if (t === "REPEAT") return b?.startDateTime || b?.dateTime;
+   return b?.dateTime;
+};
+
+const weekdayShortLabel = (dow) => {
+   switch (dow) {
+      case 1:
+         return "Lun";
+      case 2:
+         return "Mar";
+      case 3:
+         return "Mie";
+      case 4:
+         return "Joi";
+      case 5:
+         return "Vin";
+      case 6:
+         return "Sâm";
+      case 0:
+      default:
+         return "Dum";
+   }
+};
+
+/** doar data, fără oră */
+function formatLocalDate(iso) {
+   if (!iso) return "-";
+   try {
+      return new Intl.DateTimeFormat("ro-RO", {
+         dateStyle: "short",
+         timeZone: "Europe/Chisinau",
+      }).format(new Date(iso));
+   } catch {
+      return iso;
+   }
+}
+
+const initWeeklySelection = () => {
+   const m = new Map();
+   for (const d of [0, 1, 2, 3, 4, 5, 6]) m.set(d, new Set());
+   return m;
 };
 
 /* ===== Highlight ===== */
@@ -176,18 +195,6 @@ function highlightText(text, query) {
       )
    );
 }
-
-// ---- DEBUG
-const summarizeBlackoutItems = (items = []) =>
-   items.map((it, idx) => ({
-      idx,
-      instructorId: it.instructorId,
-      type: it.type,
-      dateTime: it.dateTime || null,
-      startDateTime: it.startDateTime || null,
-      endDateTime: it.endDateTime || null,
-      repeatEveryDays: it.repeatEveryDays ?? null,
-   }));
 
 function AddInstr() {
    const dispatch = useDispatch();
@@ -242,6 +249,14 @@ function AddInstr() {
       carPlate: "",
       gearbox: "manual",
    });
+
+   const [editPills, setEditPills] = useState([]);
+   const pushEditPill = (text, type = "error") =>
+      setEditPills((prev) => [
+         ...prev,
+         { id: Date.now() + Math.random(), text, type },
+      ]);
+   const popEditPill = () => setEditPills((prev) => prev.slice(0, -1));
 
    const getUserByIdFromStore = (id) =>
       users.find((u) => String(u.id) === String(id)) || null;
@@ -454,170 +469,59 @@ function AddInstr() {
       }
    };
 
-   /* === ORAR === */
+   /* === ORAR (BLACKOUTS – doar REPEAT săptămânal, în perioada selectată) === */
    const [blkLoading, setBlkLoading] = useState(false);
+   const [blkExisting, setBlkExisting] = useState([]); // lista raw de la server
 
-   // SINGLE: obiect Date pentru react-datepicker
-   const [blkDate, setBlkDate] = useState(todayAt00());
-   const [blkSelectedSet, setBlkSelectedSet] = useState(() => new Set()); // HH:mm
-   const [blkRemoveIds, setBlkRemoveIds] = useState(() => new Set()); // id-uri pt. delete
+   // selecție pentru NOILE serii săptămânale
+   const [weeklyDay, setWeeklyDay] = useState(1); // 1 = Luni
+   const [weeklySelection, setWeeklySelection] = useState(() =>
+      initWeeklySelection()
+   );
 
-   // fetched
-   const [blkExisting, setBlkExisting] = useState([]); // raw
-
-   // MODE & REPEAT
-   const [blkViewMode, setBlkViewMode] = useState("single"); // 'single' | 'repeat'
-   const [repeatPattern, setRepeatPattern] = useState("daily"); // 'daily' | 'weekly'
-
-   // REPEAT: interval comun cu 2 input-uri native (YMD strings)
-   const [repeatStart, setRepeatStart] = useState(todayYmd());
-   const [repeatEnd, setRepeatEnd] = useState(addDaysYmd(todayYmd(), 30));
-
-   // WEEKLY editor: zi selectată (1=Luni ... 6=Sâmbătă, 0=Duminică)
-   const [weeklyDay, setWeeklyDay] = useState(1);
-
-   // Selectări pentru creare regim nou
-   const [selTimesDaily, setSelTimesDaily] = useState(() => new Set());
-   const [selTimesWeekly, setSelTimesWeekly] = useState(() => {
-      const m = new Map();
-      for (const d of [0, 1, 2, 3, 4, 5, 6]) m.set(d, new Set());
-      return m;
+   // perioada selectată (inputurile pentru perioadă)
+   const [periodStart, setPeriodStart] = useState(() => {
+      const t = todayAt00();
+      return toDateInputValue(t);
+   });
+   const [periodEnd, setPeriodEnd] = useState(() => {
+      const t = todayAt00();
+      const e = new Date(t);
+      e.setMonth(e.getMonth() + 1);
+      return toDateInputValue(e);
    });
 
-   const [editPills, setEditPills] = useState([]);
-   const pushEditPill = (text, type = "error") =>
-      setEditPills((prev) => [
-         ...prev,
-         { id: Date.now() + Math.random(), text, type },
-      ]);
-   const popEditPill = () => setEditPills((prev) => prev.slice(0, -1));
+   // id-uri de blackout marcate pentru ștergere
+   const [blkRemoveIds, setBlkRemoveIds] = useState(() => new Set());
 
-   /* Preferă startDateTime pentru REPEAT; dateTime rămâne pentru SINGLE. */
-   const getBlackoutDT = (b) => {
-      if (typeof b === "string") return b;
-      const t = String(b?.type || "").toUpperCase();
-      if (t === "REPEAT") return b?.startDateTime || b?.dateTime;
-      return b?.dateTime;
-   };
+   // afișare/ascundere listă cu toate blocările
+   const [showBlackoutList, setShowBlackoutList] = useState(false);
 
-   function expandRepeatKeys(b) {
-      const out = [];
-      const type = String(b?.type || "").toUpperCase();
-      if (type !== "REPEAT") return out;
-      const every = Math.max(1, Number(b?.repeatEveryDays || 1));
-      const first = b?.startDateTime || b?.dateTime;
-      const end = b?.endDateTime;
-      if (!first || !end) return out;
-
-      let cur = new Date(first).getTime();
-      const endMs = new Date(end).getTime();
-      const step = every * 24 * 60 * 60 * 1000;
-
-      while (cur <= endMs) {
-         out.push(serverKeyFromIso(new Date(cur).toISOString()));
-         cur += step;
-      }
-      return out;
-   }
-
-   // === REPEAT care rămân active după acest save (existente neșterse + cele noi)
-   const computeRepeatKeysAfterSave = (newItems = []) => {
-      const keys = new Set();
-
-      // repeat-uri existente care NU sunt marcate pentru ștergere
-      for (const b of blkExisting || []) {
-         if (String(b?.type || "").toUpperCase() !== "REPEAT") continue;
-         if (blkRemoveIds.has(b.id)) continue;
-         for (const k of expandRepeatKeys(b)) keys.add(k);
-      }
-
-      // repeat-uri noi ce urmează a fi create
-      for (const it of newItems) {
-         if (String(it?.type || "").toUpperCase() !== "REPEAT") continue;
-         for (const k of expandRepeatKeys(it)) keys.add(k);
-      }
-
-      return keys; // "YYYY-MM-DD|HH:mm"
-   };
-
-   // === SINGLE-uri existente care se suprapun cu repeat keys -> de șters
-   const singlesOverlappedByRepeat = (repeatKeysSet) => {
-      const ids = [];
-      for (const b of blkExisting || []) {
-         if (String(b?.type || "").toUpperCase() !== "SINGLE") continue;
-         const dt = getBlackoutDT(b);
-         if (!dt) continue;
-         const key = serverKeyFromIso(dt);
-         if (repeatKeysSet.has(key)) ids.push(b.id);
-      }
-      return ids;
-   };
-
-   const blkSetSingle = useMemo(() => {
-      const s = new Set();
-      for (const b of blkExisting || []) {
-         if (String(b?.type || "").toUpperCase() === "SINGLE") {
-            const dt = getBlackoutDT(b);
-            if (dt) s.add(serverKeyFromIso(dt));
-         }
-      }
-      return s;
-   }, [blkExisting]);
-
-   const blkMapSingle = useMemo(() => {
-      const m = new Map();
-      for (const b of blkExisting || []) {
-         if (String(b?.type || "").toUpperCase() === "SINGLE") {
-            const dt = getBlackoutDT(b);
-            if (dt) m.set(serverKeyFromIso(dt), b);
-         }
-      }
-      return m;
-   }, [blkExisting]);
-
-   const blkSetRepeatExpanded = useMemo(() => {
-      const s = new Set();
-      for (const b of blkExisting || []) {
-         if (String(b?.type || "").toUpperCase() !== "REPEAT") continue;
-         for (const k of expandRepeatKeys(b)) s.add(k);
-      }
-      return s;
-   }, [blkExisting]);
-
-   const dailyActiveMap = useMemo(() => {
-      const map = new Map(); // HH:mm -> Set(ids)
-      for (const b of blkExisting || []) {
-         if (String(b?.type || "").toUpperCase() !== "REPEAT") continue;
-         if (Number(b.repeatEveryDays) !== 1) continue;
-         const key = serverKeyFromIso(b.startDateTime || b.dateTime);
-         const hhmm = key.split("|")[1];
-         if (!map.has(hhmm)) map.set(hhmm, new Set());
-         map.get(hhmm).add(b.id);
-      }
-      return map;
-   }, [blkExisting]);
-
+   /** Harta seriilor REPEAT săptămânale existente: dow -> (hhmm -> Set(ids)) */
    const weeklyActiveMap = useMemo(() => {
-      const m = new Map(); // dow -> (hhmm -> Set(ids))
+      const m = new Map();
       for (const d of [0, 1, 2, 3, 4, 5, 6]) m.set(d, new Map());
+
       for (const b of blkExisting || []) {
          if (String(b?.type || "").toUpperCase() !== "REPEAT") continue;
          if (Number(b.repeatEveryDays) !== 7) continue;
-         const key = serverKeyFromIso(b.startDateTime || b.dateTime);
-         const hhmm = key.split("|")[1];
-         const dow = dowFromIsoUTC(b.startDateTime || b.dateTime);
-         if (!m.get(dow).has(hhmm)) m.get(dow).set(hhmm, new Set());
-         m.get(dow).get(hhmm).add(b.id);
+
+         const baseIso = getBlackoutDT(b);
+         if (!baseIso) continue;
+
+         const dow = dowFromIsoUTC(baseIso); // 0..6
+         const hhmm = hhmmFromIso(baseIso);
+
+         const mapForDay = m.get(dow) || new Map();
+         if (!mapForDay.has(hhmm)) mapForDay.set(hhmm, new Set());
+         mapForDay.get(hhmm).add(b.id);
+         m.set(dow, mapForDay);
       }
+
       return m;
    }, [blkExisting]);
 
-   const hasDailyRepeatActiveAt = (hhmm) => {
-      const ids = dailyActiveMap.get(hhmm) || new Set();
-      for (const id of ids) if (!blkRemoveIds.has(id)) return true;
-      return false;
-   };
-
+   /** există serie activă (ne-marcata pentru ștergere) pe DOW + HH:mm ? */
    const hasWeeklyRepeatActiveAt = (dow, hhmm) => {
       const mapForDay = weeklyActiveMap.get(dow) || new Map();
       const ids = mapForDay.get(hhmm) || new Set();
@@ -625,6 +529,44 @@ function AddInstr() {
       return false;
    };
 
+   /** toggle pe un slot de oră într-o anumită zi a săptămânii */
+   const toggleWeeklySlot = (dow, hhmm) => {
+      const mapForDay = weeklyActiveMap.get(dow) || new Map();
+      const activeIds = new Set(mapForDay.get(hhmm) || []);
+
+      if (activeIds.size > 0) {
+         // există serii → marchează / demarchează pentru ștergere
+         setBlkRemoveIds((prev) => {
+            const next = new Set(prev);
+            const allAlreadyMarked = [...activeIds].every((id) => next.has(id));
+            if (allAlreadyMarked) {
+               activeIds.forEach((id) => next.delete(id));
+            } else {
+               activeIds.forEach((id) => next.add(id));
+            }
+            return next;
+         });
+      } else {
+         // nu există serie → toggle pentru CREARE (în intervalul selectat)
+         setWeeklySelection((prev) => {
+            const next = new Map(prev);
+            const setForDay = new Set(next.get(dow) || []);
+            if (setForDay.has(hhmm)) setForDay.delete(hhmm);
+            else setForDay.add(hhmm);
+            next.set(dow, setForDay);
+            return next;
+         });
+      }
+   };
+
+   const hasWeeklySelection = useMemo(() => {
+      for (const setForDay of weeklySelection.values()) {
+         if (setForDay.size > 0) return true;
+      }
+      return false;
+   }, [weeklySelection]);
+
+   // încărcăm blackouts pentru instructor când intrăm în modul "schedule"
    useEffect(() => {
       if (!editingId || editingMode !== "schedule") return;
       (async () => {
@@ -641,277 +583,152 @@ function AddInstr() {
       })();
    }, [editingId, editingMode]); // eslint-disable-line
 
-   const onToggleViewMode = () => {
-      setBlkViewMode((m) => (m === "single" ? "repeat" : "single"));
-      setBlkSelectedSet(new Set());
-      setBlkRemoveIds(new Set());
-      setSelTimesDaily(new Set());
-      const m = new Map();
-      for (const d of [0, 1, 2, 3, 4, 5, 6]) m.set(d, new Set());
-      setSelTimesWeekly(m);
-   };
-
-   // toggle pentru grila unei zile — doar SINGLE aici (REPEAT nu se editează în modul single)
-   const toggleSingleGrid = (hhmm) => {
-      if (!blkDate) return;
-
-      const isoRaw = toIsoUtcRaw(blkDate, hhmm);
-      const key = serverKeyFromIso(isoRaw);
-
-      const isBlockedSingle = blkSetSingle.has(key);
-      const isBlockedRepeat = blkSetRepeatExpanded.has(key);
-
-      // REPEAT vizibil doar în modul "repeat" => aici ignorăm total
-      if (isBlockedRepeat) return;
-
-      if (isBlockedSingle) {
-         const id = blkMapSingle.get(key)?.id;
-         if (!id) return;
-         setBlkRemoveIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-         });
-      } else {
-         setBlkSelectedSet((prev) => {
-            const next = new Set(prev);
-            if (next.has(hhmm)) next.delete(hhmm);
-            else next.add(hhmm);
-            return next;
-         });
-      }
-   };
-
-   const selectAllTimesForDay = () => {
-      if (!blkDate) return;
-      const next = new Set();
-      for (const ora of oreDisponibile) {
-         const isoRaw = toIsoUtcRaw(blkDate, ora.oraStart);
-         const key = serverKeyFromIso(isoRaw);
-         // nu selectăm sloturile acoperite de REPEAT (vizibile doar în modul repeat)
-         if (!blkSetSingle.has(key) && !blkSetRepeatExpanded.has(key)) {
-            next.add(ora.oraStart);
-         }
-      }
-      setBlkSelectedSet(next);
-   };
-
-   const clearSelection = () => {
-      setBlkSelectedSet(new Set());
-      setBlkRemoveIds(new Set());
-      setSelTimesDaily(new Set());
-      const m = new Map();
-      for (const d of [0, 1, 2, 3, 4, 5, 6]) m.set(d, new Set());
-      setSelTimesWeekly(m);
-   };
-
-   const toggleRepeatDeleteBySlot = ({ pattern, dow, hhmm }) => {
-      let ids = [];
-      if (pattern === "daily") {
-         ids = Array.from(dailyActiveMap.get(hhmm) || []);
-      } else if (pattern === "weekly") {
-         const mapForDay = weeklyActiveMap.get(dow) || new Map();
-         ids = Array.from(mapForDay.get(hhmm) || []);
-      }
-      if (ids.length === 0) return;
-
-      setBlkRemoveIds((prev) => {
-         const next = new Set(prev);
-         const allIn = ids.every((id) => next.has(id));
-         if (allIn) ids.forEach((id) => next.delete(id));
-         else ids.forEach((id) => next.add(id));
-         return next;
-      });
-   };
-
-   // === Build payload (ISO “raw”) ===
-   const buildSelectedBlackoutsItems = () => {
+   /** construiește payload-ul pentru serii noi (REPEAT weekly, în perioada selectată) */
+   const buildWeeklyBlackoutsItems = () => {
       if (!editingId) return [];
       const items = [];
+      const seen = new Set();
 
-      // 1) SINGLE — creați noi (doar selecțiile din modul single)
-      if (blkViewMode === "single" && blkDate && blkSelectedSet.size > 0) {
-         const ymd = ymdFromLocalDate(blkDate);
-         for (const hhmm of blkSelectedSet) {
-            const isoRaw = toIsoUtcRaw(blkDate, hhmm);
-            const key = `${ymd}|${hhmm}`;
-            if (blkSetSingle.has(key) || blkSetRepeatExpanded.has(key))
-               continue;
+      // dacă nu setezi manual perioada, default azi + 1 lună
+      let start0;
+      let end0;
+
+      if (periodStart) {
+         start0 = new Date(`${periodStart}T00:00:00`);
+      } else {
+         start0 = todayAt00();
+      }
+
+      if (periodEnd) {
+         end0 = new Date(`${periodEnd}T00:00:00`);
+      } else {
+         end0 = new Date(start0);
+         end0.setMonth(end0.getMonth() + 1);
+      }
+
+      // dacă cineva a pus end < start, le inversăm ca să nu crape
+      if (end0 < start0) {
+         const tmp = start0;
+         start0 = end0;
+         end0 = tmp;
+      }
+
+      const firstDowOnOrAfter = (startDate, targetDow) => {
+         const d = new Date(startDate);
+         d.setHours(0, 0, 0, 0);
+         const curDow = serverDowFromLocalDate(d); // 0..6
+         const diff = (targetDow - curDow + 7) % 7;
+         d.setDate(d.getDate() + diff);
+         return d;
+      };
+
+      const lastDowOnOrBefore = (endDate, targetDow) => {
+         const d = new Date(endDate);
+         d.setHours(0, 0, 0, 0);
+         const curDow = serverDowFromLocalDate(d);
+         const diff = (curDow - targetDow + 7) % 7;
+         d.setDate(d.getDate() - diff);
+         return d;
+      };
+
+      for (const dow of [0, 1, 2, 3, 4, 5, 6]) {
+         const setForDay = weeklySelection.get(dow) || new Set();
+         for (const hhmm of setForDay) {
+            // dacă există deja serie activă (ne-marcata delete), nu mai creăm
+            if (hasWeeklyRepeatActiveAt(dow, hhmm)) continue;
+
+            const first = firstDowOnOrAfter(start0, dow);
+            const last = lastDowOnOrBefore(end0, dow);
+            if (first > last) continue;
+
+            const firstRaw = toIsoUtcRaw(first, hhmm);
+            const lastRaw = toIsoUtcRaw(last, hhmm);
+
+            const dkey = `${dow}|${hhmm}|${firstRaw}`;
+            if (seen.has(dkey)) continue;
+            seen.add(dkey);
 
             items.push({
                instructorId: Number(editingId),
-               type: "SINGLE",
-               dateTime: isoRaw,
+               type: "REPEAT",
+               dateTime: firstRaw,
+               startDateTime: firstRaw,
+               endDateTime: lastRaw,
+               repeatEveryDays: 7,
             });
-         }
-      }
-
-      // 2) REPEAT (interval comun) — doar în modul repeat
-      if (blkViewMode === "repeat") {
-         const start0 = dateFromYmd(repeatStart || todayYmd());
-         const end0 = dateFromYmd(repeatEnd || addDaysYmd(todayYmd(), 30));
-
-         if (start0 <= end0) {
-            // 2a) DAILY
-            for (const hhmm of selTimesDaily) {
-               if (hasDailyRepeatActiveAt(hhmm)) continue;
-
-               const firstRaw = toIsoUtcRaw(start0, hhmm);
-               const lastRaw = toIsoUtcRaw(end0, hhmm);
-
-               items.push({
-                  instructorId: Number(editingId),
-                  type: "REPEAT",
-                  dateTime: firstRaw,
-                  startDateTime: firstRaw,
-                  endDateTime: lastRaw,
-                  repeatEveryDays: 1,
-               });
-            }
-
-            // 2b) WEEKLY (NU permitem crearea pe sloturi acoperite de DAILY)
-            for (const dow of [0, 1, 2, 3, 4, 5, 6]) {
-               const setForDay = selTimesWeekly.get(dow) || new Set();
-               for (const hhmm of setForDay) {
-                  if (hasWeeklyRepeatActiveAt(dow, hhmm)) continue;
-                  if (hasDailyRepeatActiveAt(hhmm)) continue; // <— blocat de regim Zilnic
-
-                  const first = (function firstDowOnOrAfter(
-                     startDate,
-                     targetDow
-                  ) {
-                     const d = new Date(startDate);
-                     d.setHours(0, 0, 0, 0);
-                     const curDow = serverDowFromLocalDate(d);
-                     const diff = (targetDow - curDow + 7) % 7;
-                     d.setDate(d.getDate() + diff);
-                     return d;
-                  })(start0, dow);
-
-                  const last = (function lastDowOnOrBefore(endDate, targetDow) {
-                     const dd = new Date(endDate);
-                     dd.setHours(0, 0, 0, 0);
-                     const curDow = serverDowFromLocalDate(dd);
-                     const diff = (curDow - targetDow + 7) % 7;
-                     dd.setDate(dd.getDate() - diff);
-                     return dd;
-                  })(end0, dow);
-
-                  if (first > last) continue;
-
-                  const firstRaw = toIsoUtcRaw(first, hhmm);
-                  const lastRaw = toIsoUtcRaw(last, hhmm);
-
-                  items.push({
-                     instructorId: Number(editingId),
-                     type: "REPEAT",
-                     dateTime: firstRaw,
-                     startDateTime: firstRaw,
-                     endDateTime: lastRaw,
-                     repeatEveryDays: 7,
-                  });
-               }
-            }
          }
       }
 
       return items;
    };
 
-   /* === Detectare automată pe ziua curentă (Single) === */
-   const inferDeactivatedExistingIdsForDay = () => {
-      if (!blkDate) return [];
-      const dateYmd = ymdFromLocalDate(blkDate);
+   const handleSaveSchedule = async () => {
+      setSaving(true);
+      setEditPills([]);
 
-      const existingToday = [];
+      try {
+         const blackoutItems = buildWeeklyBlackoutsItems();
+         const idsToDelete = Array.from(blkRemoveIds || []);
 
-      for (const b of blkExisting || []) {
-         const type = String(b?.type || "").toUpperCase();
-
-         if (type === "SINGLE") {
-            const iso = getBlackoutDT(b);
-            if (!iso) continue;
-            const key = serverKeyFromIso(iso);
-            if (key.split("|")[0] === dateYmd) {
-               existingToday.push({
-                  id: b.id,
-                  kind: "SINGLE",
-                  key,
-                  hhmm: key.split("|")[1],
-               });
-            }
-         } else if (type === "REPEAT") {
-            const startIso = b.startDateTime || b.dateTime;
-            const endIso = b.endDateTime || b.dateTime;
-            if (!startIso || !endIso) continue;
-
-            const hhmm = hhmmFromIso(startIso);
-            const inRange = dateYmdWithinRange(dateYmd, startIso, endIso);
-            if (!inRange) continue;
-
-            if (Number(b.repeatEveryDays) === 1) {
-               existingToday.push({
-                  id: b.id,
-                  kind: "REPEAT",
-                  key: `${dateYmd}|${hhmm}`,
-                  hhmm,
-               });
-            } else if (Number(b.repeatEveryDays) === 7) {
-               const seriesDow = dowFromIsoUTC(startIso);
-               const dayDow = serverDowFromLocalDate(blkDate);
-               if (seriesDow === dayDow) {
-                  existingToday.push({
-                     id: b.id,
-                     kind: "REPEAT",
-                     key: `${dateYmd}|${hhmm}`,
-                     hhmm,
-                  });
-               }
-            }
+         if (idsToDelete.length === 0 && blackoutItems.length === 0) {
+            setEditPills([
+               {
+                  id: Date.now(),
+                  text: "Nu ai selectat nimic de salvat.",
+                  type: "error",
+               },
+            ]);
+            setSaving(false);
+            return;
          }
-      }
 
-      const afterActiveKeys = new Set();
+         // ștergeri (ignorăm 404)
+         if (idsToDelete.length > 0) {
+            await Promise.all(
+               idsToDelete.map((id) =>
+                  deleteInstructorBlackout(id).catch((e) => {
+                     const msg =
+                        e?.message ||
+                        e?.toString?.() ||
+                        JSON.stringify(e || {});
+                     if (/not\s*found/i.test(msg)) return null;
+                     throw e;
+                  })
+               )
+            );
+         }
 
-      for (const item of existingToday) {
-         if (!blkRemoveIds.has(item.id)) afterActiveKeys.add(item.key);
-      }
+         // serii noi
+         if (blackoutItems.length > 0) {
+            await addInstructorBlackouts(blackoutItems);
+         }
 
-      for (const hhmm of blkSelectedSet) {
-         afterActiveKeys.add(`${dateYmd}|${hhmm}`);
-      }
+         // refresh store + lista locală
+         await dispatch(fetchInstructors());
+         if (editingId) {
+            const list = await getInstructorBlackouts(editingId);
+            setBlkExisting(Array.isArray(list) ? list : []);
+         }
 
-      const inDailyRange =
-         repeatStart &&
-         repeatEnd &&
-         dateYmdWithinRange(
-            dateYmd,
-            toIsoUtcRawFromYmd(repeatStart, "00:00"),
-            toIsoUtcRawFromYmd(repeatEnd, "23:59")
+         // reset selecții
+         setWeeklySelection(initWeeklySelection());
+         setBlkRemoveIds(new Set());
+      } catch (e) {
+         const msgs = extractServerErrors(e);
+         setEditPills(
+            (msgs.length ? msgs : ["Eroare la salvarea orarului."]).map(
+               (t) => ({
+                  id: Date.now() + Math.random(),
+                  text: t,
+                  type: "error",
+               })
+            )
          );
-      if (inDailyRange) {
-         for (const hhmm of selTimesDaily) {
-            afterActiveKeys.add(`${dateYmd}|${hhmm}`);
-         }
+         setSaving(false);
+         return;
       }
 
-      if (inDailyRange) {
-         const dow = serverDowFromLocalDate(blkDate);
-         const setForDay = selTimesWeekly.get(dow) || new Set();
-         for (const hhmm of setForDay) {
-            afterActiveKeys.add(`${dateYmd}|${hhmm}`);
-         }
-      }
-
-      const toDelete = [];
-      for (const item of existingToday) {
-         if (!afterActiveKeys.has(item.key)) {
-            toDelete.push(item.id);
-         }
-      }
-
-      return Array.from(new Set(toDelete));
+      setSaving(false);
    };
 
    const handleSaveDetails = async () => {
@@ -979,93 +796,6 @@ function AddInstr() {
       setEditingUserId(null);
    };
 
-   const handleSaveSchedule = async () => {
-      setSaving(true);
-      setEditPills([]);
-
-      try {
-         // 1) Ștergeri implicite doar în modul SINGLE
-         const autoDeleteIds =
-            blkViewMode === "single" ? inferDeactivatedExistingIdsForDay() : [];
-         const blackoutItems = buildSelectedBlackoutsItems(); // SINGLE noi (în single) + REPEAT noi (în repeat)
-         const baseDeleteIds = new Set([
-            ...(blkRemoveIds || []),
-            ...autoDeleteIds,
-         ]);
-
-         // 2) REPEAT are prioritate: calculează REPEAT-urile active după acest save
-         const repeatKeysAfterSave = computeRepeatKeysAfterSave(blackoutItems);
-
-         // 3) SINGLE-uri existente suprapuse cu REPEAT -> șterge-le
-         const singlesToDelete = singlesOverlappedByRepeat(repeatKeysAfterSave);
-         for (const id of singlesToDelete) baseDeleteIds.add(id);
-
-         // 4) Nimic de salvat?
-         if (baseDeleteIds.size === 0 && blackoutItems.length === 0) {
-            setEditPills([
-               {
-                  id: Date.now(),
-                  text: "Nu ai selectat nimic de salvat.",
-                  type: "error",
-               },
-            ]);
-            setSaving(false);
-            return;
-         }
-
-         // 5) Aplică ștergerile (ignoră 404 'not found' în caz de dublu-click / re-try)
-         if (baseDeleteIds.size > 0) {
-            const idsToDelete = Array.from(baseDeleteIds);
-            await Promise.all(
-               idsToDelete.map((id) =>
-                  deleteInstructorBlackout(id).catch((e) => {
-                     const msg =
-                        e?.message ||
-                        e?.toString?.() ||
-                        JSON.stringify(e || {});
-                     if (/not\s*found/i.test(msg)) return null; // ignorăm 404
-                     throw e;
-                  })
-               )
-            );
-         }
-
-         // 6) Creează noile blackouts
-         if (blackoutItems.length > 0) {
-            await addInstructorBlackouts(blackoutItems);
-         }
-
-         // 7) Refresh + RESET selecții vizuale după save
-         await Promise.all([dispatch(fetchInstructors())]);
-         if (editingId) {
-            const list = await getInstructorBlackouts(editingId);
-            setBlkExisting(Array.isArray(list) ? list : []);
-         }
-         // reset vizual
-         setBlkSelectedSet(new Set());
-         setBlkRemoveIds(new Set());
-         setSelTimesDaily(new Set());
-         const m = new Map();
-         for (const d of [0, 1, 2, 3, 4, 5, 6]) m.set(d, new Set());
-         setSelTimesWeekly(m);
-      } catch (e) {
-         const msgs = extractServerErrors(e);
-         setEditPills(
-            (msgs.length ? msgs : ["Eroare la salvarea orarului."]).map(
-               (t) => ({
-                  id: Date.now() + Math.random(),
-                  text: t,
-                  type: "error",
-               })
-            )
-         );
-         setSaving(false);
-         return;
-      }
-
-      setSaving(false);
-   };
-
    const handleDelete = async (id) => {
       if (!window.confirm("Ești sigur că vrei să ștergi acest instructor?"))
          return;
@@ -1081,9 +811,19 @@ function AddInstr() {
       setEditingUserId(null);
    };
 
-   const handleMarkAllForDeletion = () => {
-      const allIds = (blkExisting || []).map((b) => b.id).filter(Boolean);
-      setBlkRemoveIds(new Set(allIds));
+   const resetBlackoutsUI = () => {
+      setBlkExisting([]);
+      setBlkRemoveIds(new Set());
+      setWeeklySelection(initWeeklySelection());
+      setWeeklyDay(1);
+      setEditPills([]);
+      setShowBlackoutList(false);
+
+      const t = todayAt00();
+      const e = new Date(t);
+      e.setMonth(e.getMonth() + 1);
+      setPeriodStart(toDateInputValue(t));
+      setPeriodEnd(toDateInputValue(e));
    };
 
    /* === UI === */
@@ -1386,389 +1126,138 @@ function AddInstr() {
                                                 onDismiss={popEditPill}
                                              />
 
-                                             {/* MODE TOGGLE Single/Repeat */}
-                                             <div
-                                                className="blackouts__modebar"
-                                                style={{
-                                                   display: "flex",
-                                                   alignItems: "center",
-                                                   gap: 6,
-                                                }}
-                                             >
-                                                <ReactSVG
-                                                   onClick={onToggleViewMode}
-                                                   className="instructors-popup__edit-button react-icon"
-                                                   src={
-                                                      blkViewMode === "repeat"
-                                                         ? repeatOnIcon
-                                                         : repeatOffIcon
-                                                   }
-                                                   title={
-                                                      blkViewMode === "repeat"
-                                                         ? "Repetitiv activ"
-                                                         : "Individual activ"
-                                                   }
-                                                   style={{
-                                                      marginRight: "auto",
-                                                   }}
-                                                />
+                                             {/* BAR SUS: descriere + buton listă blocări */}
+                                             <div className="blackouts__modebar">
+                                                <span className="blackouts__modebar-text">
+                                                   Blocare
+                                                </span>
 
-                                                {blkViewMode === "repeat" && (
-                                                   <>
-                                                      <button
-                                                         type="button"
-                                                         className={`instructors-popup__form-button instructors-popup__form-button--cancel ${
-                                                            repeatPattern ===
-                                                            "daily"
-                                                               ? "active"
-                                                               : ""
-                                                         }`}
-                                                         onClick={() =>
-                                                            setRepeatPattern(
-                                                               "daily"
-                                                            )
-                                                         }
-                                                         title="Regim zilnic"
-                                                      >
-                                                         Zilnic
-                                                      </button>
-                                                      <button
-                                                         type="button"
-                                                         className={`instructors-popup__form-button instructors-popup__form-button--cancel ${
-                                                            repeatPattern ===
-                                                            "weekly"
-                                                               ? "active"
-                                                               : ""
-                                                         }`}
-                                                         onClick={() =>
-                                                            setRepeatPattern(
-                                                               "weekly"
-                                                            )
-                                                         }
-                                                         title="Regim săptămânal"
-                                                      >
-                                                         Săptămânal
-                                                      </button>
-                                                   </>
-                                                )}
+                                                <button
+                                                   type="button"
+                                                   className="instructors-popup__form-button instructors-popup__form-button--cancel"
+                                                   onClick={() =>
+                                                      setShowBlackoutList(
+                                                         (v) => !v
+                                                      )
+                                                   }
+                                                >
+                                                   {showBlackoutList
+                                                      ? "Ascunde lista blocări"
+                                                      : "Listă blocări"}
+                                                </button>
                                              </div>
 
-                                             {blkViewMode === "single" ? (
-                                                <>
-                                                   {/* SINGLE: calendar + grilă ore */}
-                                                   <div
-                                                      className="blackouts__grid"
-                                                      style={{
-                                                         background:
-                                                            "var(--black-s)",
-                                                      }}
-                                                   >
-                                                      <div className="blackouts__calendar">
-                                                         <DatePicker
-                                                            selected={blkDate}
-                                                            onChange={(d) => {
-                                                               if (!d) return;
-                                                               d.setHours(
-                                                                  0,
-                                                                  0,
-                                                                  0,
-                                                                  0
-                                                               );
-                                                               setBlkDate(d);
-                                                               clearSelection();
-                                                            }}
-                                                            inline
-                                                            locale="ro"
-                                                            formatWeekDay={(
-                                                               name
-                                                            ) =>
-                                                               name
-                                                                  .substring(
-                                                                     0,
-                                                                     2
-                                                                  )
-                                                                  .replace(
-                                                                     /^./,
-                                                                     (c) =>
-                                                                        c.toUpperCase()
-                                                                  )
-                                                            }
-                                                            calendarClassName="aAddProg__datepicker"
-                                                         />
-                                                      </div>
-
-                                                      <div className="blackouts__times">
-                                                         {oreDisponibile.map(
-                                                            (ora) => {
-                                                               const isoRaw =
-                                                                  blkDate
-                                                                     ? toIsoUtcRaw(
-                                                                          blkDate,
-                                                                          ora.oraStart
+                                             {/* LISTĂ BLOCĂRI EXISTENTE */}
+                                             {showBlackoutList && (
+                                                <div className="blackouts__list">
+                                                   {blkLoading ? (
+                                                      <p>
+                                                         Se încarcă blocările...
+                                                      </p>
+                                                   ) : blkExisting.length ===
+                                                     0 ? (
+                                                      <p>
+                                                         Nu există blocări
+                                                         salvate pentru acest
+                                                         instructor.
+                                                      </p>
+                                                   ) : (
+                                                      <ul className="blackouts__list-items">
+                                                         {blkExisting.map(
+                                                            (b) => {
+                                                               const baseIso =
+                                                                  getBlackoutDT(
+                                                                     b
+                                                                  );
+                                                               const dow =
+                                                                  baseIso !=
+                                                                  null
+                                                                     ? dowFromIsoUTC(
+                                                                          baseIso
                                                                        )
                                                                      : null;
-                                                               const key =
-                                                                  isoRaw
-                                                                     ? serverKeyFromIso(
-                                                                          isoRaw
+                                                               const hhmm =
+                                                                  baseIso !=
+                                                                  null
+                                                                     ? hhmmFromIso(
+                                                                          baseIso
                                                                        )
                                                                      : null;
 
-                                                               const isBlockedSingle =
-                                                                  key
-                                                                     ? blkSetSingle.has(
-                                                                          key
-                                                                       )
-                                                                     : false;
-                                                               const isBlockedRepeat =
-                                                                  key
-                                                                     ? blkSetRepeatExpanded.has(
-                                                                          key
-                                                                       )
-                                                                     : false;
-
-                                                               // SINGLE: stare de ștergere
-                                                               const remId =
-                                                                  isBlockedSingle &&
-                                                                  key
-                                                                     ? blkMapSingle.get(
-                                                                          key
-                                                                       )?.id
-                                                                     : null;
-                                                               const isRemovedSingle =
-                                                                  isBlockedSingle &&
-                                                                  remId
-                                                                     ? blkRemoveIds.has(
-                                                                          remId
-                                                                       )
-                                                                     : false;
-                                                               const willStayBlockedSingle =
-                                                                  isBlockedSingle &&
-                                                                  !isRemovedSingle;
-
-                                                               const isSelectedAdd =
-                                                                  blkSelectedSet.has(
-                                                                     ora.oraStart
+                                                               const startLbl =
+                                                                  formatLocalDate(
+                                                                     b.startDateTime ||
+                                                                        b.dateTime
+                                                                  );
+                                                               const endLbl =
+                                                                  formatLocalDate(
+                                                                     b.endDateTime
                                                                   );
 
-                                                               // în modul single nu arătăm REPEAT ca "selectat"
-                                                               const isSelected =
-                                                                  willStayBlockedSingle ||
-                                                                  (!isRemovedSingle &&
-                                                                     isSelectedAdd);
+                                                               const isWeekly =
+                                                                  String(
+                                                                     b?.type ||
+                                                                        ""
+                                                                  ).toUpperCase() ===
+                                                                     "REPEAT" &&
+                                                                  Number(
+                                                                     b.repeatEveryDays
+                                                                  ) === 7;
 
-                                                               const disabled =
-                                                                  !blkDate ||
-                                                                  blkLoading ||
-                                                                  isBlockedRepeat; // repeat editabil doar în modul repeat
-                                                               const title =
-                                                                  isBlockedRepeat
-                                                                     ? "Slot acoperit de regim repetitiv. Editează în modul Repetitiv."
-                                                                     : "Click pentru a alterna";
+                                                               const isMarked =
+                                                                  blkRemoveIds.has(
+                                                                     b.id
+                                                                  );
 
                                                                return (
-                                                                  <button
-                                                                     key={
-                                                                        ora.eticheta
-                                                                     }
-                                                                     onClick={() =>
-                                                                        !disabled &&
-                                                                        toggleSingleGrid(
-                                                                           ora.oraStart
-                                                                        )
-                                                                     }
-                                                                     disabled={
-                                                                        disabled
-                                                                     }
-                                                                     className={[
-                                                                        "saddprogramari__time-btn",
-                                                                        isSelected
-                                                                           ? "saddprogramari__time-btn--selected"
-                                                                           : "",
-                                                                        isBlockedSingle &&
-                                                                        isRemovedSingle
-                                                                           ? "saddprogramari__time-btn--to-delete"
-                                                                           : "",
-                                                                        disabled
-                                                                           ? "saddprogramari__time-btn--disabled"
-                                                                           : "",
-                                                                     ]
-                                                                        .filter(
-                                                                           Boolean
-                                                                        )
-                                                                        .join(
-                                                                           " "
-                                                                        )}
-                                                                     title={
-                                                                        title
+                                                                  <li
+                                                                     key={b.id}
+                                                                     className={
+                                                                        "blackouts__list-item" +
+                                                                        (isMarked
+                                                                           ? " blackouts__list-item--marked"
+                                                                           : "")
                                                                      }
                                                                   >
-                                                                     {
-                                                                        ora.eticheta
-                                                                     }
-                                                                  </button>
-                                                               );
-                                                            }
-                                                         )}
-                                                      </div>
-                                                   </div>
-
-                                                   <div className="blackouts__actions">
-                                                      <button
-                                                         type="button"
-                                                         className="instructors-popup__form-button"
-                                                         onClick={
-                                                            selectAllTimesForDay
-                                                         }
-                                                         disabled={
-                                                            !blkDate ||
-                                                            blkLoading
-                                                         }
-                                                      >
-                                                         Selectează toate
-                                                      </button>
-                                                      <button
-                                                         type="button"
-                                                         className="instructors-popup__form-button"
-                                                         onClick={
-                                                            clearSelection
-                                                         }
-                                                         disabled={
-                                                            (blkSelectedSet.size ===
-                                                               0 &&
-                                                               blkRemoveIds.size ===
-                                                                  0) ||
-                                                            blkLoading
-                                                         }
-                                                      >
-                                                         Golește
-                                                      </button>
-                                                   </div>
-                                                </>
-                                             ) : (
-                                                <>
-                                                   {/* === REPETITIV: 2 input-uri native (Start/End) === */}
-                                                   <div className="blackouts__row">
-                                                      <input
-                                                         type="date"
-                                                         className="instructors-popup__input"
-                                                         value={repeatStart}
-                                                         min={todayYmd()}
-                                                         onChange={(e) => {
-                                                            const val =
-                                                               e.target.value;
-                                                            if (!val) return;
-                                                            setRepeatStart(val);
-                                                            if (
-                                                               repeatEnd &&
-                                                               val > repeatEnd
-                                                            ) {
-                                                               setRepeatEnd(
-                                                                  val
-                                                               );
-                                                            }
-                                                         }}
-                                                         placeholder="Start"
-                                                      />
-                                                      <span>→</span>
-                                                      <input
-                                                         type="date"
-                                                         className="instructors-popup__input"
-                                                         value={repeatEnd}
-                                                         min={
-                                                            repeatStart ||
-                                                            todayYmd()
-                                                         }
-                                                         onChange={(e) => {
-                                                            const val =
-                                                               e.target.value;
-                                                            if (!val) return;
-                                                            setRepeatEnd(val);
-                                                         }}
-                                                         placeholder="End"
-                                                      />
-                                                   </div>
-
-                                                   {/* ZILNIC */}
-                                                   {repeatPattern ===
-                                                      "daily" && (
-                                                      <div className="blackouts__times repeat">
-                                                         {oreDisponibile.map(
-                                                            (ora) => {
-                                                               const activeSet =
-                                                                  dailyActiveMap.get(
-                                                                     ora.oraStart
-                                                                  ) ||
-                                                                  new Set();
-                                                               const isActive =
-                                                                  activeSet.size >
-                                                                  0;
-                                                               const allMarked =
-                                                                  isActive &&
-                                                                  [
-                                                                     ...activeSet,
-                                                                  ].every(
-                                                                     (id) =>
-                                                                        blkRemoveIds.has(
-                                                                           id
-                                                                        )
-                                                                  );
-
-                                                               const selectableForCreate =
-                                                                  !hasDailyRepeatActiveAt(
-                                                                     ora.oraStart
-                                                                  );
-                                                               const selectedForCreate =
-                                                                  selTimesDaily.has(
-                                                                     ora.oraStart
-                                                                  );
-
-                                                               return (
-                                                                  <button
-                                                                     key={
-                                                                        ora.eticheta
-                                                                     }
-                                                                     className={[
-                                                                        "saddprogramari__time-btn",
-                                                                        // activ existent și NU e marcat pentru ștergere
-                                                                        isActive &&
-                                                                        !allMarked
-                                                                           ? "saddprogramari__time-btn--selected"
-                                                                           : "",
-                                                                        // activ existent și e marcat pentru ștergere
-                                                                        isActive &&
-                                                                        allMarked
-                                                                           ? "saddprogramari__time-btn--to-delete"
-                                                                           : "",
-                                                                        // creare nouă (când nu există deja)
-                                                                        !isActive &&
-                                                                        selectedForCreate
-                                                                           ? "saddprogramari__time-btn--selected"
-                                                                           : "",
-                                                                     ]
-                                                                        .filter(
-                                                                           Boolean
-                                                                        )
-                                                                        .join(
-                                                                           " "
-                                                                        )}
-                                                                     onClick={() => {
-                                                                        if (
-                                                                           isActive
-                                                                        ) {
-                                                                           toggleRepeatDeleteBySlot(
-                                                                              {
-                                                                                 pattern:
-                                                                                    "daily",
-                                                                                 hhmm: ora.oraStart,
-                                                                              }
-                                                                           );
-                                                                        } else {
-                                                                           if (
-                                                                              !selectableForCreate
-                                                                           )
-                                                                              return;
-                                                                           setSelTimesDaily(
+                                                                     <div className="blackouts__list-topline">
+                                                                        <span className="blackouts__list-label">
+                                                                           {dow !=
+                                                                              null &&
+                                                                           hhmm
+                                                                              ? `${weekdayShortLabel(
+                                                                                   dow
+                                                                                )} · ${hhmm} · ${
+                                                                                   isWeekly
+                                                                                      ? "Săptămânal"
+                                                                                      : b.type
+                                                                                }`
+                                                                              : String(
+                                                                                   b.type ||
+                                                                                      ""
+                                                                                ).toUpperCase()}
+                                                                        </span>
+                                                                     </div>
+                                                                     <div className="blackouts__list-range">
+                                                                        <span>
+                                                                           {
+                                                                              startLbl
+                                                                           }
+                                                                        </span>
+                                                                        <span>
+                                                                           {" "}
+                                                                           →{" "}
+                                                                        </span>
+                                                                        <span>
+                                                                           {
+                                                                              endLbl
+                                                                           }
+                                                                        </span>
+                                                                     </div>
+                                                                     <button
+                                                                        type="button"
+                                                                        className="instructors-popup__form-button instructors-popup__form-button--delete blackouts__list-delete-btn"
+                                                                        onClick={() =>
+                                                                           setBlkRemoveIds(
                                                                               (
                                                                                  prev
                                                                               ) => {
@@ -1778,276 +1267,229 @@ function AddInstr() {
                                                                                     );
                                                                                  if (
                                                                                     next.has(
-                                                                                       ora.oraStart
+                                                                                       b.id
                                                                                     )
                                                                                  )
                                                                                     next.delete(
-                                                                                       ora.oraStart
+                                                                                       b.id
                                                                                     );
                                                                                  else
                                                                                     next.add(
-                                                                                       ora.oraStart
+                                                                                       b.id
                                                                                     );
                                                                                  return next;
                                                                               }
-                                                                           );
+                                                                           )
                                                                         }
-                                                                     }}
-                                                                     title={
-                                                                        isActive
-                                                                           ? "Marcază/demarchează pentru ștergere (multi-select)"
-                                                                           : "Selectează pentru regim nou (zilnic)"
-                                                                     }
-                                                                  >
-                                                                     {
-                                                                        ora.eticheta
-                                                                     }
-                                                                  </button>
+                                                                     >
+                                                                        {isMarked
+                                                                           ? "Anulează"
+                                                                           : "Ștergere"}
+                                                                     </button>
+                                                                  </li>
                                                                );
                                                             }
                                                          )}
+                                                      </ul>
+                                                   )}
+                                                </div>
+                                             )}
+
+                                             {/* INPUT-URI PERIOADĂ + TAB-URI + ORE – doar când lista NU e deschisă */}
+                                             {!showBlackoutList && (
+                                                <>
+                                                   {/* PERIOADĂ (cu clase compatibile stilului vechi) */}
+                                                   <div className="instructors-popup__form-row blackouts__period-row">
+                                                      <div className="blackouts__period-col">
+                                                         <input
+                                                            type="date"
+                                                            className="blackouts__period-input instructors-popup__input"
+                                                            value={periodStart}
+                                                            onChange={(e) =>
+                                                               setPeriodStart(
+                                                                  e.target.value
+                                                               )
+                                                            }
+                                                         />
                                                       </div>
-                                                   )}
+                                                      <span className="blackouts__separator">
+                                                         →
+                                                      </span>
+                                                      <div className="blackouts__period-col">
+                                                         <input
+                                                            type="date"
+                                                            className="blackouts__period-input instructors-popup__input"
+                                                            value={periodEnd}
+                                                            onChange={(e) =>
+                                                               setPeriodEnd(
+                                                                  e.target.value
+                                                               )
+                                                            }
+                                                         />
+                                                      </div>
+                                                   </div>
 
-                                                   {/* SĂPTĂMÂNAL — cu 7 butoane/taburi */}
-                                                   {repeatPattern ===
-                                                      "weekly" && (
-                                                      <>
-                                                         {/* Tab-uri zile */}
-                                                         <div
-                                                            className="blackouts__weekday-tabs"
-                                                            style={{
-                                                               display: "flex",
-                                                               gap: 6,
-                                                               flexWrap: "wrap",
-                                                               justifyContent:
-                                                                  "center",
-                                                            }}
+                                                   {/* TAB-URI ZILE SĂPTĂMÂNĂ */}
+                                                   <div className="blackouts__weekday-tabs">
+                                                      {[
+                                                         {
+                                                            key: 1,
+                                                            label: "Lun",
+                                                         },
+                                                         {
+                                                            key: 2,
+                                                            label: "Mar",
+                                                         },
+                                                         {
+                                                            key: 3,
+                                                            label: "Mie",
+                                                         },
+                                                         {
+                                                            key: 4,
+                                                            label: "Joi",
+                                                         },
+                                                         {
+                                                            key: 5,
+                                                            label: "Vin",
+                                                         },
+                                                         {
+                                                            key: 6,
+                                                            label: "Sâm",
+                                                         },
+                                                         {
+                                                            key: 0,
+                                                            label: "Dum",
+                                                         },
+                                                      ].map((d) => (
+                                                         <button
+                                                            key={d.key}
+                                                            type="button"
+                                                            className={`blackouts__btn-day instructors-popup__form-button instructors-popup__form-button--cancel ${
+                                                               weeklyDay ===
+                                                               d.key
+                                                                  ? "active"
+                                                                  : ""
+                                                            }`}
+                                                            onClick={() =>
+                                                               setWeeklyDay(
+                                                                  d.key
+                                                               )
+                                                            }
+                                                            title={`Editează ${d.label.toLowerCase()}`}
                                                          >
-                                                            {[
-                                                               {
-                                                                  key: 1,
-                                                                  label: "Lun",
-                                                               },
-                                                               {
-                                                                  key: 2,
-                                                                  label: "Mar",
-                                                               },
-                                                               {
-                                                                  key: 3,
-                                                                  label: "Mie",
-                                                               },
-                                                               {
-                                                                  key: 4,
-                                                                  label: "Joi",
-                                                               },
-                                                               {
-                                                                  key: 5,
-                                                                  label: "Vin",
-                                                               },
-                                                               {
-                                                                  key: 6,
-                                                                  label: "Sâm",
-                                                               },
-                                                               {
-                                                                  key: 0,
-                                                                  label: "Dum",
-                                                               },
-                                                            ].map((d) => (
-                                                               <button
-                                                                  key={d.key}
-                                                                  type="button"
-                                                                  className={`instructors-popup__form-button instructors-popup__form-button--cancel ${
-                                                                     weeklyDay ===
-                                                                     d.key
-                                                                        ? "active"
-                                                                        : ""
-                                                                  }`}
-                                                                  onClick={() =>
-                                                                     setWeeklyDay(
-                                                                        d.key
-                                                                     )
-                                                                  }
-                                                                  title={`Editează ${d.label.toLowerCase()}`}
-                                                               >
-                                                                  {d.label}
-                                                               </button>
-                                                            ))}
-                                                         </div>
+                                                            {d.label}
+                                                         </button>
+                                                      ))}
+                                                   </div>
 
-                                                         {/* Ore pentru ziua selectată */}
-                                                         {(() => {
-                                                            const setForCreate =
-                                                               selTimesWeekly.get(
-                                                                  weeklyDay
-                                                               ) || new Set();
-                                                            const mapForDay =
-                                                               weeklyActiveMap.get(
-                                                                  weeklyDay
-                                                               ) || new Map();
+                                                   {/* GRILĂ ORE PENTRU ZIUA SELECTATĂ */}
+                                                   {(() => {
+                                                      const setForCreate =
+                                                         weeklySelection.get(
+                                                            weeklyDay
+                                                         ) || new Set();
+                                                      const mapForDay =
+                                                         weeklyActiveMap.get(
+                                                            weeklyDay
+                                                         ) || new Map();
 
-                                                            return (
-                                                               <div className="blackouts__times repeat">
-                                                                  {oreDisponibile.map(
-                                                                     (ora) => {
-                                                                        const activeIds =
-                                                                           mapForDay.get(
-                                                                              ora.oraStart
-                                                                           ) ||
-                                                                           new Set();
-                                                                        const isWeeklyActive =
-                                                                           activeIds.size >
-                                                                           0;
-                                                                        const allMarkedWeekly =
-                                                                           isWeeklyActive &&
-                                                                           [
-                                                                              ...activeIds,
-                                                                           ].every(
-                                                                              (
-                                                                                 id
-                                                                              ) =>
-                                                                                 blkRemoveIds.has(
-                                                                                    id
-                                                                                 )
-                                                                           );
+                                                      return (
+                                                         <div className="blackouts__times repeat">
+                                                            {oreDisponibile.map(
+                                                               (ora) => {
+                                                                  const activeIds =
+                                                                     new Set(
+                                                                        mapForDay.get(
+                                                                           ora.oraStart
+                                                                        ) || []
+                                                                     );
 
-                                                                        const selectedForCreate =
-                                                                           setForCreate.has(
-                                                                              ora.oraStart
-                                                                           );
+                                                                  const hasActive =
+                                                                     [
+                                                                        ...activeIds,
+                                                                     ].some(
+                                                                        (id) =>
+                                                                           !blkRemoveIds.has(
+                                                                              id
+                                                                           )
+                                                                     );
+                                                                  const allMarked =
+                                                                     activeIds.size >
+                                                                        0 &&
+                                                                     [
+                                                                        ...activeIds,
+                                                                     ].every(
+                                                                        (id) =>
+                                                                           blkRemoveIds.has(
+                                                                              id
+                                                                           )
+                                                                     );
+                                                                  const selectedForCreate =
+                                                                     setForCreate.has(
+                                                                        ora.oraStart
+                                                                     );
 
-                                                                        // NOU: slot acoperit de regim ZILNIC -> afișăm outline + dezactivat
-                                                                        const coveredByDaily =
-                                                                           hasDailyRepeatActiveAt(
-                                                                              ora.oraStart
-                                                                           );
-
-                                                                        const disabled =
-                                                                           blkLoading ||
-                                                                           coveredByDaily;
-
-                                                                        const title =
-                                                                           coveredByDaily
-                                                                              ? "Blocare din regim Zilnic (modifică în tab-ul Zilnic)."
-                                                                              : isWeeklyActive
-                                                                              ? "Marcază/demarchează pentru ștergere (doar seriile săptămânale)"
-                                                                              : "Selectează pentru regim nou (săptămânal) în ziua curentă";
-
-                                                                        const className =
-                                                                           [
-                                                                              "saddprogramari__time-btn",
-                                                                              // activ săptămânal și NU e marcat pentru ștergere
-                                                                              !coveredByDaily &&
-                                                                              isWeeklyActive &&
-                                                                              !allMarkedWeekly
-                                                                                 ? "saddprogramari__time-btn--selected"
-                                                                                 : "",
-                                                                              // activ săptămânal și E marcat pentru ștergere
-                                                                              !coveredByDaily &&
-                                                                              isWeeklyActive &&
-                                                                              allMarkedWeekly
-                                                                                 ? "saddprogramari__time-btn--to-delete"
-                                                                                 : "",
-                                                                              // creare nouă (doar dacă nu e acoperit de zilnic)
-                                                                              !coveredByDaily &&
-                                                                              !isWeeklyActive &&
-                                                                              selectedForCreate
-                                                                                 ? "saddprogramari__time-btn--selected"
-                                                                                 : "",
-                                                                              coveredByDaily
-                                                                                 ? "saddprogramari__time-btn--outline-daily"
-                                                                                 : "",
-                                                                              disabled
-                                                                                 ? "saddprogramari__time-btn--disabled"
-                                                                                 : "",
-                                                                           ]
-                                                                              .filter(
-                                                                                 Boolean
-                                                                              )
-                                                                              .join(
-                                                                                 " "
-                                                                              );
-
-                                                                        return (
-                                                                           <button
-                                                                              key={
-                                                                                 ora.eticheta
-                                                                              }
-                                                                              className={
-                                                                                 className
-                                                                              }
-                                                                              onClick={() => {
-                                                                                 if (
-                                                                                    disabled
-                                                                                 )
-                                                                                    return;
-                                                                                 if (
-                                                                                    isWeeklyActive
-                                                                                 ) {
-                                                                                    toggleRepeatDeleteBySlot(
-                                                                                       {
-                                                                                          pattern:
-                                                                                             "weekly",
-                                                                                          dow: weeklyDay,
-                                                                                          hhmm: ora.oraStart,
-                                                                                       }
-                                                                                    );
-                                                                                 } else {
-                                                                                    setSelTimesWeekly(
-                                                                                       (
-                                                                                          prev
-                                                                                       ) => {
-                                                                                          const next =
-                                                                                             new Map(
-                                                                                                prev
-                                                                                             );
-                                                                                          const cur =
-                                                                                             new Set(
-                                                                                                next.get(
-                                                                                                   weeklyDay
-                                                                                                ) ||
-                                                                                                   []
-                                                                                             );
-                                                                                          if (
-                                                                                             cur.has(
-                                                                                                ora.oraStart
-                                                                                             )
-                                                                                          )
-                                                                                             cur.delete(
-                                                                                                ora.oraStart
-                                                                                             );
-                                                                                          else
-                                                                                             cur.add(
-                                                                                                ora.oraStart
-                                                                                             );
-                                                                                          next.set(
-                                                                                             weeklyDay,
-                                                                                             cur
-                                                                                          );
-                                                                                          return next;
-                                                                                       }
-                                                                                    );
-                                                                                 }
-                                                                              }}
-                                                                              disabled={
-                                                                                 disabled
-                                                                              }
-                                                                              title={
-                                                                                 title
-                                                                              }
-                                                                           >
-                                                                              {
-                                                                                 ora.eticheta
-                                                                              }
-                                                                           </button>
+                                                                  const className =
+                                                                     [
+                                                                        "saddprogramari__time-btn",
+                                                                        hasActive &&
+                                                                        !allMarked
+                                                                           ? "saddprogramari__time-btn--selected"
+                                                                           : "",
+                                                                        hasActive &&
+                                                                        allMarked
+                                                                           ? "saddprogramari__time-btn--to-delete"
+                                                                           : "",
+                                                                        !hasActive &&
+                                                                        selectedForCreate
+                                                                           ? "saddprogramari__time-btn--selected"
+                                                                           : "",
+                                                                     ]
+                                                                        .filter(
+                                                                           Boolean
+                                                                        )
+                                                                        .join(
+                                                                           " "
                                                                         );
-                                                                     }
-                                                                  )}
-                                                               </div>
-                                                            );
-                                                         })()}
-                                                      </>
-                                                   )}
+
+                                                                  const title =
+                                                                     hasActive
+                                                                        ? "Marcază/demarchează seria săptămânală pentru ștergere"
+                                                                        : "Selectează pentru blocare repetitivă în perioada aleasă";
+
+                                                                  return (
+                                                                     <button
+                                                                        key={
+                                                                           ora.eticheta
+                                                                        }
+                                                                        type="button"
+                                                                        className={
+                                                                           className
+                                                                        }
+                                                                        disabled={
+                                                                           blkLoading ||
+                                                                           saving
+                                                                        }
+                                                                        onClick={() =>
+                                                                           toggleWeeklySlot(
+                                                                              weeklyDay,
+                                                                              ora.oraStart
+                                                                           )
+                                                                        }
+                                                                        title={
+                                                                           title
+                                                                        }
+                                                                     >
+                                                                        {
+                                                                           ora.eticheta
+                                                                        }
+                                                                     </button>
+                                                                  );
+                                                               }
+                                                            )}
+                                                         </div>
+                                                      );
+                                                   })()}
                                                 </>
                                              )}
 
@@ -2055,11 +1497,14 @@ function AddInstr() {
                                                 <button
                                                    className="instructors-popup__form-button instructors-popup__form-button--save"
                                                    onClick={handleSaveSchedule}
-                                                   disabled={saving}
+                                                   disabled={
+                                                      saving || blkLoading
+                                                   }
                                                 >
                                                    {saving
                                                       ? "Se salvează..."
-                                                      : blkRemoveIds.size > 0
+                                                      : blkRemoveIds.size > 0 ||
+                                                        hasWeeklySelection
                                                       ? "Aplică"
                                                       : "Salvează"}
                                                 </button>
@@ -2168,25 +1613,7 @@ function AddInstr() {
                                                       car?.gearbox || "manual"
                                                    ),
                                                 });
-                                                // reset orar
-                                                setBlkDate(todayAt00());
-                                                setBlkSelectedSet(new Set());
-                                                setBlkRemoveIds(new Set());
-                                                setEditPills([]);
-                                                setBlkViewMode("single");
-                                                setRepeatPattern("daily");
-                                                setRepeatStart(todayYmd());
-                                                setRepeatEnd(
-                                                   addDaysYmd(todayYmd(), 30)
-                                                );
-                                                setSelTimesDaily(new Set());
-                                                const m = new Map();
-                                                for (const d of [
-                                                   0, 1, 2, 3, 4, 5, 6,
-                                                ])
-                                                   m.set(d, new Set());
-                                                setSelTimesWeekly(m);
-                                                setWeeklyDay(1);
+                                                resetBlackoutsUI();
                                              }}
                                              src={editIcon}
                                           />
@@ -2200,25 +1627,7 @@ function AddInstr() {
                                                 setEditingUserId(
                                                    inst.userId || null
                                                 );
-                                                // reset orar
-                                                setBlkDate(todayAt00());
-                                                setBlkSelectedSet(new Set());
-                                                setBlkRemoveIds(new Set());
-                                                setEditPills([]);
-                                                setBlkViewMode("single");
-                                                setRepeatPattern("daily");
-                                                setRepeatStart(todayYmd());
-                                                setRepeatEnd(
-                                                   addDaysYmd(todayYmd(), 30)
-                                                );
-                                                setSelTimesDaily(new Set());
-                                                const m = new Map();
-                                                for (const d of [
-                                                   0, 1, 2, 3, 4, 5, 6,
-                                                ])
-                                                   m.set(d, new Set());
-                                                setSelTimesWeekly(m);
-                                                setWeeklyDay(1);
+                                                resetBlackoutsUI();
                                              }}
                                              src={scheduleIcon}
                                           />

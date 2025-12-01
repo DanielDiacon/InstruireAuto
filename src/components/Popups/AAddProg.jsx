@@ -1,5 +1,5 @@
 // src/components/Popups/AAddProg.jsx
-import React, { useEffect, useMemo, useRef, useState, useContext } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import DatePicker, { registerLocale } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -9,18 +9,17 @@ import { ReactSVG } from "react-svg";
 import AlertPills from "../Utils/AlertPills";
 import arrowIcon from "../../assets/svg/arrow.svg";
 
+import { createReservationsForUser } from "../../api/reservationsService";
+
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
-import { fetchAllReservations } from "../../store/reservationsSlice";
-import { createReservationsForUser } from "../../api/reservationsService";
+import { fetchReservationsDelta } from "../../store/reservationsSlice"; // ✅
+import { triggerCalendarRefresh } from "../Utils/calendarBus";
 
 import apiClientService from "../../api/ApiClientService";
 import { getInstructorBlackouts } from "../../api/instructorsService";
 
 // Ajustează dacă la tine calea e alta
-import { CalendarBusCtx } from "../APanel/Calendar/CalendarBus";
-
-/* ===== Locale RO ===== */
 registerLocale("ro", ro);
 
 /* ===== Constante / Config ===== */
@@ -203,20 +202,29 @@ function nextNDays(n, fromDate = new Date()) {
    }
    return out;
 }
-function buildFullGridISO(daysWindow = 60) {
-   const startFrom = new Date();
-   const todayMD = ymdStrInTZ(startFrom, MOLDOVA_TZ);
-   const [y, m, d] = todayMD.split("-").map(Number);
-   const baseMD = new Date(y, m - 1, d, 0, 0, 0, 0);
-   const daysArr = nextNDays(daysWindow, baseMD);
+
+/* ===== Grilă simetrică: trecut + viitor (pentru afișare & disponibilități) ===== */
+function buildGridISOAround(
+   anchorDate = new Date(),
+   daysBack = 60,
+   daysFwd = 60
+) {
+   const mdStr = ymdStrInTZ(anchorDate, MOLDOVA_TZ);
+   const [y, m, d] = mdStr.split("-").map(Number);
+   const start = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+   start.setDate(start.getDate() - Math.max(0, daysBack));
+   const totalDays = Math.max(0, daysBack) + Math.max(0, daysFwd) + 1;
    const out = [];
-   for (const dayStr of daysArr) {
-      const dObj = localDateObjFromStr(dayStr);
-      for (const t of oreDisponibile)
-         out.push(toUtcIsoFromLocal(dObj, t.oraStart));
+   for (let i = 0; i < totalDays; i++) {
+      const day = new Date(start);
+      day.setDate(start.getDate() + i);
+      for (const t of oreDisponibile) {
+         out.push(toUtcIsoFromLocal(day, t.oraStart));
+      }
    }
    return out;
 }
+
 function highlightText(text, query) {
    if (!text) return "";
    if (!query) return text;
@@ -338,7 +346,6 @@ export default function AAddProg({
    onClose,
 }) {
    const dispatch = useDispatch();
-   const { refresh, jumpToDate } = useContext(CalendarBusCtx) || {};
 
    // store
    const studentsAll = useSelector((s) => s.students?.list || []);
@@ -377,7 +384,6 @@ export default function AAddProg({
 
    // Stages
    const [stage, setStage] = useState("select"); // select | pick
-   const WINDOW_DAYS = 60;
 
    // derive inițiale
    const effectiveStartISO =
@@ -438,7 +444,7 @@ export default function AAddProg({
    // ecrane search
    const [view, setView] = useState("formSelect"); // formSelect | searchStudent | searchInstructor | formPick
    const [qStudent, setQStudent] = useState("");
-   const [qInstructor, setQInstructor] = useState(""); // ✅ FIX: definit corect
+   const [qInstructor, setQInstructor] = useState("");
 
    // disponibilități
    const [freeSlots, setFreeSlots] = useState([]); // ISO[]
@@ -448,7 +454,7 @@ export default function AAddProg({
    useEffect(() => {
       if (!studentsAll?.length) dispatch(fetchStudents());
       if (!instructors?.length) dispatch(fetchInstructors());
-      dispatch(fetchAllReservations());
+      dispatch(fetchReservationsDelta()); // ✅
    }, [dispatch]); // eslint-disable-line
 
    const selectedStudent = useMemo(
@@ -676,6 +682,10 @@ export default function AAddProg({
       return out;
    }
 
+   /* ====== Fereastră trecut + viitor pentru căutarea sloturilor ====== */
+   const WINDOW_BACK_DAYS = 120;
+   const WINDOW_FWD_DAYS = 120;
+
    /* ====== Disponibilitate ====== */
    const computeAvailability = async () => {
       if (!instructorId) return pushPill("Selectează instructorul.", "error");
@@ -690,11 +700,15 @@ export default function AAddProg({
 
       setContinuing(true);
       try {
-         const fullGrid = buildFullGridISO(WINDOW_DAYS);
+         // 🔄 Construim grilă în jurul zilei selectate (sau azi dacă nu e)
+         const fullGrid = buildGridISOAround(
+            selectedDate || new Date(),
+            WINDOW_BACK_DAYS,
+            WINDOW_FWD_DAYS
+         );
          const allowedKeys = new Set(
             fullGrid.map((iso) => localKeyForIso(iso))
          );
-         const now = new Date();
 
          const busyStudent = new Set();
          const busyInstructor = new Set();
@@ -730,15 +744,15 @@ export default function AAddProg({
             );
          }
 
+         // ❗ NU mai excludem orele din trecut → putem crea back-fill
          const free = fullGrid.filter((iso) => {
-            if (new Date(iso) <= now) return false;
             const key = localKeyForIso(iso);
             return !busyStudent.has(key) && !busyInstructor.has(key);
          });
 
          if (!free.length)
             pushPill(
-               "Nu s-au găsit sloturi libere în intervalul următor.",
+               "Nu s-au găsit sloturi libere în intervalul selectat.",
                "info"
             );
 
@@ -746,9 +760,7 @@ export default function AAddProg({
          setStage("pick");
          setView("formPick");
 
-         const t00 = todayAt00();
-         if (selectedDate < t00) setSelectedDate(t00);
-
+         // ❌ nu mai reseta la azi dacă e în trecut
          if (preferredIso && free.includes(preferredIso)) {
             const d = new Date(preferredIso);
             setSelectedDate(localDateObjFromStr(ymdStrInTZ(d, MOLDOVA_TZ)));
@@ -773,8 +785,6 @@ export default function AAddProg({
       return map;
    }, [freeSlots]);
 
-   const dayLocal = selectedDate ? ymdStrInTZ(selectedDate, MOLDOVA_TZ) : null;
-
    /* ====== SAVE ====== */
    const [saving, setSaving] = useState(false);
 
@@ -785,9 +795,8 @@ export default function AAddProg({
       if (!selectedTime) return pushPill("Selectează ora.");
 
       const iso = toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
-      if (new Date(iso) <= new Date()) {
-         return pushPill("Ora selectată a trecut deja. Alege o oră viitoare.");
-      }
+
+      // ❗Permitem și trecutul; verificăm doar “liber” pentru combo elev+instructor
       if (!freeSet.has(iso)) {
          return pushPill(
             "Slot indisponibil pentru elevul și instructorul selectați."
@@ -833,13 +842,21 @@ export default function AAddProg({
             { id: Date.now(), type: "success", text: "Programare creată." },
          ]);
 
+         // 🔄 Auto-refresh identic cu fluxul de editare
          try {
-            await dispatch(fetchAllReservations());
+            await (dispatch(fetchReservationsDelta()).unwrap?.() ??
+               dispatch(fetchReservationsDelta()));
          } catch {}
-         try {
-            refresh?.();
-            jumpToDate?.(new Date(iso));
-         } catch {}
+         triggerCalendarRefresh();
+
+         // Mic flush pentru eventuale latențe
+         setTimeout(async () => {
+            try {
+               await (dispatch(fetchReservationsDelta()).unwrap?.() ??
+                  dispatch(fetchReservationsDelta()));
+            } catch {}
+            triggerCalendarRefresh();
+         }, 0);
 
          onClose?.();
       } catch (e) {
@@ -876,7 +893,6 @@ export default function AAddProg({
       setContinuing(true);
       try {
          await ensureStudentCreated(); // așteaptă până se creează și e selectat
-         // la succes: butonul devine automat „Continuă”
       } finally {
          setContinuing(false);
       }
@@ -1254,7 +1270,7 @@ export default function AAddProg({
                                  .substring(0, 2)
                                  .replace(/^./, (c) => c.toUpperCase())
                            }
-                           minDate={todayAt00()}
+                           // ❌ fără minDate – permitem și trecutul
                            dayClassName={(date) => {
                               const day = ymdStrInTZ(date, MOLDOVA_TZ);
                               return freeByDay.has(day)
@@ -1280,19 +1296,9 @@ export default function AAddProg({
                               const isSelected =
                                  selectedTime?.oraStart === ora.oraStart;
 
-                              const isToday =
-                                 !!selectedDate &&
-                                 ymdStrInTZ(selectedDate, MOLDOVA_TZ) ===
-                                    ymdStrInTZ(new Date(), MOLDOVA_TZ);
-                              const nowHHMM = hhmmInTZ(new Date(), MOLDOVA_TZ);
-                              const pastToday =
-                                 isToday && ora.oraStart <= nowHHMM;
-
+                              // ✅ Permitem trecutul: butonul e activ dacă slotul e liber
                               const disabled =
-                                 !selectedDate ||
-                                 pastToday ||
-                                 !freeSet.has(iso) ||
-                                 (iso && new Date(iso) <= new Date());
+                                 !selectedDate || !freeSet.has(iso);
 
                               return (
                                  <button
@@ -1311,12 +1317,8 @@ export default function AAddProg({
                                     title={
                                        !selectedDate
                                           ? "Alege o zi"
-                                          : pastToday
-                                          ? "Ora a trecut deja pentru azi"
                                           : !freeSet.has(iso)
                                           ? "Indisponibil pentru elevul/instructorul selectați"
-                                          : new Date(iso) <= new Date()
-                                          ? "Ora a trecut"
                                           : ""
                                     }
                                  >

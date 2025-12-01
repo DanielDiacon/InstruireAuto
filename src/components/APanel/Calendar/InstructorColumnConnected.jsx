@@ -1,3 +1,4 @@
+// src/components/APanel/Calendar/InstructorColumnConnected.jsx
 import React, {
    useMemo,
    useState,
@@ -10,7 +11,7 @@ import EventCard from "./EventCard";
 import EmptySlot from "./EmptySlot";
 import { updateUser } from "../../../store/usersSlice";
 
-const MOLDOVA_TZ = "Europe/Chisinau"; // ⬅️ NOU
+const MOLDOVA_TZ = "Europe/Chisinau";
 
 const digits = (s = "") => String(s).replace(/\D+/g, "");
 const norm = (s = "") =>
@@ -46,12 +47,14 @@ function extractCanonLines(pm = "") {
    }
    return out;
 }
+
 function getNoteForDate(pm, dateObj) {
    const target = ymd(dateObj);
    const all = extractCanonLines(pm);
    const hit = all.find((x) => x.dateStr === target);
    return hit ? hit.text : "";
 }
+
 function upsertNoteForDate(pm, dateObj, newText) {
    const target = ymd(dateObj);
    const lines = String(pm || "").split(/\r?\n/);
@@ -76,22 +79,13 @@ function InstructorColumnConnected({
    inst,
    events,
    slots,
-   editMode,
    instructorMeta,
    instructorsGroups,
-   highlightTokens,
-   tokens,
-   getOrderStringForInst,
-   getPosGeneric,
-   getDayOnlyPos,
-   nudgeInstructor,
-   rowIdxLocal,
-   colIdx,
-   rowsCount,
    onOpenReservation,
    onCreateFromEmpty,
-   blockedKeySet, // ⬅️ NOU
-   blackoutVer, // ⬅️ NOU (doar pt. comparator)
+   blockedKeySet,
+   blackoutVer, // doar pentru memo
+   isHydrating, // vine din ACalendarOptimized (true = evenimentele sunt încă skeleton)
 }) {
    const dispatch = useDispatch();
 
@@ -184,8 +178,8 @@ function InstructorColumnConnected({
 
    const displayInstPhone = isPad ? "" : (meta?.phoneDigits || "").trim();
 
-   const eventsToRender = isPad ? [] : Array.isArray(events) ? events : [];
    const slotList = Array.isArray(slots) ? slots : [];
+   const eventsToRender = isPad ? [] : Array.isArray(events) ? events : [];
 
    const privateMsg = (instructorUser?.privateMessage ?? "").toString();
    const todaysText = useMemo(
@@ -198,10 +192,10 @@ function InstructorColumnConnected({
    const inputRef = useRef(null);
 
    const openEditor = useCallback(() => {
-      if (isPad || editMode) return;
+      if (isPad) return;
       setInputText(todaysText || "");
       setIsEditing(true);
-   }, [isPad, editMode, todaysText]);
+   }, [isPad, todaysText]);
 
    useEffect(() => {
       if (isEditing && inputRef.current) {
@@ -233,36 +227,6 @@ function InstructorColumnConnected({
       setInputText(todaysText || "");
    }, [todaysText]);
 
-   const currentOrder = getOrderStringForInst(inst.id);
-   const dayOnlyPos = getDayOnlyPos
-      ? getDayOnlyPos(currentOrder, day.date)
-      : getPosGeneric(currentOrder, day.date);
-   const curPos = dayOnlyPos || { x: colIdx + 1, y: rowIdxLocal + 1 };
-
-   const canLeft = curPos.x > 1;
-   const canRight = curPos.x < 3;
-   const canUp = curPos.y > 1;
-   const canDown = curPos.y < rowsCount;
-
-   const nudge = (dx, dy) =>
-      nudgeInstructor(
-         inst.id,
-         day.date,
-         dx,
-         dy,
-         colIdx + 1,
-         rowIdxLocal + 1,
-         rowsCount,
-         3
-      );
-
-   const isHydrating = day && day.hydrated === false;
-
-   const safeHighlight = (txt) =>
-      (typeof highlightTokens === "function" ? highlightTokens(txt) : txt) ||
-      "\u00A0";
-
-   // ⬇️ cheie locală "YYYY-MM-DD|HH:mm" dintr-un Date (MD timezone)
    const keyFromDateMD = (dateLike) => {
       const d = dateLike instanceof Date ? dateLike : new Date(dateLike);
       const dayStr = new Intl.DateTimeFormat("en-CA", {
@@ -270,28 +234,41 @@ function InstructorColumnConnected({
          year: "numeric",
          month: "2-digit",
          day: "2-digit",
-      }).format(d); // 2025-02-03
+      }).format(d);
       const hm = new Intl.DateTimeFormat("en-GB", {
          timeZone: MOLDOVA_TZ,
          hour: "2-digit",
          minute: "2-digit",
          hour12: false,
-      }).format(d); // 08:30
+      }).format(d);
       return `${dayStr}|${hm}`;
    };
 
+   const sectorNormVal =
+      meta?.sectorNorm ??
+      norm(
+         instrFull?.sector ?? fromGroups?.sector ?? fromGroups?.location ?? ""
+      );
+   const sectorSlug = sectorNormVal ? sectorNormVal.replace(/\s+/g, "-") : "";
+   const sectorClass = !isPad && sectorSlug ? ` instr-${sectorSlug}` : "";
+
+   const colClasses =
+      `dayview__event-col` +
+      (isPad ? " dayview__event-col--pad" : "") +
+      sectorClass +
+      (isHydrating && !isPad ? " dayview__event-col--hydrating" : "");
+
    return (
       <div
-         className={`dayview__event-col${
-            isPad ? " dayview__event-col--pad" : ""
-         }`}
+         className={colClasses}
          style={{
-            "--event-h": `var(--event-h)`,
             "--visible-slots": slotList.length,
          }}
          data-colid={`${day.id}-${inst.id}`}
          data-dayid={day.id}
+         data-sector={sectorSlug || undefined}
       >
+         {/* HEADER – se vede mereu, fără skeleton */}
          <div
             className="dayview__column-head"
             style={{ position: "relative", cursor: isPad ? "default" : "text" }}
@@ -300,29 +277,31 @@ function InstructorColumnConnected({
                openEditor();
             }}
          >
-            <div className="dv-inst-name">{safeHighlight(displayName)}</div>
+            <div className="dv-inst-name">
+               {displayName || "\u00A0"}
 
-            {!isEditing && todaysText && (
-               <div className="dv-inst-notes">
-                  <div className="dv-inst-note-line">
-                     {safeHighlight(todaysText)}
-                  </div>
-               </div>
-            )}
+               {!isEditing && todaysText && (
+                  <span className="dv-inst-notes">
+                     {" "}
+                     {" / "}
+                     {todaysText}
+                  </span>
+               )}
+            </div>
 
             {!isEditing && (
                <div className="dv-inst-plate">
-                  {safeHighlight(displayPlate)}
+                  {displayPlate}
                   {displayInstPhone ? (
                      <>
                         {" • "}
-                        {safeHighlight(displayInstPhone)}
+                        {displayInstPhone}
                      </>
                   ) : null}
                </div>
             )}
 
-            {isEditing && !editMode && (
+            {isEditing && (
                <input
                   ref={inputRef}
                   className="dv-subst-input"
@@ -344,123 +323,63 @@ function InstructorColumnConnected({
             )}
          </div>
 
-         {editMode && !isPad && (
-            <div
-               className="dv-move-pad"
-               onPointerDown={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-               }}
-               onPointerMove={(e) => e.stopPropagation()}
-               onPointerUp={(e) => e.stopPropagation()}
-               onClick={(e) => e.stopPropagation()}
-               onWheel={(e) => e.stopPropagation()}
-            >
-               <span />
-               <button
-                  type="button"
-                  title="Sus"
-                  disabled={!canUp}
-                  onClick={() => nudge(0, -1)}
-               >
-                  ↑
-               </button>
-               <span />
-               <button
-                  type="button"
-                  title="Stânga (schimbă cu vecinul)"
-                  disabled={!canLeft}
-                  onClick={() => nudge(-1, 0)}
-               >
-                  ←
-               </button>
-               <span />
-               <button
-                  type="button"
-                  title="Dreapta (schimbă cu vecinul)"
-                  disabled={!canRight}
-                  onClick={() => nudge(1, 0)}
-               >
-                  →
-               </button>
-               <span />
-               <button
-                  type="button"
-                  title="Jos"
-                  disabled={!canDown}
-                  onClick={() => nudge(0, 1)}
-               >
-                  ↓
-               </button>
-               <span />
-            </div>
-         )}
+         {/* BODY – când e hydrating → doar blocuri gri, cu animație la nivel de coloană */}
+         {slotList.map((slot, sIdx) => {
+            const cellKey = `${day.id}-${inst?.id}-${slot.start.getTime()}`;
 
-         {!editMode &&
-            slotList.map((slot, sIdx) => {
-               const cellKey = `${day.id}-${inst?.id}-${slot.start.getTime()}`;
-               if (isHydrating || isPad) {
-                  return (
-                     <div
-                        key={cellKey}
-                        className="dv-slot"
-                        style={{ gridRow: sIdx + 2, height: "var(--event-h)" }}
-                     >
-                        <div className="dv-skel-bar" />
-                     </div>
-                  );
-               }
-
-               const ev = (eventsToRender || []).find(
-                  (e) =>
-                     Math.max(e.start.getTime(), slot.start.getTime()) <
-                     Math.min(e.end.getTime(), slot.end.getTime())
-               );
-
+            if (isHydrating || isPad) {
                return (
                   <div
                      key={cellKey}
-                     className="dv-slot"
-                     style={{ gridRow: sIdx + 2, height: "var(--event-h)" }}
-                  >
-                     {ev ? (
-                        <EventCard
-                           ev={ev}
-                           editMode={editMode}
-                           highlightTokens={highlightTokens}
-                           onOpenReservation={onOpenReservation}
-                           isBlackout={
-                              !!(
-                                 blockedKeySet &&
-                                 blockedKeySet.has(keyFromDateMD(ev.start))
-                              )
-                           }
-                        />
-                     ) : (
-                        <EmptySlot
-                           slot={slot}
-                           onCreate={() =>
-                              !editMode &&
-                              onCreateFromEmpty?.({
-                                 start: slot.start,
-                                 end: slot.end,
-                                 instructorId: String(inst.id),
-                                 groupId: null,
-                                 sector: "",
-                              })
-                           }
-                           // ⬇️ NOU: marcăm și slotul gol ca „blocat” dacă ora e în blackouts
-                           isBlackout={
-                              !!(
-                                 blockedKeySet &&
-                                 blockedKeySet.has(keyFromDateMD(slot.start))
-                              )
-                           }
-                        />
-                     )}
-                  </div>
+                     className="dv-slot dv-slot--skeleton"
+                     style={{ gridRow: sIdx + 2 }}
+                  />
                );
-            })}
+            }
+
+            const ev = (eventsToRender || []).find(
+               (e) =>
+                  Math.max(e.start.getTime(), slot.start.getTime()) <
+                  Math.min(e.end.getTime(), slot.end.getTime())
+            );
+
+            const isSlotBlackout =
+               !!blockedKeySet && blockedKeySet.has(keyFromDateMD(slot.start));
+            const isEventBlackout =
+               !!blockedKeySet &&
+               ev &&
+               blockedKeySet.has(keyFromDateMD(ev.start));
+
+            return (
+               <div
+                  key={cellKey}
+                  className="dv-slot"
+                  style={{ gridRow: sIdx + 2 }}
+               >
+                  {ev ? (
+                     <EventCard
+                        ev={ev}
+                        onOpenReservation={onOpenReservation}
+                        isBlackout={!!isEventBlackout}
+                     />
+                  ) : (
+                     <EmptySlot
+                        slot={slot}
+                        onCreate={() =>
+                           onCreateFromEmpty?.({
+                              start: slot.start,
+                              end: slot.end,
+                              instructorId: String(inst.id),
+                              groupId: null,
+                              sector: "",
+                           })
+                        }
+                        isBlackout={!!isSlotBlackout}
+                     />
+                  )}
+               </div>
+            );
+         })}
       </div>
    );
 }

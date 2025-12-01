@@ -42,42 +42,72 @@ export async function deleteInstructors(id) {
  * Acceptă fie array-ul de item-uri, fie { blackouts: [...] }.
  * Normalizează câmpurile și garantează că dateTime este setat pentru fiecare obiect.
  */
+/**
+ * Adaugă blackouts în masă (SINGLE sau REPEAT).
+ * Acceptă fie array-ul de item-uri, fie { blackouts: [...] }.
+ * Normalizează strict câmpurile și DEDUPLICĂ la nivel de item.
+ */
 export async function addInstructorBlackouts(input) {
-   // Acceptă fie array-ul de itemuri, fie { blackouts: [...] }
-   const payload = Array.isArray(input) ? { blackouts: input } : input || {};
-   const asIso = (v) =>
-      v ? (typeof v === "string" ? v : new Date(v).toISOString()) : undefined;
+  const payload = Array.isArray(input) ? { blackouts: input } : (input || {});
+  const asIso = (v) =>
+    v ? (typeof v === "string" ? v : new Date(v).toISOString()) : undefined;
 
-   const body = {
-      blackouts: (payload.blackouts || []).map((b) => {
-         const type = String(b?.type || "SINGLE").toUpperCase();
-         const instructorId = Number(b?.instructorId);
+  // normalizare + dedup cheie: instructorId|type|dateTime|repeatEveryDays
+  const seen = new Set();
+  const out = [];
 
-         // O SINGURĂ ORĂ: dateTime este obligatoriu (pentru REPEAT îl setăm = start)
-         const dateTime = asIso(b?.dateTime) || asIso(b?.startDateTime);
+  for (const b of payload.blackouts || []) {
+    const type = String(b?.type || "SINGLE").toUpperCase();
+    const instructorId = Number(b?.instructorId);
+    if (!instructorId) continue;
 
-         const out = { instructorId, type, dateTime };
+    const dateTime = asIso(b?.dateTime) || asIso(b?.startDateTime);
+    if (!dateTime) continue;
 
-         if (type === "REPEAT") {
-            out.startDateTime = asIso(b?.startDateTime) || dateTime;
-            out.endDateTime = asIso(b?.endDateTime) || dateTime;
-            out.repeatEveryDays = Number(b?.repeatEveryDays || 1);
-         }
+    if (type === "REPEAT") {
+      const startDateTime = asIso(b?.startDateTime) || dateTime;
+      const endDateTime = asIso(b?.endDateTime) || startDateTime;
+      const repeatEveryDays = Math.max(1, Number(b?.repeatEveryDays || 1));
 
-         return out;
-      }),
-   };
+      const key = `${instructorId}|REPEAT|${startDateTime}|${repeatEveryDays}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-   const res = await apiClientService.post("/instructors/blackouts", body);
-   const text = await res.text();
-   if (!res.ok) throw new Error(text || "Failed to add blackouts");
+      out.push({
+        instructorId,
+        type: "REPEAT",
+        dateTime: startDateTime,      // opțional pe server, păstrat pentru compat
+        startDateTime,
+        endDateTime,
+        repeatEveryDays,
+      });
+    } else {
+      const key = `${instructorId}|SINGLE|${dateTime}|0`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-   try {
-      return text ? JSON.parse(text) : true;
-   } catch {
-      return true;
-   }
+      // STRICT SINGLE: nu trimitem start/end/repeat
+      out.push({
+        instructorId,
+        type: "SINGLE",
+        dateTime,
+      });
+    }
+  }
+
+  if (out.length === 0) return true;
+
+  const res = await apiClientService.post("/instructors/blackouts", { blackouts: out });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || "Failed to add blackouts");
+
+  try {
+    return text ? JSON.parse(text) : true;
+  } catch {
+    return true;
+  }
 }
+
 
 /** Helper: adaugă un singur blackout SINGLE. */
 export async function addInstructorBlackout(instructorId, dateTime) {

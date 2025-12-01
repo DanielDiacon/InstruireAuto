@@ -107,3 +107,35 @@ export async function resetPassword({ token, newPassword }) {
       return {};
    }
 }
+/* ================== ENROLL / CONTRACTE ================== */
+/**
+ * Trimite datele studentului către endpoint-ul care generează
+ * contractele și le expediază pe email.
+ *
+ * @param {object} payload  // trebuie să respecte schema backend-ului:
+ *  {
+ *    nume, prenume, cetatenia, email,
+ *    raion, localitate, strada, numar, apartament,
+ *    serieActIdentitate, numarActIdentitate, eliberatDe, dataEliberare (dd.MM.yyyy),
+ *    dataNasterii (dd.MM.yyyy), sex: "M"|"F",
+ *    idnp, telefon, telefonContact, cutie: "MECANICĂ"|"AUTOMATĂ",
+ *    deUndeAflat
+ *  }
+ */
+export async function enrollStudent(payload) {
+   const response = await apiClientService.post(
+      // dacă apiClientService NU are prefix /api, schimbă în "/api/contracts/generate"
+      "/contracts/generate",
+      JSON.stringify(payload)
+   );
+
+   if (!response.ok) {
+      await throwDetailedError(response);
+   }
+
+   try {
+      return await response.json();
+   } catch {
+      return {};
+   }
+}

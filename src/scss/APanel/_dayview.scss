@@ -7,7 +7,7 @@
    --colw: 120px;
 
    /* Culori evenimente (light) */
-   --event-default: #616033;
+   --event-default: #616138;
    --event-red: hsl(0 70% 40%);
    --event-orange: hsl(30 70% 40%);
    --event-yellow: hsl(54 100% 33%);
@@ -20,7 +20,7 @@
 
 .darkmode {
    /* Culori evenimente (dark) */
-   --event-default: #f1f8c0d7;
+   --event-default: #f1f7c7;
    --event-red: hsl(0 100% 87%);
    --event-orange: hsl(30 100% 80%);
    --event-yellow: hsl(54 95% 76%);
@@ -31,16 +31,6 @@
    --event-pink: hsl(330 96% 81%);
 }
 
-/* ===========================================================
-   DAYVIEW
-   =========================================================== */
-/* lanțul de flex pe verticală */
-html,
-body,
-#root {
-   height: 100%;
-}
-
 /* scoatem absolute-ul care rupe layout-ul */
 .rbc-time-view,
 .rbc-month-view,
@@ -49,64 +39,24 @@ body,
    position: static !important; /* <-- în loc de absolute */
    display: flex !important;
    flex-direction: column !important;
-   flex: 1 1 0 !important;
-   min-height: 0 !important;
-}
-
-.calendar__frame.rbc-calendar {
-   display: flex !important;
-   flex-direction: column !important;
-   flex: 1 1 0 !important;
-   min-height: 0 !important;
-}
-html,
-body,
-#root,
-.App {
-   min-height: 100svh;
-   height: auto;
-}
-
-/* Zona ta principală (dacă ai header fix de 48px, ajustează) */
-.main {
-   display: flex;
-   flex-direction: column;
-   min-height: calc(100svh - 48px); /* umple restul ecranului */
-   height: auto; /* poate crește peste */
-}
-
-/* Containerul calendarului */
-.calendar {
-   display: flex;
-   flex-direction: column;
-   flex: 1 1 auto;
-   min-height: 0; /* important în flex ca să lase copilul să-și calculeze înălțimea */
-   height: auto;
-}
-
-/* Frame-ul RBC */
-.calendar__frame.rbc-calendar {
-   display: flex !important;
-   flex-direction: column !important;
-   flex: 1 1 0 !important; /* ia toată înălțimea disponibilă din .calendar */
-   min-height: 0 !important; /* nu limita */
-   height: auto !important; /* NU 100% */
-   box-sizing: border-box;
-   overflow: hidden;
 }
 
 .dayview {
    //background: var(--black-s) !important;
    color: var(--white-p);
    user-select: none;
+
    /* ---------- Header + Toolbar ---------- */
    &__header {
       display: flex;
-      align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 12px 12px 12px 12px;
+      gap: 6px;
+      padding: 6px;
+      background: var(--black-s);
+      border-radius: 24px;
+      margin-bottom: 10px;
    }
+
    &__header-left {
       display: flex;
       gap: 6px;
@@ -117,19 +67,31 @@ body,
       align-items: center;
       gap: 6px;
       height: 100%;
+      width: 100%;
    }
+
    .dv-btn {
       height: 100%;
-      padding: 13px;
-      border-radius: 18px;
+      padding: 10px 12px;
+      border-radius: 20px;
       background: var(--black-p);
       color: var(--white-p);
       cursor: pointer;
-      transition: all var(--elastic-f), background var(--classic-f);
+      transition: all var(--elastic-s), background var(--classic-f);
+
       svg {
          height: 20px;
          width: 20px;
          transition: var(--elastic-s);
+      }
+   }
+   .dv-btn:hover {
+      background: var(--accent-l);
+      color: var(--accent-d);
+      &.reset {
+         svg {
+            rotate: 270deg;
+         }
       }
    }
    .dv-back {
@@ -139,61 +101,30 @@ body,
          transition: var(--elastic-s);
       }
    }
+
    .dv-sector-toggle {
       background: var(--accent-l);
       color: var(--accent-d);
    }
+
    .dv-search__input {
       width: 100%;
-      height: 100%;
-      padding: 12px 16px;
+      height: 36px;
+      padding: 10px 16px;
       border-radius: 32px;
       background: var(--black-p);
       color: var(--white-p);
-      font-size: 14px;
+      font-size: 13px;
       outline: none;
    }
+
    .dv-search__input::placeholder {
       color: var(--muted);
    }
 
-   .dv-btn:hover {
-      border-radius: 10px;
-      background: var(--accent-l);
-      color: var(--accent-d);
-      &.reset {
-         svg {
-            rotate: 270deg;
-         }
-      }
-   }
    .dv-btn:active {
-      border-radius: 18px;
+      border-radius: 24px;
       scale: 0.92;
-   }
-   .dv-btn--ghost {
-      padding: 12px 16px;
-      border-radius: 10px;
-      pointer-events: none;
-   }
-   .dv-btn.dv-burger {
-      padding: 10px 18px;
-      p {
-         scale: 2;
-      }
-   }
-   .dv-menu {
-      position: absolute;
-      right: 0;
-      top: calc(100% + 16px);
-      background: var(--bd);
-      backdrop-filter: blur(12px);
-      border-radius: 22px;
-      padding: 6px;
-      min-width: 180px;
-      z-index: 50;
-      display: grid;
-      gap: 6px;
    }
 
    /* ---------- Scroller / Track ---------- */
@@ -201,25 +132,22 @@ body,
       position: relative;
       display: flex;
       gap: var(--group-gap);
-      padding: 12px;
+      padding: 3px 12px;
       overflow: auto;
-
-      & > div {
-         gap: 12px !important;
-      }
    }
+
    &__row.dv-pan {
       cursor: grab;
       touch-action: pan-x;
       scrollbar-width: none;
-      //height: 100% !important;
-
-      border-radius: 35px;
-      //flex: 1 1 auto !important;
+      background: var(--black-s);
+      border-radius: 24px;
    }
+
    &__row.dv-pan.is-dragging {
       cursor: grabbing;
    }
+
    &__row.dv-pan::-webkit-scrollbar {
       display: none;
    }
@@ -236,7 +164,7 @@ body,
       min-width: calc(var(--cols) * var(--colw));
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 3px;
       align-self: flex-start;
       flex: 0 0 auto;
       position: relative;
@@ -250,6 +178,7 @@ body,
       contain-intrinsic-size: 44px 1400px;
       contain: layout paint size;
    }
+
    &__group-wrap[data-active="1"] {
       opacity: 1;
       transform: translateY(0);
@@ -270,16 +199,19 @@ body,
       justify-content: center;
       height: auto !important;
    }
+
    &__group-title {
       padding: 6px 12px;
-      background: var(--black-s);
+      background: var(--black-p);
       border-radius: 30px;
+      font-size: 12px;
    }
 
    /* ---------- Conținut zi ---------- */
    &__group-content {
       display: grid;
    }
+
    &__group-content--row {
       grid-template-columns: 1fr !important;
    }
@@ -290,18 +222,26 @@ body,
       grid-template-columns: repeat(var(--cols), minmax(var(--colw), 1fr));
    }
 
+   /* ---------- Coloană instructor ---------- */
    &__event-col {
       position: relative;
-      min-height: calc(
-         var(--row-header-h) + var(--visible-slots) * var(--slot-h)
-      );
+      padding: 3px;
       background: var(--black-p);
-      border-radius: 16px 16px 22px 22px;
+      border-radius: 16px 16px 11px 11px;
+      gap: 3px;
 
+      /* flow mode: header + sloturi egale */
+      display: grid;
+      grid-template-rows: var(--row-header-h);
+      grid-auto-rows: var(--slot-h-fixed);
+
+      min-height: 0;
       content-visibility: auto;
       contain-intrinsic-size: 48px 1600px;
       contain: layout paint;
+      user-select: none !important;
    }
+
    &__event-col--pad {
       opacity: 0.35;
       pointer-events: none;
@@ -309,7 +249,7 @@ body,
 
    .dayview__column-head {
       height: var(--row-header-h);
-      padding: 6px 8px;
+      padding: 4px 8px;
       display: flex;
       flex-direction: column;
       align-content: start;
@@ -317,11 +257,27 @@ body,
       overflow: hidden;
       z-index: 2;
    }
+
    .dv-inst-name {
       white-space: nowrap;
       width: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
+      font-size: 12px;
+   }
+   .dv-inst-notes {
+      color: var(--accent-l);
+      font-weight: 700;
+      line-height: 1.1;
+      margin-top: -2px;
+   }
+   .dv-subst-input {
+      color: var(--white-p) !important;
+      font-size: 10px;
+   }
+   .dv-subst-input::placeholder {
+      color: var(--white-s) !important;
+      opacity: 0.8;
    }
    .dv-inst-plate {
       font-size: 10px;
@@ -330,12 +286,8 @@ body,
 
    /* ---------- Card eveniment ---------- */
    &__event {
-      position: absolute;
-      left: 0;
-      right: 0;
-      padding: 8px;
-      border: 3px solid var(--black-p);
-      border-radius: 18px;
+      padding: 6px;
+      border-radius: 8px;
       background: var(--event-default);
       color: var(--white-p);
       font-size: 12px;
@@ -343,16 +295,18 @@ body,
       flex-direction: column;
       gap: 0px;
       overflow: hidden;
-      top: calc(var(--row-header-h) + var(--ev-slots) * var(--slot-h));
-      height: calc(var(--ev-span) * var(--slot-h));
       transition: var(--elastic-f);
       z-index: 100;
-      &:active {
-         transform: scale(0.95);
-      }
-   }
-   &__event--virtual {
-      width: 100%;
+
+      /* flow mode: cardul ocupă slotul, fără absolute */
+      position: static;
+      left: auto;
+      right: auto;
+      top: auto;
+      height: 100%;
+      min-height: 0;
+      margin: 0;
+      box-sizing: border-box;
    }
 
    &__event--default {
@@ -382,13 +336,17 @@ body,
    &__event--indigo {
       background: var(--event-indigo);
    }
-   &__event-person-name {
+
+   &__event-person-name,
+   &__event-phone {
       color: var(--white-p);
-      font-weight: 500;
       white-space: nowrap;
       width: 100%;
       text-overflow: ellipsis;
       text-align: left;
+      line-height: 1.2;
+      font-size: 10px;
+      padding: 0 2px;
    }
    &__event-note {
       width: 100%;
@@ -396,12 +354,18 @@ body,
       padding-left: 2px;
       font-size: 10px;
       color: var(--white-s);
-      display: flex;
-      align-items: flex-start;
-      text-overflow: ellipsis !important;
-      width: 100%;
+
+      /* clamp notițe – 2 linii */
       overflow: hidden;
-      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+   }
+
+   &__event--blocked {
+      outline: 2px dashed var(--black-p);
+      background: var(--event-red);
+      outline-offset: -3px;
    }
 
    /* ---------- Meta pills ---------- */
@@ -411,16 +375,104 @@ body,
       align-items: center;
       gap: 3px;
       width: 100%;
+      padding: 0 0 2px 0;
    }
    .dv-meta-pill {
       font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 99px;
+      padding: 1px 4px;
+      border-radius: 8px;
       color: var(--white-p);
-      background: var(--bd);
+      background: var(--black-s);
       user-select: none;
    }
 }
+
+.dv-dd {
+   position: relative;
+   font-size: 13px;
+   z-index: 30;
+
+   &__btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      height: 100%;
+      padding: 10px 14px;
+      border-radius: 20px;
+      background: var(--black-p);
+      color: var(--white-p);
+      color: inherit;
+      cursor: pointer;
+      line-height: 1.2;
+      background: var(--black-p);
+      gap: 6px;
+      z-index: 3;
+   }
+
+   &__label {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+   }
+
+   &__caret {
+      font-size: 13px;
+      opacity: 0.7;
+   }
+
+   &__menu {
+      position: absolute;
+      top: calc(100% - 42px);
+      left: -6px;
+      min-width: calc(100% + 12px);
+      z-index: -1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      backdrop-filter: blur(10px) saturate(150%);
+      border-radius: 24px;
+      padding: 46px 6px 6px 6px;
+      background: linear-gradient(
+         to bottom,
+         var(--black-s) 36px,
+         #80808010 100%
+      );
+   }
+
+   &__option {
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      text-align: center;
+      border-radius: 8px;
+      border: 0;
+      background: var(--black-p);
+      color: inherit;
+      font-weight: 400;
+      transition: all var(--elastic-s), background var(--classic-s);
+      font-size: 13px;
+      cursor: pointer;
+      text-wrap: none;
+   }
+   &__option:first-child {
+      border-radius: 18px 18px 8px 8px;
+   }
+   &__option:last-child {
+      border-radius: 8px 8px 18px 18px;
+   }
+   &__option:hover {
+      border-radius: 18px;
+   }
+
+   &__option--active {
+      background: var(--accent-l);
+      font-weight: 500;
+      border-radius: 18px !important;
+      color: var(--accent-d);
+   }
+}
+
 @media only screen and (max-width: $mobile) {
    .dayview {
       &__header {
@@ -445,24 +497,24 @@ body,
 
          .dv-search__input {
             font-size: 12px;
+            margin-right: 0px;
          }
       }
       .dv-btn {
          height: 100%;
-         padding: 11px;
          border-radius: 18px;
          background: var(--black-p);
          color: var(--white-p);
          cursor: pointer;
-         transition: all var(--elastic-f), background var(--classic-f);
+         transition: all var(--elastic-s), background var(--classic-s);
          svg {
             height: 17px;
             width: 17px;
             transition: var(--elastic-s);
          }
       }
+
       .dv-btn:hover {
-         border-radius: 10px;
          background: var(--accent-l);
          color: var(--accent-d);
          &.reset {
@@ -493,64 +545,6 @@ body,
       }
    }
 }
-/* buton ascuns */
-.dv-order-toggle {
-   display: none !important;
-}
-
-/* pad mișcare */
-.dv-move-pad {
-   display: grid;
-   grid-template-columns: repeat(3, 1fr);
-   grid-template-rows: repeat(3, 1fr);
-   gap: 3px;
-   padding: 6px;
-   z-index: 10;
-}
-.dv-move-pad button {
-   width: 100%;
-   height: 100%;
-   background: var(--black-s);
-   color: var(--white-p);
-   border-radius: 16px;
-   cursor: pointer;
-   line-height: 0px;
-   padding-bottom: 3px;
-   transition: var(--elastic-f);
-   &:active {
-      scale: 0.95;
-   }
-}
-.dv-move-pad button:disabled {
-   opacity: 0.35;
-   cursor: not-allowed;
-   filter: saturate(0);
-   &:active {
-      scale: 1;
-   }
-}
-
-/* font scaling cu zoom */
-.dayview__group-title {
-   font-size: calc(16px * var(--font-scale));
-}
-.dv-inst-name {
-   font-size: calc(14px * var(--font-scale));
-}
-.dv-inst-plate {
-   font-size: calc(12px * var(--font-scale));
-}
-.dayview__event {
-   font-size: calc(13px * var(--font-scale));
-}
-.dv-meta-pill,
-.dv-phone {
-   font-size: calc(10px * var(--font-scale)) !important;
-}
-.dayview__event-note {
-   font-size: calc(12px * var(--font-scale));
-   line-height: 1.25;
-}
 
 /* ===========================================================
    Utils panning
@@ -568,127 +562,29 @@ body,
 }
 
 /* ===== Flow mode (fără absolute): o singură versiune ===== */
-.dayview__event-col {
-   min-height: 0 !important;
-   display: grid;
-   grid-template-columns: 1fr;
-   user-select: none !important;
-   /* header + sloturi egale (implicit controlate mai jos cu --slot-h-fixed) */
-}
 
-.dayview__list {
-   display: flex;
-   flex-direction: column;
-   gap: 8px;
-   padding: 8px;
-}
-
-.dayview__event {
-   position: static !important;
-   left: auto !important;
-   right: auto !important;
-   top: auto !important;
-   height: auto !important;
-   margin: 0;
-   border-radius: 14px;
-   border: 2px solid var(--black-p);
-   padding: 8px;
-   overflow: hidden;
-}
-
-.dv-slot {
-   height: var(--event-h);
-}
-
-.dv-slot > .dayview__event {
-   height: 100%;
-   display: flex;
-   flex-direction: column;
-   box-sizing: border-box;
-   overflow: hidden;
-}
-
-/* clamp notițe (o singură versiune) */
-.dayview__event-note {
-   overflow: hidden;
-   display: -webkit-box;
-   -webkit-line-clamp: 2;
-   -webkit-box-orient: vertical;
-}
-
-/* Coloană cu header + sloturi egale (o singură versiune) */
-.dayview__event-col {
-   display: grid;
-   grid-template-rows: var(--row-header-h) repeat(
-         var(--visible-slots),
-         var(--event-h)
-      );
-   gap: 8px;
-}
+/* clamp notițe (fallback global) */
 
 /* === Unificare: slot fix cu zoom (o singură versiune) === */
 :root {
-   --card-h: 88px;
+   --card-h: 125px;
 }
 .dayview {
+   &__wrapper {
+      padding: 12px;
+      @media only screen and (max-width: $tablet) {
+         padding: 6px;
+      }
+   }
    --zoom: 1;
-   --slot-h-fixed: calc(var(--card-h) * var(--zoom));
    --anim-zoom-ms: 260ms;
    .dv-scale {
       will-change: transform;
    }
 }
 
-.dayview .dayview__event {
-   position: static !important;
-   top: auto !important;
-   left: auto !important;
-   right: auto !important;
-   height: 100% !important;
-   min-height: 0 !important;
-   margin: 0 !important;
-   border-width: 2px !important;
-   box-sizing: border-box !important;
-   overflow: hidden !important;
-}
-
-.dayview .dayview__event-col {
-   min-height: 0 !important;
-   display: grid !important;
-   grid-template-rows: var(--row-header-h) !important;
-   grid-auto-rows: var(--slot-h-fixed) !important;
-   gap: 0px !important;
-}
-
 .dayview .dv-slot {
    height: auto !important;
-}
-
-.dayview .dayview__event-note {
-   overflow: hidden !important;
-   display: -webkit-box !important;
-   -webkit-line-clamp: 2 !important;
-   -webkit-box-orient: vertical !important;
-}
-
-/* grilă sortabilă */
-.dv-sortable-grid {
-   display: grid;
-   grid-template-columns: repeat(var(--cols, 3), calc(var(--colw)));
-   gap: 0;
-}
-
-/* drag handle / head – o singură definiție */
-.dv-drag-head {
-   cursor: grab;
-   user-select: none;
-}
-.dv-drag-head:active {
-   cursor: grabbing;
-}
-
-.dv-pan.is-dnd-active {
-   cursor: default;
 }
 
 /* dezactivează optimizările care pot masca click-ul în timpul DnD */
@@ -697,24 +593,6 @@ body,
 .dayview__event-col {
    content-visibility: visible !important;
    contain: none !important;
-}
-
-.dv-drag-handle {
-   position: absolute;
-   top: 10px;
-   left: 30%;
-   height: 4px;
-   border-radius: 6px;
-   cursor: grab;
-   touch-action: none;
-   opacity: 0.7;
-   background: var(--white-t);
-   width: 40%;
-}
-.dv-drag-handle:active {
-   background: var(--accent-d);
-   cursor: grabbing;
-   opacity: 1;
 }
 
 /* previne săriturile când intră/iese conținutul */
@@ -728,24 +606,6 @@ body,
    scrollbar-gutter: stable both-edges;
 }
 
-/* mască margini pentru intrare/ieșire sloturi */
-.dayview__row.dv-pan {
-   -webkit-mask-image: linear-gradient(
-      to right,
-      transparent 0,
-      black 16px,
-      black calc(100% - 16px),
-      transparent 100%
-   );
-   mask-image: linear-gradient(
-      to right,
-      transparent 0,
-      black 16px,
-      black calc(100% - 16px),
-      transparent 100%
-   );
-}
-
 /* === FIX: cardurile trebuie să fie clicabile pe desktop (o singură versiune) === */
 .dv-pan:not(.is-panning) .dayview__event,
 .dv-pan:not(.is-panning) .dayview__event * {
@@ -754,28 +614,43 @@ body,
 .dv-pan .dayview__event {
    pointer-events: auto;
 }
-.dayview__row.dv-pan {
-   touch-action: pan-x;
-   cursor: grab;
-}
-.dv-slot--skeleton::before {
-   content: "";
-   display: block;
-   height: 70%;
-   margin: 6px 8px;
-   border-radius: 8px;
-   background: linear-gradient(90deg, #eee 25%, #f6f6f6 37%, #eee 63%);
-   background-size: 400% 100%;
-   animation: dv-shimmer 1.2s ease-in-out infinite;
-}
-@keyframes dv-shimmer {
-   0% {
-      background-position: 100% 0;
-   }
+//.dayview__row.dv-pan {
+//   touch-action: pan-x;
+//   cursor: grab;
+//}
+/* Animație shimmer pe coloana de instructor */
+@keyframes dv-col-skeleton-shimmer {
+   0%,
    100% {
-      background-position: 0 0;
+      opacity: 0.1;
+   }
+   50% {
+      opacity: 0.6;
    }
 }
+
+/* Coloana aflată în hidratare (doar zona de sub header) */
+.dayview__event-col--hydrating {
+   animation: dv-col-skeleton-shimmer 1s infinite;
+   position: relative;
+}
+//
+//.dayview__event-col--hydrating::before {
+//   content: "";
+//   position: absolute;
+//
+//   top: 0px;
+//   left: 0;
+//   right: 0;
+//   bottom: 0;
+//   background: var(--white-p);
+//
+//   pointer-events: none;
+//   opacity: 0.2;
+//}
+
+////////////////////////////////////
+
 .dayview__group-wrap.cv-auto {
    content-visibility: auto;
    contain-intrinsic-size: auto 1000px; /* ajustează după înălțimea medie a unei zile */
@@ -784,8 +659,52 @@ body,
 .dayview__row.dv-pan {
    overscroll-behavior: contain;
 }
-/* Oră blocată vizual (blackout) */
-.dayview__event--blocked {
-   outline: 2px solid var(--event-red, #e0a800);
-   outline-offset: -2px;
+.instr-botanica {
+   background: linear-gradient(
+      var(--event-pink) 0px,
+      var(--black-p) 60px,
+      var(--black-p) 100%
+   );
+}
+
+.instr-ciocana {
+   background: linear-gradient(
+      var(--event-blue) 0px,
+      var(--black-p) 60px,
+      var(--black-p) 100%
+   );
+}
+.dayview__wrapper {
+   position: relative;
+   min-height: 240px;
+}
+
+.dayview__loading {
+   display: flex;
+   flex-direction: column;
+   align-items: center;
+   justify-content: center;
+   gap: 8px;
+   padding: 24px;
+   min-height: 240px;
+   color: var(--white-p);
+}
+
+.dayview__spinner {
+   width: 28px;
+   height: 28px;
+   border-radius: 999px;
+   border: 3px solid rgba(255, 255, 255, 0.2);
+   border-top-color: rgba(255, 255, 255, 0.9);
+   animation: dv-spin 0.8s linear infinite;
+}
+
+@keyframes dv-spin {
+   to {
+      transform: rotate(360deg);
+   }
+}
+
+.dayview__group-skeleton {
+   /* stilul l-am pus deja inline, aici poți să-l mai rafinezi dacă vrei */
 }

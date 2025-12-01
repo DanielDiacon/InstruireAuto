@@ -28,6 +28,7 @@ import SPExam from "./pages/SPages/SPExam";
 import ConfirmReservation from "./pages/ConfirmReservation";
 import LegalPage from "./pages/PrivacyPage";
 import TermsPage from "./pages/TermsPage";
+import EnrollFrom from "./pages/EnrollForm";
 
 const App = () => {
    const darkMode = localStorage.getItem("darkMode") === "enabled";
@@ -201,13 +202,14 @@ const App = () => {
                />
                {/* Public */}
                <Route path="/register" element={<Register />} />
+               <Route path="/enroll" element={<EnrollFrom />} />
                <Route path="/reset-password" element={<ResetPassword />} />
                <Route
                   path="/confirm-reservation/:token"
                   element={<ConfirmReservation />}
                />
-               <Route path="/termeni" element={<LegalPage />} />
-               <Route path="/confidentialitate" element={<TermsPage />} />
+               <Route path="/confidentialitate" element={<LegalPage />} />
+               <Route path="/termeni" element={<TermsPage />} />
                <Route path="/" element={<SignPage />} />
             </Routes>
          </div>

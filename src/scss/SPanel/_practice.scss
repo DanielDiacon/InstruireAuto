@@ -14,29 +14,29 @@
    overflow: hidden;
    &.exam {
       min-height: calc(100vh - 48px);
-//      &::after {
-//         content: "";
-//         position: absolute;
-//         bottom: -180%;
-//         left: 50%;
-//         transform: translateX(-50%);
-//         width: 300%;
-//         height: 300%;
-//         background: radial-gradient(
-//            circle,
-//            transparent,
-//            transparent,
-//            rgba(243, 252, 121, 0.2),
-//            transparent,
-//            transparent,
-//            transparent,
-//            transparent
-//         );
-//
-//         filter: blur(10px);
-//         pointer-events: none;
-//         z-index: 0;
-//      }
+      //      &::after {
+      //         content: "";
+      //         position: absolute;
+      //         bottom: -180%;
+      //         left: 50%;
+      //         transform: translateX(-50%);
+      //         width: 300%;
+      //         height: 300%;
+      //         background: radial-gradient(
+      //            circle,
+      //            transparent,
+      //            transparent,
+      //            rgba(243, 252, 121, 0.2),
+      //            transparent,
+      //            transparent,
+      //            transparent,
+      //            transparent
+      //         );
+      //
+      //         filter: blur(10px);
+      //         pointer-events: none;
+      //         z-index: 0;
+      //      }
    }
    &__header {
       display: flex;
@@ -44,6 +44,14 @@
       gap: 6px;
       margin-bottom: 14px;
       padding: 6px 6px 0 6px;
+      &.tikets-header {
+         display: flex;
+         padding: 0;
+         flex-direction: row;
+         h2 {
+            padding: 6px 6px 0 6px;
+         }
+      }
       h2 {
          font-size: 32px;
          line-height: 1;
@@ -149,11 +157,25 @@
          background: #9cf680 !important;
          color: #0d3700 !important;
       }
+      &.yellow {
+         background: var(--accent-l);
+         color: var(--accent-d);
+      }
+      &.toggle:first-child {
+         border-radius: 25px 16px 16px 25px;
+      }
+      &.toggle:last-child {
+         border-radius: 16px 25px 25px 16px;
+      }
+      &.toggle:first-child:hover,
+      &.toggle:last-child:hover,
       &:hover {
          transition: all var(--elastic-s), background var(--classic-s);
          border-radius: 16px;
          padding: 14px 22px;
       }
+      &.toggle:first-child:active,
+      &.toggle:last-child:active,
       &:active {
          transition: all var(--elastic-s), background var(--classic-s);
          transform: scale(0.95);
@@ -484,7 +506,7 @@
          transform: rotate(-15deg) scale(0.9);
       }
       &.rezult:last-child {
-         transform: rotate(15deg) scale(0.9);;
+         transform: rotate(15deg) scale(0.9);
       }
    }
 }

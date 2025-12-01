@@ -31,7 +31,6 @@ import GroupManager from "../components/APanel/GroupManager";
 import InstructorManager from "../components/APanel/InstructorManager";
 import ClockDisplay from "../components/UI/ClockDisplay";
 import ReservationHistory from "../components/APanel/ReservationHistory";
-import ACalendarView from "../components/APanel/ACalendar";
 
 import { UserContext } from "../UserContext";
 import InstructorsGroupManager from "../components/APanel/InstructorsGroupManager";
@@ -205,7 +204,9 @@ function APanel() {
 
             <section className="modules">
                <ReservationHistory
-                  formattedReservations={formattedReservations}
+                  reservations={reservations} // lista RAW din API
+                  users={users} // pentru nume corecte
+                  instructors={instructors} // pentru nume instructori
                />
                <InstructorsGroupManager></InstructorsGroupManager>
             </section>

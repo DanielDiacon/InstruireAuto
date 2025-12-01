@@ -8,6 +8,11 @@ import {
    patchReservation,
    deleteReservation,
    getBusyReservations,
+   // meta endpoint (ETag / updated_since)
+   getReservationsMeta,
+   // NOU: filtrare + range pe lună
+   filterReservations,
+   buildMonthRange,
 } from "../api/reservationsService";
 
 /* ───────────────────── NEW: Delta sync (doar ce s-a schimbat) ───────────────────── */
@@ -18,8 +23,6 @@ export const fetchReservationsDelta = createAsyncThunk(
          const st = getState().reservations || {};
          const since = st.lastSyncedAt || null;
 
-         // Dacă backend-ul tău acceptă updated_since, super.
-         // Dacă nu, va returna tot și noi facem upsert local (fallback OK).
          const opts = since
             ? { updated_since: since, pageSize: 5000 }
             : { scope: "all", pageSize: 5000 };
@@ -41,9 +44,57 @@ export const fetchReservationsDelta = createAsyncThunk(
       }
    }
 );
-/* ──────────────────────────────────────────────────────────────────────────── */
 
-// --- Async thunks (ale tale, neschimbate) ---
+/* ───────────── NEW: Meta-check inteligent (polling smart) ─────────────
+   - Întoarce { refreshed:boolean, reason:string, etag?:string, serverTime?:string }
+   - Dacă serverul zice „nu s-a schimbat” → NU mai tragem delta
+   - Dacă dă eroare → încercăm delta ca fallback sigur
+------------------------------------------------------------------------ */
+export const maybeRefreshReservations = createAsyncThunk(
+   "reservations/maybeRefreshReservations",
+   async (_, { getState, dispatch, rejectWithValue }) => {
+      const st = getState().reservations || {};
+      const updated_since = st.lastSyncedAt || undefined;
+      const etag = st.etag || undefined;
+
+      try {
+         const meta = await getReservationsMeta({ updated_since, etag });
+         // meta: { changed:boolean, etag?:string, serverTime?:string }
+         if (meta?.changed) {
+            await dispatch(fetchReservationsDelta());
+            return {
+               refreshed: true,
+               reason: "meta-changed",
+               etag: meta?.etag || null,
+               serverTime: meta?.serverTime || null,
+            };
+         }
+         return {
+            refreshed: false,
+            reason: "not-modified",
+            etag: meta?.etag || etag || null,
+            serverTime: meta?.serverTime || null,
+         };
+      } catch (err) {
+         // fallback sigur: încearcă delta; dacă nici delta nu merge, raportează
+         try {
+            await dispatch(fetchReservationsDelta());
+            return {
+               refreshed: true,
+               reason: "error-fallback",
+               etag: null,
+               serverTime: null,
+            };
+         } catch (e2) {
+            return rejectWithValue(
+               err?.message || "maybeRefreshReservations failed"
+            );
+         }
+      }
+   }
+);
+
+// --- Async thunks (ale tale) ---
 export const fetchReservations = createAsyncThunk(
    "reservations/fetchReservations",
    async (_, { rejectWithValue }) => {
@@ -128,6 +179,40 @@ export const fetchBusy = createAsyncThunk(
       try {
          const data = await getBusyReservations(query);
          return { query, data };
+      } catch (e) {
+         return rejectWithValue(e.message);
+      }
+   }
+);
+
+/* ───────────── NEW: filtrare după /api/reservations/filter ───────────── */
+
+/** Generic: orice combinație de filtre suportate de backend */
+export const fetchReservationsFiltered = createAsyncThunk(
+   "reservations/fetchReservationsFiltered",
+   async (filters, { rejectWithValue }) => {
+      try {
+         const res = await filterReservations(filters);
+         const items = Array.isArray(res) ? res : res.items || [];
+         return { items, filters };
+      } catch (e) {
+         return rejectWithValue(e.message);
+      }
+   }
+);
+
+/** Concret: doar pe o lună (după o dată dată) */
+export const fetchReservationsForMonth = createAsyncThunk(
+   "reservations/fetchReservationsForMonth",
+   async ({ date, extraFilters } = {}, { rejectWithValue }) => {
+      try {
+         const range = buildMonthRange(date);
+         const res = await filterReservations({
+            ...(extraFilters || {}),
+            ...range,
+         });
+         const items = Array.isArray(res) ? res : res.items || [];
+         return { items, range };
       } catch (e) {
          return rejectWithValue(e.message);
       }
@@ -238,10 +323,13 @@ const reservationsSlice = createSlice({
       availableInstructors: [],
       busyQuery: null,
 
-      /* ───────────── NEW: meta pentru sync ───────────── */
+      /* ───────────── meta pentru sync ───────────── */
       lastSyncedAt: null, // ultimul timestamp folosit la delta
       etag: null, // dacă serverul trimite ETag
       hydrated: false, // devine true după prima rehidratare / fetch OK
+
+      // 🔥 diapazonul activ de rezervări (ex: luna curentă)
+      activeRange: null, // { startDateFrom, startDateTo }
    },
    reducers: {
       setReservationColorLocal: (state, action) => {
@@ -264,9 +352,13 @@ const reservationsSlice = createSlice({
          delete state.loadingByStudent[sid];
          delete state.errorByStudent[sid];
       },
+      // NEW: poți seta manual range-ul activ dacă vrei
+      setActiveRange(state, action) {
+         state.activeRange = action.payload || null;
+      },
    },
    extraReducers: (builder) => {
-      /* ───────────── NEW: DELTA ───────────── */
+      /* ───────────── DELTA ───────────── */
       builder
          .addCase(fetchReservationsDelta.pending, (s) => {
             // nu blocăm UI-ul la delta
@@ -278,7 +370,6 @@ const reservationsSlice = createSlice({
                etag = null,
                now,
             } = a.payload || {};
-
             // upsert local
             if (Array.isArray(items) && items.length) {
                const byId = new Map(s.list.map((r) => [String(r.id), r]));
@@ -291,13 +382,11 @@ const reservationsSlice = createSlice({
                }
                s.list = Array.from(byId.values());
             }
-
             // tombstone (ștergeri)
             if (Array.isArray(deleted) && deleted.length) {
                const rm = new Set(deleted.map((d) => String(d)));
                s.list = s.list.filter((r) => !rm.has(String(r.id)));
             }
-
             s.lastSyncedAt = now || s.lastSyncedAt || new Date().toISOString();
             if (etag) s.etag = etag;
             s.hydrated = true;
@@ -306,7 +395,7 @@ const reservationsSlice = createSlice({
             // lăsăm cache-ul existent în pace
          });
 
-      // ===== getReservations (ale tale) =====
+      // ===== getReservations =====
       builder
          .addCase(fetchReservations.pending, (s) => {
             s.loadingAll = true;
@@ -318,8 +407,8 @@ const reservationsSlice = createSlice({
             s.loadingAll = false;
             s.loading = false;
             s.list = a.payload;
-            s.lastSyncedAt = new Date().toISOString(); // NEW
-            s.hydrated = true; // NEW
+            s.lastSyncedAt = new Date().toISOString();
+            s.hydrated = true;
          })
          .addCase(fetchReservations.rejected, (s, a) => {
             s.loadingAll = false;
@@ -328,7 +417,7 @@ const reservationsSlice = createSlice({
             s.error = a.payload;
          });
 
-      // ===== ALL (calendar) (ale tale) =====
+      // ===== ALL (calendar) =====
       builder
          .addCase(fetchAllReservations.pending, (s) => {
             s.loadingAll = true;
@@ -340,8 +429,8 @@ const reservationsSlice = createSlice({
             s.loadingAll = false;
             s.loading = false;
             s.list = a.payload;
-            s.lastSyncedAt = new Date().toISOString(); // NEW
-            s.hydrated = true; // NEW
+            s.lastSyncedAt = new Date().toISOString();
+            s.hydrated = true;
          })
          .addCase(fetchAllReservations.rejected, (s, a) => {
             s.loadingAll = false;
@@ -350,7 +439,7 @@ const reservationsSlice = createSlice({
             s.error = a.payload;
          });
 
-      // ===== restul extraReducers (ale tale) — neschimbate =====
+      // ===== add / update / delete =====
       builder
          .addCase(addReservation.pending, (s) => {
             s.loadingAll = true;
@@ -400,7 +489,10 @@ const reservationsSlice = createSlice({
          .addCase(removeReservation.fulfilled, (s, a) => {
             const id = a.payload;
             s.list = s.list.filter((r) => String(r.id) !== String(id));
-         })
+         });
+
+      // ===== busy =====
+      builder
          .addCase(fetchBusy.pending, (s) => {
             s.busyLoading = true;
             s.busyError = null;
@@ -422,10 +514,77 @@ const reservationsSlice = createSlice({
             s.availableGroups = [];
             s.availableInstructors = [];
          });
+
+      /* ───────────── NEW: fetchReservationsFiltered / fetchReservationsForMonth ───────────── */
+      builder
+         .addCase(fetchReservationsFiltered.pending, (s) => {
+            s.loadingAll = true;
+            s.loading = true;
+            s.errorAll = null;
+            s.error = null;
+         })
+         .addCase(fetchReservationsFiltered.fulfilled, (s, a) => {
+            s.loadingAll = false;
+            s.loading = false;
+            const { items, filters } = a.payload || {};
+            s.list = items || [];
+            s.lastSyncedAt = new Date().toISOString();
+            s.hydrated = true;
+
+            if (filters?.startDateFrom || filters?.startDateTo) {
+               s.activeRange = {
+                  startDateFrom: filters.startDateFrom || null,
+                  startDateTo: filters.startDateTo || null,
+               };
+            }
+         })
+         .addCase(fetchReservationsFiltered.rejected, (s, a) => {
+            s.loadingAll = false;
+            s.loading = false;
+            s.errorAll = a.payload;
+            s.error = a.payload;
+         })
+         .addCase(fetchReservationsForMonth.pending, (s) => {
+            s.loadingAll = true;
+            s.loading = true;
+            s.errorAll = null;
+            s.error = null;
+         })
+         .addCase(fetchReservationsForMonth.fulfilled, (s, a) => {
+            s.loadingAll = false;
+            s.loading = false;
+            const { items, range } = a.payload || {};
+            s.list = items || [];
+            s.lastSyncedAt = new Date().toISOString();
+            s.hydrated = true;
+            if (range) s.activeRange = range;
+         })
+         .addCase(fetchReservationsForMonth.rejected, (s, a) => {
+            s.loadingAll = false;
+            s.loading = false;
+            s.errorAll = a.payload;
+            s.error = a.payload;
+         });
+
+      /* ───────────── state updates din maybeRefreshReservations ───────────── */
+      builder
+         .addCase(maybeRefreshReservations.fulfilled, (s, a) => {
+            const { refreshed, etag, serverTime } = a.payload || {};
+            if (etag) s.etag = etag;
+            if (!refreshed && serverTime) s.lastSyncedAt = serverTime;
+            if (s.list?.length) s.hydrated = true;
+         })
+         .addCase(maybeRefreshReservations.rejected, (s) => {
+            // nimic, evităm să stricăm starea existentă
+         });
    },
 });
 
-export const { setReservationColorLocal, resetBusy, clearStudentReservations } =
-   reservationsSlice.actions;
+export const {
+   setReservationColorLocal,
+   resetBusy,
+   clearStudentReservations,
+   setActiveRange,
+} = reservationsSlice.actions;
 
 export default reservationsSlice.reducer;

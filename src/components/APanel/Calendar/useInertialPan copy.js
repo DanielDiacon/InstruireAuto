@@ -56,11 +56,8 @@ export default function useInertialPan(
       });
    };
 
-   // 🔑 CHEIA: urmărim scrollRef.current; când apare elementul, rulăm din nou efectul
-   const targetEl = scrollRef?.current || null;
-
    useEffect(() => {
-      const el = targetEl;
+      const el = scrollRef.current;
       if (!el) return;
 
       const endInteraction = () => {
@@ -150,7 +147,6 @@ export default function useInertialPan(
          acc.current.dx += dx;
          acc.current.dy += dy;
 
-         // filtrează puțin mișcarea pentru viteză
          vel.current.x = vel.current.x * 0.7 + dx * 0.3;
          vel.current.y = vel.current.y * 0.7 + dy * 0.3;
 
@@ -179,18 +175,13 @@ export default function useInertialPan(
             return;
          }
 
-         // === INERȚIE OPTIMIZATĂ ===
-         const frictionX = 0.9; // mai mare = se oprește mai repede
-         const frictionY = 0.9;
-         const stopSpeedX = 0.05;
-         const stopSpeedY = 0.05;
+         const frictionX = 0.94;
+         const frictionY = 0.94;
+         const stopSpeedX = 0.02;
+         const stopSpeedY = 0.02;
 
-         // clamp viteză maximă, să nu facă salturi
-         let vx = inertiaX ? vel.current.x * 1.4 : 0;
-         let vy = inertiaY ? vel.current.y * 1.4 : 0;
-         const MAX_V = 70;
-         vx = Math.max(-MAX_V, Math.min(MAX_V, vx));
-         vy = Math.max(-MAX_V, Math.min(MAX_V, vy));
+         let vx = inertiaX ? vel.current.x * 1.2 : 0;
+         let vy = inertiaY ? vel.current.y * 1.2 : 0;
 
          const tooSlowX = !inertiaX || Math.abs(vx) < stopSpeedX;
          const tooSlowY = !inertiaY || Math.abs(vy) < stopSpeedY;
@@ -202,40 +193,25 @@ export default function useInertialPan(
             return;
          }
 
-         let lastTime = performance.now();
-
          const tick = () => {
-            const now = performance.now();
-            const dt = Math.min((now - lastTime) / 16.7 || 1, 4); // factor relativ la 60fps
-            lastTime = now;
-
-            // aplicăm fricțiunea în funcție de timp
-            const fx = Math.pow(frictionX, dt);
-            const fy = Math.pow(frictionY, dt);
-            vx *= fx;
-            vy *= fy;
+            vx *= frictionX;
+            vy *= frictionY;
 
             const smallX = !inertiaX || Math.abs(vx) < stopSpeedX;
             const smallY = !inertiaY || Math.abs(vy) < stopSpeedY;
 
-            const beforeLeft = el.scrollLeft;
-            const beforeTop = el.scrollTop;
+            if (smallX && smallY) {
+               inertiaRaf.current = null;
+               isPanning.current = false;
+               endInteraction();
+               return;
+            }
 
             if (!smallX && vx) {
                el.scrollLeft -= vx;
             }
             if (!smallY && vy) {
                el.scrollTop -= vy;
-            }
-
-            const hitBoundaryX = el.scrollLeft === beforeLeft && !smallX;
-            const hitBoundaryY = el.scrollTop === beforeTop && !smallY;
-
-            if ((smallX && smallY) || (hitBoundaryX && hitBoundaryY)) {
-               inertiaRaf.current = null;
-               isPanning.current = false;
-               endInteraction();
-               return;
             }
 
             inertiaRaf.current = requestAnimationFrame(tick);
@@ -267,8 +243,9 @@ export default function useInertialPan(
             (inertiaX && magX > 0.5) || (inertiaY && magY > 0.5);
 
          if (inertiaRaf.current && shouldStop) {
-            // dacă userul dă cu rotița, oprim inerția imediat
-            stopInertiaNow();
+            cancelAnimationFrame(inertiaRaf.current);
+            inertiaRaf.current = null;
+            endInteraction();
          }
       };
 
@@ -305,7 +282,7 @@ export default function useInertialPan(
          window.removeEventListener("dvcancelinertia-all", onCancelInertia);
       };
    }, [
-      targetEl, // 👈 când se schimbă scrollRef.current, reatașăm handler-ele
+      scrollRef,
       suspendFlagsRef,
       pixelScaleX,
       pixelScaleY,

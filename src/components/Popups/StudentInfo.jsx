@@ -7,7 +7,7 @@ import { fetchUsers } from "../../store/usersSlice";
 import { updateUser } from "../../api/usersService";
 import {
    getExamHistoryForStudentIdAll,
-   getExamHistoryForUser, 
+   getExamHistoryForUser,
    downloadExamPdf,
 } from "../../api/examService";
 
@@ -28,6 +28,65 @@ const normEmail = (s) =>
    String(s || "")
       .trim()
       .toLowerCase();
+
+// === Format ISO -> "DD MM YYYY - HH:MM" fără schimbare de oră ===
+function fmtIsoDDMMYYYY_HHMM(val) {
+   if (val == null) return "—";
+
+   // Dacă e string ISO: extragem direct componentele (fără a crea Date)
+   if (typeof val === "string") {
+      const m = val.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+      if (m) {
+         const [, Y, M, D, h, min] = m;
+         return `${D} ${M} ${Y} - ${h}:${min}`;
+      }
+      return String(val);
+   }
+
+   // Dacă e Date/număr: folosim *UTC* ca să nu deplasăm ora din ISO-ul inițial
+   const d = val instanceof Date ? val : new Date(val);
+   if (isNaN(d)) return "—";
+   const pad = (n) => String(n).padStart(2, "0");
+   const Y = d.getUTCFullYear();
+   const M = pad(d.getUTCMonth() + 1);
+   const D = pad(d.getUTCDate());
+   const h = pad(d.getUTCHours());
+   const min = pad(d.getUTCMinutes());
+   return `${D} ${M} ${Y} - ${h}:${min}`;
+}
+
+/** Obține în siguranță un timestamp numeric pentru începutul programării (pentru sortare). */
+function getReservationStartMs(r) {
+   const v =
+      r?.startTime ??
+      r?.start ??
+      r?.startAt ??
+      r?.startISO ??
+      r?.startDate ??
+      null;
+
+   if (v == null) return 0;
+
+   if (typeof v === "string") {
+      // Dacă e în format "YYYY-MM-DDTHH:MM..." sau "YYYY-MM-DD HH:MM..."
+      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+      if (m) {
+         const Y = Number(m[1]);
+         const M = Number(m[2]) - 1;
+         const D = Number(m[3]);
+         const h = Number(m[4]);
+         const min = Number(m[5]);
+         // Considerăm valorile ca UTC pentru o ordine stabilă.
+         return Date.UTC(Y, M, D, h, min, 0, 0);
+      }
+      const p = Date.parse(v);
+      return Number.isNaN(p) ? 0 : p;
+   }
+
+   const d = v instanceof Date ? v : new Date(v);
+   const ms = d.getTime();
+   return Number.isNaN(ms) ? 0 : ms;
+}
 
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
@@ -87,21 +146,6 @@ export default function StudentInfoPopup({ student, onClose }) {
    }, [student, users]);
 
    const targetUserId = targetUser?.id || student?.userId || null;
-
-   const fmtRO = useMemo(
-      () =>
-         new Intl.DateTimeFormat("ro-MD", {
-            timeZone: "Europe/Chisinau",
-            day: "2-digit",
-            month: "2-digit",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-         }),
-      []
-   );
 
    useEffect(() => {
       dispatch(fetchUsers());
@@ -239,11 +283,19 @@ export default function StudentInfoPopup({ student, onClose }) {
       attemptUserId: getAttemptUserId(it),
    });
 
+   // doar programările studentului curent
    const myReservations = useMemo(() => {
       if (!targetUserId) return [];
       const uid = String(targetUserId);
       return reservations.filter((r) => getReservationUserId(r) === uid);
    }, [reservations, targetUserId]);
+
+   // sortare crescătoare după startTime
+   const myReservationsAsc = useMemo(() => {
+      const arr = [...myReservations];
+      arr.sort((a, b) => getReservationStartMs(a) - getReservationStartMs(b));
+      return arr;
+   }, [myReservations]);
 
    useEffect(() => {
       let cancelled = false;
@@ -283,7 +335,10 @@ export default function StudentInfoPopup({ student, onClose }) {
                for (;;) {
                   const batch = await getExamHistoryForUser(
                      String(targetUserId),
-                     { page, limit: pageSize }
+                     {
+                        page,
+                        limit: pageSize,
+                     }
                   );
                   const items = Array.isArray(batch)
                      ? batch
@@ -552,20 +607,24 @@ export default function StudentInfoPopup({ student, onClose }) {
                      </p>
                   )}
                   {error && <p className="students-info__error">{error}</p>}
-                  {!loading && myReservations.length === 0 && (
+                  {!loading && myReservationsAsc.length === 0 && (
                      <p className="students-info__empty">
                         Nu există programări.
                      </p>
                   )}
 
-                  {!loading && myReservations.length > 0 && (
+                  {!loading && myReservationsAsc.length > 0 && (
                      <div className="students-info__list-wrapper">
                         <div className="students-info__list">
-                           {myReservations.map((res, index) => {
+                           {myReservationsAsc.map((res, index) => {
                               const status = res.status || "pending";
                               return (
                                  <div
-                                    key={res.id + "-" + index}
+                                    key={
+                                       (res.id ?? res._id ?? "res") +
+                                       "-" +
+                                       index
+                                    }
                                     onClick={() =>
                                        openSubPopup("reservationEdit", {
                                           reservationId: res.id,
@@ -585,11 +644,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                                              : "fără instructor"}
                                        </p>
                                        <span>
-                                          {res.startTime
-                                             ? fmtRO.format(
-                                                  new Date(res.startTime)
-                                               )
-                                             : "—"}
+                                          {fmtIsoDDMMYYYY_HHMM(res.startTime)}
                                        </span>
                                     </div>
                                     <div className="students-info__item-right">
@@ -649,12 +704,11 @@ export default function StudentInfoPopup({ student, onClose }) {
                               const status = (
                                  a.status || "UNKNOWN"
                               ).toLowerCase();
-
                               const started = a.startedAt
-                                 ? fmtRO.format(new Date(a.startedAt))
+                                 ? fmtIsoDDMMYYYY_HHMM(a.startedAt)
                                  : "–";
                               const finished = a.finishedAt
-                                 ? fmtRO.format(new Date(a.finishedAt))
+                                 ? fmtIsoDDMMYYYY_HHMM(a.finishedAt)
                                  : null;
 
                               const lineLeft = finished

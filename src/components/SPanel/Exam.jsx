@@ -49,6 +49,87 @@ const onlyDigits13 = (v) =>
       .slice(0, 13);
 const isIdnp13 = (v) => /^\d{13}$/.test(String(v || ""));
 
+/* ---------- i18n (RO/RU) ---------- */
+const I18N = {
+   ro: {
+      finish: "Încheie",
+      question: "Întrebarea",
+      lives: "Vieți",
+      mistakes_label: "Greșeli",
+      back: "Înapoi",
+      next: "Următorul",
+      answer_locked: "Răspuns blocat",
+      choose_answer: "Alege răspunsul",
+      passed: "Ai promovat",
+      failed: "Nu ai promovat",
+      questions_count: "Întrebări",
+      mistakes_made: "Greșeli făcute",
+      time_left: "Timp rămas",
+      back_to_start: "Înapoi la început",
+
+      permission_active: "Permisiune activă",
+      no_permission_title: "Nu ai permisiunea",
+    no_permission_body: "Nu ai permisiunea pentru test în acest moment.",
+      check_again: "Verifică din nou",
+      history_title: "Încercările tale la examen",
+      loading_attempts: "Se încarcă încercările…",
+      no_attempts: "Nu există încercări.",
+      start_exam: "Începe examenul",
+      edit_idnp: "Modifică IDNP",
+      access_granted:
+         "Acces acordat. Când ești pregătit, apasă „Începe examenul”.",
+      start_title_checking: "Se verifică istoricul…",
+      start_title_save_idnp: "Salvează mai întâi IDNP-ul",
+      start_title_start: "Începe examenul",
+
+      leave_warning:
+         "Chiar dorești să părăsești pagina examenului? Întrebarea curentă va fi marcată greșit (penalizare).",
+      route_leave_confirm:
+         "Chiar dorești să părăsești /student/exam? Întrebarea curentă va fi marcată greșit (penalizare).",
+      penalty_msg:
+         "Ai părăsit fereastra. Întrebarea curentă a fost marcată greșit (penalizare). Poți continua examenul.",
+   },
+   ru: {
+      finish: "Завершить",
+      question: "Вопрос",
+      lives: "Жизни",
+      mistakes_label: "Ошибки",
+      back: "Назад",
+      next: "Далее",
+      answer_locked: "Ответ заблокирован",
+      choose_answer: "Выберите ответ",
+      passed: "Вы сдали",
+      failed: "Вы не сдали",
+      questions_count: "Вопросы",
+      mistakes_made: "Сделанные ошибки",
+      time_left: "Осталось времени",
+      back_to_start: "Назад к началу",
+
+      permission_active: "Разрешение активно",
+      no_permission_title: "Нет разрешения",
+    no_permission_body: "У вас нет разрешения на прохождение теста в данный момент.",
+      check_again: "Проверить снова",
+      history_title: "Ваши попытки экзамена",
+      loading_attempts: "Загружаем попытки…",
+      no_attempts: "Попыток нет.",
+      start_exam: "Начать экзамен",
+      edit_idnp: "Изменить IDNP",
+      access_granted:
+         "Доступ разрешен. Когда будете готовы, нажмите «Начать экзамен».",
+      start_title_checking: "Проверяем историю…",
+      start_title_save_idnp: "Сначала сохраните IDNP",
+      start_title_start: "Начать экзамен",
+
+      leave_warning:
+         "Вы действительно хотите покинуть страницу экзамена? Текущий вопрос будет засчитан неверным (штраф).",
+      route_leave_confirm:
+         "Вы действительно хотите уйти со /student/exam? Текущий вопрос будет засчитан неверным (штраф).",
+      penalty_msg:
+         "Вы покинули окно. Текущий вопрос засчитан неверным (штраф). Можете продолжить экзамен.",
+   },
+};
+const makeT = (lang) => (key) => I18N[lang]?.[key] ?? I18N.ro[key] ?? key;
+
 /** ✅ permisiune “activă” doar când avem fereastră validă & încadrări */
 const computeIsAllowed = (perm) => {
    if (!perm) return false;
@@ -102,18 +183,19 @@ const normalizeAttempt = (it) => ({
 /* ---------- config ---------- */
 const PASS_SCORE_DEFAULT = 46; // ✅ prag de promovare
 const WRONG_FILL_SENTINEL = 99;
+// păstrăm constantele vechi, dar vom folosi t() pentru textele efective
 const LEAVE_WARNING_TEXT =
    "Chiar dorești să părăsești pagina examenului? Întrebarea curentă va fi marcată greșit (penalizare).";
 const ROUTE_LEAVE_CONFIRM =
    "Chiar dorești să părăsești /student/exam? Întrebarea curentă va fi marcată greșit (penalizare).";
 
-/** Hook simplu pt. confirm + side-effect la navigare internă (RR v6) */
-function useLeaveGuard(when, onConfirm) {
+/** Hook simplu pt. confirm + side-effect la navigare internă (RR v6) — acum cu text personalizabil */
+function useLeaveGuard(when, onConfirm, confirmText) {
    const nav = useContext(NavigationContext);
    useEffect(() => {
       if (!when || !nav?.navigator?.block) return;
       const unblock = nav.navigator.block(async (tx) => {
-         const ok = window.confirm(ROUTE_LEAVE_CONFIRM);
+         const ok = window.confirm(confirmText || ROUTE_LEAVE_CONFIRM);
          if (ok) {
             try {
                await onConfirm?.("route-leave");
@@ -124,7 +206,7 @@ function useLeaveGuard(when, onConfirm) {
          }
       });
       return unblock;
-   }, [when, nav, onConfirm]);
+   }, [when, nav, onConfirm, confirmText]);
 }
 
 /** Traduceri status -> RO */
@@ -139,6 +221,20 @@ const roStatus = (s) => {
       k === "inprogress"
    )
       return "în desfășurare";
+   return s || "—";
+};
+/** Traduceri status -> RU */
+const ruStatus = (s) => {
+   const k = String(s || "").toLowerCase();
+   if (k.includes("failed") || k === "fail") return "не сдан";
+   if (k.includes("completed") || k === "finished" || k === "done")
+      return "сдан";
+   if (
+      k.includes("in_progress") ||
+      k.includes("in-progress") ||
+      k === "inprogress"
+   )
+      return "в процессе";
    return s || "—";
 };
 
@@ -186,6 +282,25 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    const viewRef = useRef(view);
    const idxRef = useRef(idx);
    const penaltyCooldownRef = useRef(0);
+
+   // limba selectată (persistată) + limba UI înghețată pe durata testului
+   const [lang, setLang] = useState(() => {
+      const saved =
+         (typeof localStorage !== "undefined" &&
+            localStorage.getItem("exam.lang")) ||
+         "ro";
+      return saved === "ru" ? "ru" : "ro";
+   });
+   const [examUiLang, setExamUiLang] = useState(null);
+   const currentLang =
+      view === "test" || view === "result" ? examUiLang || lang : lang;
+   const t = useMemo(() => makeT(currentLang), [currentLang]);
+
+   useEffect(() => {
+      try {
+         localStorage.setItem("exam.lang", lang);
+      } catch {}
+   }, [lang]);
 
    useEffect(() => {
       answersMapRef.current = answersMap;
@@ -280,10 +395,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          const curQ = (questionsRef.current || [])[idxRef.current];
          if (curQ) {
             const changed = await answerOneAsWrong99(curQ, reason);
-            if (changed)
-               setError(
-                  "Ai părăsit fereastra. Întrebarea curentă a fost marcată greșit (penalizare). Poți continua examenul."
-               );
+            if (changed) setError(t("penalty_msg"));
          }
 
          setTimeout(() => {
@@ -297,13 +409,13 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
             else autoNext(amap);
          }, 0);
       },
-      [answerOneAsWrong99, getAllowedWrong]
+      [answerOneAsWrong99, getAllowedWrong, t]
    );
 
    /* ---------- permisiune: polling continuu la 3s ---------- */
    useEffect(() => {
       let cancelled = false;
-      let t;
+      let tmo;
       const tick = async () => {
          try {
             const p = await getMyPermissionStatus();
@@ -311,13 +423,13 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          } catch {
             // nu stricăm UI dacă e eroare la fetch
          } finally {
-            if (!cancelled) t = setTimeout(tick, 3000);
+            if (!cancelled) tmo = setTimeout(tick, 3000);
          }
       };
       tick();
       return () => {
          cancelled = true;
-         if (t) clearTimeout(t);
+         if (tmo) clearTimeout(tmo);
       };
    }, []);
 
@@ -456,11 +568,21 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          }
          setPerm(p);
 
+         // îngheață limba UI pentru întreaga sesiune de test + rezultat
+         setExamUiLang(lang);
+
          const started = await startExam({
             userId: Number(user.id),
             timeLimit: 60,
-            passScore: PASS_SCORE_DEFAULT, // ✅ prag corect
+            passScore: PASS_SCORE_DEFAULT,
+            lang, // ✅ trimitem 'ro' sau 'ru' ca query param
          });
+
+         // dacă backend întoarce limba, sincronizează
+         if (started?.lang === "ru" || started?.lang === "ro") {
+            setExamUiLang(started.lang);
+         }
+
          setExam(started);
 
          const serverQs = Array.isArray(started?.questions)
@@ -723,7 +845,11 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    };
 
    /* ====== Protecții la părăsire ====== */
-   useLeaveGuard(view === "test", penalizeOnceThenContinue);
+   useLeaveGuard(
+      view === "test",
+      penalizeOnceThenContinue,
+      t("route_leave_confirm")
+   );
    useEffect(() => {
       if (view !== "test") return;
       let cooldown = false;
@@ -742,9 +868,10 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    useEffect(() => {
       if (view !== "test") return;
       const onBeforeUnload = (e) => {
+         const msg = t("leave_warning");
          e.preventDefault();
-         e.returnValue = LEAVE_WARNING_TEXT;
-         return LEAVE_WARNING_TEXT;
+         e.returnValue = msg;
+         return msg;
       };
       const onPageHide = () => penalizeOnceThenContinue("pagehide");
       window.addEventListener("beforeunload", onBeforeUnload);
@@ -753,7 +880,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          window.removeEventListener("beforeunload", onBeforeUnload);
          window.removeEventListener("pagehide", onPageHide);
       };
-   }, [view, penalizeOnceThenContinue]);
+   }, [view, penalizeOnceThenContinue, t]);
 
    useEffect(() => {
       if (remaining === 0 && exam && view === "test") {
@@ -802,10 +929,10 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
 
    const startDisabled = attemptsLoading || (baseShowIdnpGate && !hasIdnp);
    const startTitle = attemptsLoading
-      ? "Se verifică istoricul…"
+      ? t("start_title_checking")
       : baseShowIdnpGate && !hasIdnp
-      ? "Salvează mai întâi IDNP-ul"
-      : "Începe examenul";
+      ? t("start_title_save_idnp")
+      : t("start_title_start");
 
    return (
       <div className="practice exam">
@@ -815,7 +942,8 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                <div className="card top">
                   {allowed ? (
                      <>
-                        <h2>Permisiune activă</h2>
+                        <h2>{t("permission_active")}</h2>
+                        {/* ===== Selectare limbă înainte de start ===== */}
 
                         {/* === IDNP Gate (NUMAI dacă NU ai încercări) sau deschis manual === */}
                         {showIdnpGate && (
@@ -868,7 +996,9 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                           setIdnpBusy(true);
                                           const updated = await updateUser(
                                              Number(user.id),
-                                             { idnp: clean }
+                                             {
+                                                idnp: clean,
+                                             }
                                           );
                                           if (typeof setUser === "function") {
                                              setUser({
@@ -884,13 +1014,13 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                           if (manualIdnpEditor)
                                              setManualIdnpEditor(false);
                                        } catch (e) {
-                                          let t = "Eroare la salvare.";
+                                          let tmsg = "Eroare la salvare.";
                                           try {
                                              const parsed = JSON.parse(
                                                 String(e?.message || "{}")
                                              );
                                              if (parsed?.message)
-                                                t = Array.isArray(
+                                                tmsg = Array.isArray(
                                                    parsed.message
                                                 )
                                                    ? parsed.message.join(" ")
@@ -898,7 +1028,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                           } catch {}
                                           setIdnpMsg({
                                              type: "error",
-                                             text: t,
+                                             text: tmsg,
                                           });
                                        } finally {
                                           setIdnpBusy(false);
@@ -917,13 +1047,43 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                            </div>
                         )}
 
-                        {perm?.validUntil && (
-                           <p>
-                              Acces acordat. Când ești pregătit, apasă „Începe
-                              examenul”.
-                           </p>
-                        )}
+                        {perm?.validUntil && <p>{t("access_granted")}</p>}
 
+                        <div
+                           className="exam-lang"
+                           style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                              marginTop: 8,
+                              flexWrap: "wrap",
+                           }}
+                        >
+                           <div style={{ display: "flex", gap: 6 }}>
+                              <button
+                                 type="button"
+                                 className={
+                                    "practice__back bottom toggle" +
+                                    (lang === "ro" ? " yellow" : "")
+                                 }
+                                 onClick={() => setLang("ro")}
+                                 title="Română"
+                              >
+                                 RO
+                              </button>
+                              <button
+                                 type="button"
+                                 className={
+                                    "practice__back bottom toggle" +
+                                    (lang === "ru" ? " yellow" : "")
+                                 }
+                                 onClick={() => setLang("ru")}
+                                 title="Русский"
+                              >
+                                 RU
+                              </button>
+                           </div>
+                        </div>
                         <div
                            style={{
                               display: "flex",
@@ -938,7 +1098,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                               disabled={startDisabled}
                               title={startTitle}
                            >
-                              Începe examenul
+                              {t("start_exam")}
                            </button>
 
                            {/* ✅ vizibil mereu, chiar dacă inputul este ascuns */}
@@ -949,17 +1109,18 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                     setManualIdnpEditor((v) => !v);
                                     setIdnpMsg(null);
                                  }}
-                                 title="Modifică IDNP"
+                                 title={t("edit_idnp")}
                               >
-                                 Modifică IDNP
+                                 {t("edit_idnp")}
                               </button>
                            )}
                         </div>
                      </>
                   ) : (
                      <>
-                        <h2>Nu ai permisiunea</h2>
-                        <p>Nu ai permisiunea pentru test în acest moment.</p>
+                    <h2>{t("no_permission_title")}</h2>
+<p>{t("no_permission_body")}</p>
+
                         <button
                            onClick={async () => {
                               try {
@@ -969,7 +1130,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                            }}
                            className="practice__back bottom"
                         >
-                           Verifică din nou
+                           {t("check_again")}
                         </button>
 
                         {showIdnpGate && (
@@ -998,7 +1159,9 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                        setIdnpBusy(true);
                                        const updated = await updateUser(
                                           Number(user.id),
-                                          { idnp: clean }
+                                          {
+                                             idnp: clean,
+                                          }
                                        );
                                        if (typeof setUser === "function") {
                                           setUser({
@@ -1014,17 +1177,22 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                        if (manualIdnpEditor)
                                           setManualIdnpEditor(false);
                                     } catch (e) {
-                                       let t = "Eroare la salvare.";
+                                       let tmsg = "Eroare la salvare.";
                                        try {
                                           const parsed = JSON.parse(
                                              String(e?.message || "{}")
                                           );
                                           if (parsed?.message)
-                                             t = Array.isArray(parsed.message)
+                                             tmsg = Array.isArray(
+                                                parsed.message
+                                             )
                                                 ? parsed.message.join(" ")
                                                 : parsed.message;
                                        } catch {}
-                                       setIdnpMsg({ type: "error", text: t });
+                                       setIdnpMsg({
+                                          type: "error",
+                                          text: tmsg,
+                                       });
                                     } finally {
                                        setIdnpBusy(false);
                                     }
@@ -1061,12 +1229,12 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
 
                {/* ISTORIC ÎNCERCĂRI */}
                <div className="card list">
-                  <h4>Încercările tale la examen</h4>
-                  {attemptsLoading && <p>Se încarcă încercările…</p>}
+                  <h4>{t("history_title")}</h4>
+                  {attemptsLoading && <p>{t("loading_attempts")}</p>}
                   {attemptsError && <p>{attemptsError}</p>}
                   {!attemptsLoading &&
                      !attemptsError &&
-                     attempts.length === 0 && <p>Nu există încercări.</p>}
+                     attempts.length === 0 && <p>{t("no_attempts")}</p>}
                   {!attemptsLoading &&
                      !attemptsError &&
                      attempts.length > 0 && (
@@ -1075,7 +1243,10 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                               const statusKey = String(
                                  a.status || ""
                               ).toLowerCase();
-                              const statusText = roStatus(statusKey);
+                              const statusText =
+                                 currentLang === "ru"
+                                    ? ruStatus(statusKey)
+                                    : roStatus(statusKey);
 
                               const started = a.startedAt
                                  ? fmtRO.format(new Date(a.startedAt))
@@ -1115,7 +1286,9 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
 
                               const scoreText =
                                  totalQ > 0
-                                    ? `${Math.round( (a.scorePct * 100) / totalQ )}%`
+                                    ? `${Math.round(
+                                         (a.scorePct * 100) / totalQ
+                                      )}%`
                                     : pct != null
                                     ? `Scor: ${pct}%`
                                     : "–";
@@ -1160,18 +1333,20 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                         goToResult(); // 🔄 tranziție
                      }}
                   >
-                     Încheie
+                     {t("finish")}
                   </button>
 
                   <div className="practice__toolbar-center">
                      <div className="practice__question-index">
-                        Întrebarea {Math.min(idx + 1, total)}/{total}
+                        {t("question")} {Math.min(idx + 1, total)}/{total}
                      </div>
 
                      {useHearts ? (
                         <div
                            className="lives__pill"
-                           aria-label={`Vieți: ${livesLeft}/${maxLives}`}
+                           aria-label={`${t(
+                              "lives"
+                           )}: ${livesLeft}/${maxLives}`}
                         >
                            {Array.from({ length: maxLives }).map((_, i) => {
                               const lost = i < mistakesMade;
@@ -1198,7 +1373,9 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                      ) : (
                         <div
                            className="lives__pill lives__pill--dots"
-                           aria-label={`Greșeli: ${mistakesMade}/${maxLives}`}
+                           aria-label={`${t(
+                              "mistakes_label"
+                           )}: ${mistakesMade}/${maxLives}`}
                         >
                            {Array.from({ length: maxLives }).map((_, i) => {
                               const active = i < mistakesMade;
@@ -1230,7 +1407,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                            (status === "bad" ? " practice__dot--bad" : "") +
                            (status === "none" ? " practice__dot--none" : "")
                         }
-                        title={`Întrebarea ${i + 1}`}
+                        title={`${t("question")} ${i + 1}`}
                         onClick={() => jumpTo(i)}
                      >
                         {i + 1}
@@ -1320,8 +1497,8 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                  disabled={already || isBusy}
                                  title={
                                     already
-                                       ? "Răspuns blocat"
-                                       : "Alege răspunsul"
+                                       ? t("answer_locked")
+                                       : t("choose_answer")
                                  }
                               >
                                  <span>{ans}</span>
@@ -1338,7 +1515,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                         onClick={goPrev}
                         disabled={idx === 0}
                      >
-                        Înapoi
+                        {t("back")}
                      </button>
                      <div className="practice__spacer" />
                      <button
@@ -1347,7 +1524,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                         onClick={goNext}
                         disabled={idx >= total - 1}
                      >
-                        Următorul
+                        {t("next")}
                      </button>
                   </div>
                </div>
@@ -1364,13 +1541,13 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                   transition: "transform 360ms ease, opacity 360ms ease",
                }}
             >
-               <h2>
-                  {verdict === "PASSED" ? "Ai promovat" : "Nu ai promovat"}
-               </h2>
+               <h2>{verdict === "PASSED" ? t("passed") : t("failed")}</h2>
 
                <div
                   className="result__hearts"
-                  aria-label={`Greșeli: ${mistakesMade}/${maxLives}`}
+                  aria-label={`${t(
+                     "mistakes_label"
+                  )}: ${mistakesMade}/${maxLives}`}
                   style={{
                      display: "flex",
                      gap: 8,
@@ -1400,8 +1577,8 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                </div>
 
                <p style={{ marginTop: 6 }}>
-                  Întrebări: <b>{total}</b> • Greșeli făcute:{" "}
-                  <b>{mistakesMade}</b> • Timp rămas:{" "}
+                  {t("questions_count")}: <b>{total}</b> • {t("mistakes_made")}:{" "}
+                  <b>{mistakesMade}</b> • {t("time_left")}:{" "}
                   <b>{prettyTime(remaining)}</b>
                </p>
 
@@ -1414,11 +1591,12 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                      setIdx(0);
                      setRemaining(0);
                      setError("");
+                     setExamUiLang(null); // eliberează „înghețarea” limbii UI
                   }}
                   className="practice__back bottom"
                   style={{ marginTop: 8 }}
                >
-                  Înapoi la început
+                  {t("back_to_start")}
                </button>
             </div>
          )}

@@ -11,10 +11,13 @@ import React, {
    memo,
 } from "react";
 import { useDispatch, useSelector, shallowEqual } from "react-redux";
-
+import { listenCalendarRefresh } from "../Utils/calendarBus";
 import { fetchInstructorsGroups } from "../../store/instructorsGroupSlice";
 import { fetchCars } from "../../store/carsSlice";
-import { fetchReservationsDelta } from "../../store/reservationsSlice";
+import {
+   fetchReservationsDelta,
+   maybeRefreshReservations,
+} from "../../store/reservationsSlice";
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchUsers } from "../../store/usersSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
@@ -22,14 +25,13 @@ import { fetchInstructors } from "../../store/instructorsSlice";
 import { openPopup } from "../Utils/popupStore";
 import { ReactSVG } from "react-svg";
 import refreshIcon from "../../assets/svg/grommet-icons--power-reset.svg";
-import editIcon from "../../assets/svg/material-symbols--edit-outline-sharp.svg";
 import arrow from "../../assets/svg/arrow-s.svg";
 
 import useInertialPan from "./Calendar/useInertialPan";
 import InstructorColumnConnected from "./Calendar/InstructorColumnConnected";
-import { getInstructorBlackouts } from "../../api/instructorsService"; // ⬅️ NOU
+import { getInstructorBlackouts } from "../../api/instructorsService";
 
-/* ====== NAV STATE GLOBAL ====== */
+/* ====== NAV STATE GLOBAL (pentru navigate/title react-big-calendar) ====== */
 let __DV_NAV_STATE__ = {
    matchDays: [],
    queryKey: "",
@@ -38,8 +40,13 @@ let __DV_NAV_STATE__ = {
    snappedForKey: "",
    centerOnDateNextTick: false,
    allDaysSorted: [],
-   isInteracting: false, // <— nou
+   isInteracting: false,
+   pendingCenterDate: null,
+   navActive: false,
+   navTargetTs: null,
+   navUnlockTimer: null,
 };
+
 if (typeof window !== "undefined") {
    window.__DV_NAV_STATE__ = window.__DV_NAV_STATE__ || __DV_NAV_STATE__;
    __DV_NAV_STATE__ = window.__DV_NAV_STATE__;
@@ -77,6 +84,14 @@ const genId = () => {
    return `ev_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 };
 
+const dateKey = (d) => {
+   const x = new Date(d);
+   return `${x.getFullYear()}${String(x.getMonth() + 1).padStart(
+      2,
+      "0"
+   )}${String(x.getDate()).padStart(2, "0")}`;
+};
+
 const MOLDOVA_TZ = "Europe/Chisinau";
 const hhmm = (d) =>
    new Intl.DateTimeFormat("en-GB", {
@@ -102,104 +117,7 @@ const buildHighlightRegex = (parts, flags = "gi") => {
    return new RegExp(`(${list.join("|")})`, flags);
 };
 
-/* ===== ORDER index-only (3 coloane) ===== */
-const ORDER_SEP = "|";
-const COLS = 3;
-const dateKey = (d) => {
-   const x = new Date(d);
-   return `${x.getFullYear()}${String(x.getMonth() + 1).padStart(
-      2,
-      "0"
-   )}${String(x.getDate()).padStart(2, "0")}`;
-};
-const splitTokens = (str) =>
-   String(str || "")
-      .split(ORDER_SEP)
-      .map((t) => t.trim())
-      .filter(Boolean);
-const xyToIdx = (x, y) => (y - 1) * COLS + x;
-const idxToXY = (i) => {
-   const n = Math.max(1, Number(i) || 1);
-   const y = Math.floor((n - 1) / COLS) + 1;
-   const x = ((n - 1) % COLS) + 1;
-   return { x, y };
-};
-function getPosFromOrder(orderStr, d) {
-   const key = dateKey(d);
-   let allIdx = null;
-   for (const tok of splitTokens(orderStr)) {
-      let m = /^(\d{4})(\d{2})(\d{2})i(\d+)$/.exec(tok);
-      if (m && `${m[1]}${m[2]}${m[3]}` === key) return idxToXY(Number(m[4]));
-      m = /^(all|def)i(\d+)$/i.exec(tok);
-      if (m) allIdx = Number(m[2]);
-   }
-   return allIdx != null ? idxToXY(allIdx) : null;
-}
-const getPosGeneric = getPosFromOrder;
-function getDayOnlyPos(orderStr, d) {
-   const key = dateKey(d);
-   for (const tok of splitTokens(orderStr)) {
-      const m = /^(\d{4})(\d{2})(\d{2})i(\d+)$/.exec(tok);
-      if (m && `${m[1]}${m[2]}${m[3]}` === key) return idxToXY(Number(m[4]));
-   }
-   return null;
-}
-function upsertPosInOrder(orderStr, d, x, y) {
-   const key = dateKey(d);
-   const nextTok = `${key}i${xyToIdx(x, y)}`;
-   const out = [];
-   let replaced = false;
-   for (const tok of splitTokens(orderStr)) {
-      const m = /^(\d{4})(\d{2})(\d{2})i(\d+)$/.exec(tok);
-      if (m && `${m[1]}${m[2]}${m[3]}` === key) {
-         if (!replaced) {
-            out.push(nextTok);
-            replaced = true;
-         }
-      } else {
-         out.push(tok);
-      }
-   }
-   if (!replaced) out.push(nextTok);
-   return out.join(ORDER_SEP);
-}
-const upsertPosGeneric = upsertPosInOrder;
-function ensureAllToken(orderStr, x, y) {
-   const nextTok = `alli${xyToIdx(x, y)}`;
-   const out = [];
-   let hadAll = false;
-   for (const tok of splitTokens(orderStr)) {
-      if (/^(all|def)i\d+$/i.test(tok)) {
-         if (!hadAll) {
-            out.push(nextTok);
-            hadAll = true;
-         }
-      } else {
-         out.push(tok);
-      }
-   }
-   if (!hadAll) out.push(nextTok);
-   return out.join(ORDER_SEP);
-}
-
-/* ===== localStorage pt. order overrides ===== */
-const ORDER_LS_KEY = "dv_order_cache";
-const loadOrderCache = () => {
-   if (typeof window === "undefined") return {};
-   try {
-      return JSON.parse(localStorage.getItem(ORDER_LS_KEY) || "{}") || {};
-   } catch {
-      return {};
-   }
-};
-const saveOrderCache = (obj) => {
-   if (typeof window === "undefined") return;
-   try {
-      localStorage.setItem(ORDER_LS_KEY, JSON.stringify(obj || {}));
-   } catch {}
-};
-
-// Rows helper (corect, fără duplicare)
+// face rânduri de câte N coloane (3 by default)
 function toRowsOfN(list, n, pad = true) {
    const rows = [];
    for (let i = 0; i < list.length; i += n) {
@@ -218,20 +136,86 @@ function toRowsOfN(list, n, pad = true) {
 }
 
 /* ===== MEMO pentru coloană ===== */
-const MemoInstructorColumn = memo(InstructorColumnConnected, (prev, next) => {
-   return (
-      prev.editMode === next.editMode &&
-      prev.rowIdxLocal === next.rowIdxLocal &&
-      prev.colIdx === next.colIdx &&
-      prev.rowsCount === next.rowsCount &&
+const MemoInstructorColumn = memo(
+   InstructorColumnConnected,
+   (prev, next) =>
       prev.inst?.id === next.inst?.id &&
       prev.day?.id === next.day?.id &&
       prev.tokensKey === next.tokensKey &&
       prev.eventsKey === next.eventsKey &&
-      prev.getOrderStringForInst === next.getOrderStringForInst &&
-      prev.blackoutVer === next.blackoutVer // ⬅️ NOU
-   );
-});
+      prev.blackoutVer === next.blackoutVer
+);
+
+/* ===== Center-day persistence (LS) ===== */
+const CENTER_DAY_LS_KEY = "dv_center_day";
+const saveCenterDay = (d) => {
+   try {
+      if (!d) return;
+      localStorage.setItem(CENTER_DAY_LS_KEY, dateKey(d));
+   } catch {}
+};
+const loadCenterDay = () => {
+   try {
+      const k = localStorage.getItem(CENTER_DAY_LS_KEY);
+      if (!k || k.length !== 8) return null;
+      const y = +k.slice(0, 4),
+         m = +k.slice(4, 6) - 1,
+         d = +k.slice(6, 8);
+      const out = new Date(y, m, d);
+      return isNaN(+out) ? null : out;
+   } catch {
+      return null;
+   }
+};
+
+/* ====== Cheie stabilă pt. de-dup rezervări ====== */
+const reservationStableKey = (r) => {
+   try {
+      const startRaw =
+         r.startTime ??
+         r.start ??
+         r.startedAt ??
+         r.start_at ??
+         r.startDate ??
+         r.start_date ??
+         null;
+      const endRaw =
+         r.endTime ?? r.end ?? r.end_at ?? r.endDate ?? r.end_date ?? null;
+      const start = startRaw ? toFloatingDate(startRaw) : null;
+      const dur =
+         r.durationMinutes ??
+         r.slotMinutes ??
+         r.lengthMinutes ??
+         r.duration ??
+         90;
+      const end = endRaw
+         ? toFloatingDate(endRaw)
+         : start
+         ? new Date(start.getTime() + dur * 60000)
+         : null;
+      const inst =
+         r.instructorId ??
+         r.instructor_id ??
+         r.instructor ??
+         r.instructorIdFk ??
+         "";
+      const stud =
+         r.studentId ??
+         r.userId ??
+         r.user?.id ??
+         r.clientId ??
+         r.customerId ??
+         r.user_id ??
+         "";
+      const baseId = r.id ?? r.uuid ?? r._id;
+      if (baseId != null) return `id_${String(baseId)}`;
+      const s = start ? start.getTime() : 0;
+      const e = end ? end.getTime() : 0;
+      return `k_s${s}_e${e}_i${String(inst)}_u${String(stud)}_d${dur}`;
+   } catch {
+      return `k_fallback_${genId()}`;
+   }
+};
 
 /* ================= Component ================= */
 export default function CustomDayViewOptimized(props = {}) {
@@ -239,23 +223,42 @@ export default function CustomDayViewOptimized(props = {}) {
    const compact = !!props.compact;
    const date = props.date ? new Date(props.date) : new Date();
 
-   const scrollRef = useRef(null);
+   // când montăm: dacă există în LS o zi salvată, nu forțăm centrul pe `date`
+   useEffect(() => {
+      const saved = loadCenterDay();
+      if (saved) {
+         __DV_NAV_STATE__.centerOnDateNextTick = false;
+         __DV_NAV_STATE__.pendingCenterDate = null;
+      } else {
+         __DV_NAV_STATE__.centerOnDateNextTick = true;
+         __DV_NAV_STATE__.pendingCenterDate = date;
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
 
-   // viewport-bounded height
+   const scrollRef = useRef(null);
+   const wheelStateRef = useRef({ active: false, timer: null });
+
+   // înălțime viewport-based
    const [rowHeight, setRowHeight] = useState(0);
    const recalcRowHeight = useCallback(() => {
       const el = scrollRef.current;
       if (!el) return;
-
       const top = el.getBoundingClientRect().top;
       const vh = window.visualViewport?.height ?? window.innerHeight;
-
       const isPhone =
          window.matchMedia?.("(max-width: 768px)")?.matches ?? false;
       const headerOffset = isPhone ? 102 : 24;
       const h = Math.max(200, vh - top - headerOffset);
       setRowHeight(h);
    }, []);
+   const cancelPanInertia = useCallback(() => {
+      const el = scrollRef.current;
+      if (el) {
+         el.dispatchEvent(new CustomEvent("dvcancelinertia"));
+      }
+   }, []);
+
    useLayoutEffect(() => {
       recalcRowHeight();
       const onResize = () => recalcRowHeight();
@@ -278,10 +281,9 @@ export default function CustomDayViewOptimized(props = {}) {
    const SLOT_H = layout.slotHeight ?? "40px";
    const HOURS_COL_W = layout.hoursColWidth ?? "60px";
    const COL_W = layout.colWidth ?? "60px";
-   const ROW_GAP = 32;
-   const DAY_GAP = 32;
    const GROUP_GAP = layout.groupGap ?? "32px";
    const CONTAINER_H = layout.containerHeight;
+   const DAY_GAP = 32;
 
    // Mobile detect
    const [isMobile, setIsMobile] = useState(false);
@@ -322,7 +324,6 @@ export default function CustomDayViewOptimized(props = {}) {
       return z;
    }, []);
    const getZoom = useCallback(() => zoom, [zoom]);
-
    const zoomAt = useCallback(
       (factor, clientX) => {
          const el = scrollRef.current;
@@ -335,19 +336,72 @@ export default function CustomDayViewOptimized(props = {}) {
       },
       [getZoom, setZoomClamped]
    );
-
    useEffect(() => {
       if (isMobile) setZoomClamped(0.6);
    }, [isMobile, setZoomClamped]);
 
-   /* ===== Flag-uri interacțiuni (folosite de wheel & pan) ===== */
+   /* ===== Flag-uri interacțiuni ===== */
    const suspendFlagsRef = useRef(__DV_NAV_STATE__);
+
+   const startNavLock = useCallback((targetDate, ms = 1200) => {
+      const s = suspendFlagsRef.current;
+      if (!s) return;
+      const ts = startOfDayTs(targetDate);
+      s.navActive = true;
+      s.navTargetTs = ts;
+      if (s.navUnlockTimer) clearTimeout(s.navUnlockTimer);
+      s.navUnlockTimer = setTimeout(() => {
+         s.navActive = false;
+         s.navTargetTs = null;
+         s.navUnlockTimer = null;
+      }, ms);
+   }, []);
+
+   const endNavLockSoon = useCallback((delay = 200) => {
+      const s = suspendFlagsRef.current;
+      if (!s) return;
+      if (s.navUnlockTimer) clearTimeout(s.navUnlockTimer);
+      s.navUnlockTimer = setTimeout(() => {
+         s.navActive = false;
+         s.navTargetTs = null;
+         s.navUnlockTimer = null;
+      }, delay);
+   }, []);
+
+   // Smart polling (backoff) + sync între tab-uri
+   const refreshCtlRef = useRef({ t: null, delay: 3000, noChange: 0 });
+   const bcRef = useRef(null);
+   const scheduleSmartTick = useCallback(() => {
+      const ctl = refreshCtlRef.current;
+      if (ctl.t) clearTimeout(ctl.t);
+      ctl.t = setTimeout(async () => {
+         if (document.hidden || suspendFlagsRef.current?.isInteracting) {
+            scheduleSmartTick();
+            return;
+         }
+         let res = null;
+         try {
+            res = await dispatch(maybeRefreshReservations()).unwrap();
+         } catch {}
+         if (res?.refreshed) {
+            ctl.noChange = 0;
+            ctl.delay = 3000;
+            bcRef.current?.postMessage({
+               type: "reservations-changed",
+               etag: res?.etag || null,
+            });
+         } else {
+            const steps = [3000, 5000, 8000, 13000, 21000, 34000, 55000, 60000];
+            ctl.noChange = Math.min(steps.length - 1, ctl.noChange + 1);
+            ctl.delay = steps[ctl.noChange];
+         }
+         scheduleSmartTick();
+      }, refreshCtlRef.current.delay);
+   }, [dispatch]);
+
    const isInteractiveTarget = (el) =>
       !!el.closest?.(
-         `.dv-move-pad,
-       .dv-move-pad button,
-       .dv-slot button,
-       input, textarea, select, button, a`
+         `.dv-move-pad, .dv-move-pad button, .dv-slot button, input, textarea, select, button, a`
       );
 
    /* ===== Sector: Toate / Botanica / Ciocana ===== */
@@ -374,75 +428,70 @@ export default function CustomDayViewOptimized(props = {}) {
       })();
    }, [dispatch]);
 
-   // === Live vs UI (freeze în timpul interacțiunii) =========================
    const reservationsLive = useSelector(
       (s) => s.reservations?.list ?? [],
       shallowEqual
    );
 
    const [reservationsUI, setReservationsUI] = useState(reservationsLive);
-   const pendingReservationsRef = useRef(null);
+   const reservationsUIDedup = useMemo(() => {
+      const seen = new Set();
+      const out = [];
+      for (const r of reservationsUI || []) {
+         const k = reservationStableKey(r);
+         if (seen.has(k)) continue;
+         seen.add(k);
+         out.push(r);
+      }
+      return out;
+   }, [reservationsUI]);
 
-   // când vin date noi: dacă utilizatorul interacționează, ține-le în pending
+   const pendingReservationsRef = useRef(null);
    useEffect(() => {
       const interacting = !!suspendFlagsRef.current?.isInteracting;
-      if (interacting) {
-         pendingReservationsRef.current = reservationsLive;
-      } else {
+      if (interacting) pendingReservationsRef.current = reservationsLive;
+      else {
          setReservationsUI(reservationsLive);
          pendingReservationsRef.current = null;
       }
    }, [reservationsLive]);
 
-   // aplică pending la finalul pan/inerției
-   useEffect(() => {
-      const el = scrollRef.current;
-      if (!el) return;
-      const onPanEnd = () => {
-         if (pendingReservationsRef.current) {
-            setReservationsUI(pendingReservationsRef.current);
-            pendingReservationsRef.current = null;
-         }
-         // după final de interacțiune, recalculăm fereastra vizibilă
-         recalcWindow();
-      };
-      el.addEventListener("dvpanend", onPanEnd);
-      return () => el.removeEventListener("dvpanend", onPanEnd);
-   }, []); // eslint-disable-line
-
-   // Cold-boot guard (verifică pe sursa live)
    useEffect(() => {
       if (!hasPrefetchedAllRef.current) return;
       if ((reservationsLive?.length ?? 0) === 0) {
          dispatch(fetchReservationsDelta());
       }
    }, [dispatch, reservationsLive?.length]);
-   // Auto-refresh la 10s (pauză când interacționează / tab ascuns; fără suprapuneri)
+
    useEffect(() => {
-      if (typeof window === "undefined") return;
-      let inFlight = false;
-      const T = 10_000;
-
-      const tick = async () => {
-         if (document.hidden) return; // nu refresha în fundal
-         if (suspendFlagsRef.current?.isInteracting) return; // nu deranja drag/inerția
-         if (inFlight) return; // evită dublurile
-         inFlight = true;
-         try {
-            await dispatch(fetchReservationsDelta());
-         } finally {
-            inFlight = false;
-         }
+      if ("BroadcastChannel" in window) {
+         bcRef.current = new BroadcastChannel("reservations-meta");
+         bcRef.current.onmessage = (e) => {
+            if (
+               e?.data?.type === "reservations-changed" &&
+               !suspendFlagsRef.current?.isInteracting
+            ) {
+               dispatch(fetchReservationsDelta());
+               refreshCtlRef.current.noChange = 0;
+               refreshCtlRef.current.delay = 3000;
+               scheduleSmartTick();
+            }
+         };
+      }
+      scheduleSmartTick();
+      return () => {
+         if (refreshCtlRef.current.t) clearTimeout(refreshCtlRef.current.t);
+         bcRef.current?.close?.();
       };
+   }, [dispatch, scheduleSmartTick]);
 
-      const id = setInterval(tick, T);
-      return () => clearInterval(id);
-   }, [dispatch]);
-   // Refresh instant când revii pe fereastră sau tab-ul devine vizibil
    useEffect(() => {
       const onFocusVisible = () => {
          if (!document.hidden && !suspendFlagsRef.current?.isInteracting) {
-            dispatch(fetchReservationsDelta());
+            refreshCtlRef.current.noChange = 0;
+            refreshCtlRef.current.delay = 3000;
+            scheduleSmartTick();
+            dispatch(maybeRefreshReservations());
          }
       };
       window.addEventListener("focus", onFocusVisible);
@@ -451,7 +500,7 @@ export default function CustomDayViewOptimized(props = {}) {
          window.removeEventListener("focus", onFocusVisible);
          document.removeEventListener("visibilitychange", onFocusVisible);
       };
-   }, [dispatch]);
+   }, [dispatch, scheduleSmartTick]);
 
    const instructorsGroups = useSelector(
       (s) => s.instructorsGroups?.list ?? [],
@@ -558,7 +607,6 @@ export default function CustomDayViewOptimized(props = {}) {
          const overlaps = (aStart, aEnd, bStart, bEnd) =>
             Math.max(aStart.getTime(), bStart.getTime()) <
             Math.min(aEnd.getTime(), bEnd.getTime());
-
          return timeMarks
             .map((t) => {
                const start = mkLocal(t);
@@ -618,7 +666,6 @@ export default function CustomDayViewOptimized(props = {}) {
                instSectorIndex.set(idStr, sectorNorm);
          });
       });
-
       (instructors || []).forEach((i) => {
          const id = String(i.id);
          const name = `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim();
@@ -631,7 +678,6 @@ export default function CustomDayViewOptimized(props = {}) {
             null;
          const sectorRaw = i.sector ?? instSectorIndex.get(id) ?? "";
          const sectorNorm = String(sectorRaw).trim().toLowerCase();
-
          dict.set(id, {
             name,
             nameNorm: norm(name),
@@ -640,7 +686,6 @@ export default function CustomDayViewOptimized(props = {}) {
             plateNorm: normPlate(plate),
             plateDigits: digitsOnly(plate),
             gearbox: gearbox ? String(gearbox).toLowerCase() : null,
-            orderRaw: i.order ?? "",
             sectorNorm,
          });
       });
@@ -658,136 +703,6 @@ export default function CustomDayViewOptimized(props = {}) {
       return set;
    }, [instructors, instructorMeta, sectorFilterNorm]);
 
-   /* ===== Ordonare – localStorage ===== */
-   const [orderOverrides, setOrderOverrides] = useState(() => loadOrderCache());
-   useEffect(() => {
-      saveOrderCache(orderOverrides);
-   }, [orderOverrides]);
-
-   const getOrderStringForInst = useCallback(
-      (instId) => orderOverrides[String(instId)] ?? "",
-      [orderOverrides]
-   );
-
-   useEffect(() => {
-      if (!instructors?.length) return;
-      const ids = instructors
-         .map((i) => String(i.id))
-         .sort((a, b) => {
-            const na = Number(a),
-               nb = Number(b);
-            if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
-            return String(a).localeCompare(String(b), undefined, {
-               numeric: true,
-            });
-         });
-
-      const add = {};
-      ids.forEach((iid, idx) => {
-         const current = getOrderStringForInst(iid);
-         if ((current || "").trim()) return;
-         const x = (idx % maxColsPerGroup) + 1;
-         const y = Math.floor(idx / maxColsPerGroup) + 1;
-         const withAll = ensureAllToken("", x, y);
-         add[iid] = withAll;
-      });
-
-      if (Object.keys(add).length) {
-         setOrderOverrides((prev) => {
-            const next = { ...prev, ...add };
-            saveOrderCache(next);
-            return next;
-         });
-      }
-   }, [instructors, getOrderStringForInst]);
-
-   const setInstructorOrderForDate = useCallback(
-      (instId, dayDate, x, y) => {
-         const id = String(instId);
-         const current = getOrderStringForInst(id);
-         const updated = upsertPosGeneric(current, dayDate, x, y);
-         setOrderOverrides((prev) => {
-            const next = { ...prev, [id]: updated };
-            saveOrderCache(next);
-            return next;
-         });
-      },
-      [getOrderStringForInst]
-   );
-
-   const computeOrderedInstIdsForDay = useCallback(
-      (allInstIds, dayDate, cols = 3) => {
-         const ids = Array.from(allInstIds);
-         ids.sort((a, b) => {
-            const na = Number(a),
-               nb = Number(b);
-            if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
-            return String(a).localeCompare(String(b), undefined, {
-               numeric: true,
-            });
-         });
-
-         const rows = Math.max(1, Math.ceil((ids.length || 1) / cols));
-         const totalSlots = rows * cols;
-         const slots = new Array(totalSlots).fill(null);
-         const placed = new Set();
-
-         ids.forEach((iid) => {
-            const pos = getPosGeneric(getOrderStringForInst(iid), dayDate);
-            if (!pos) return;
-            const x = Math.max(1, Math.min(cols, pos.x));
-            const y = Math.max(1, Math.min(rows, pos.y));
-            const idx = (y - 1) * cols + (x - 1);
-            if (slots[idx] == null) {
-               slots[idx] = iid;
-               placed.add(iid);
-            }
-         });
-
-         ids.forEach((iid) => {
-            if (placed.has(iid)) return;
-            const idx = slots.findIndex((v) => v == null);
-            if (idx !== -1) {
-               slots[idx] = iid;
-               placed.add(iid);
-            }
-         });
-
-         const orderedIds = slots.filter(Boolean);
-         return { orderedIds, rows };
-      },
-      [getOrderStringForInst]
-   );
-
-   const nudgeInstructor = useCallback(
-      (instId, dayDate, dx, dy, fallbackX, fallbackY, _rowsCount, cols = 3) => {
-         const allInstIds = new Set(
-            (instructors || []).map((i) => String(i.id))
-         );
-         const { orderedIds, rows } = computeOrderedInstIdsForDay(
-            allInstIds,
-            dayDate,
-            cols
-         );
-         const curIdx = orderedIds.findIndex(
-            (id) => String(id) === String(instId)
-         );
-         const curX = curIdx >= 0 ? (curIdx % cols) + 1 : fallbackX;
-         const curY = curIdx >= 0 ? Math.floor(curIdx / cols) + 1 : fallbackY;
-         const tx = Math.max(1, Math.min(cols, curX + dx));
-         const ty = Math.max(1, Math.min(rows, curY + dy));
-         if (tx === curX && ty === curY) return;
-         const targetIdx = (ty - 1) * cols + (tx - 1);
-         const occupantId = orderedIds[targetIdx] || null;
-         setInstructorOrderForDate(instId, dayDate, tx, ty);
-         if (occupantId && String(occupantId) !== String(instId)) {
-            setInstructorOrderForDate(occupantId, dayDate, curX, curY);
-         }
-      },
-      [instructors, computeOrderedInstIdsForDay, setInstructorOrderForDate]
-   );
-
-   /* ===== Group lookup ===== */
    const findGroupForInstructor = (instructorId) => {
       if (!instructorId) return null;
       const g = (instructorsGroups || []).find((grp) =>
@@ -806,11 +721,11 @@ export default function CustomDayViewOptimized(props = {}) {
             firstName: u.firstName ?? u.prenume ?? "",
             lastName: u.lastName ?? u.nume ?? "",
             phone: u.phone ?? u.phoneNumber ?? u.mobile ?? u.telefon ?? null,
+            privateMessage: u.privateMessage ?? u.privateMessaje ?? "",
          });
       });
       return map;
    }, [students]);
-
    const studentDictRef = useRef(null);
    useEffect(() => {
       studentDictRef.current = studentDict;
@@ -832,7 +747,6 @@ export default function CustomDayViewOptimized(props = {}) {
       const gbLabel = (meta.gearbox || "").toLowerCase().includes("auto")
          ? "Automat"
          : "Manual";
-
       openPopup("addProg", {
          start: ev.start,
          end: ev.end,
@@ -848,20 +762,68 @@ export default function CustomDayViewOptimized(props = {}) {
 
    /* ===== Căutare ===== */
    const [query, setQuery] = useState("");
-   const deferredQuery = useDeferredValue(query); // smooth pe input
+   const deferredQuery = useDeferredValue(query);
 
    const parseToken = (raw) => {
       const t = String(raw || "").trim();
       if (!t) return null;
+
+      // #12 sau i:12
+      const mIdHash = /^(#)(\d+)$/.exec(t);
+      const mIdWord = /^(?:i|inst|instructor)\s*[:\-]?\s*(\d+)$/.exec(t);
+      if (mIdHash || mIdWord) {
+         const idDigits = (mIdHash ? mIdHash[2] : mIdWord[1]) || "";
+         return {
+            raw,
+            kind: "instId",
+            norm: "",
+            digits: idDigits,
+            plate: "",
+            hhmmPrefix: null,
+         };
+      }
+
+      // tel, phone
+      const mTelBoth = /^(?:tel|phone|p)\s*[:\-]?\s*(\+?\d[\d\s]*)$/i.exec(t);
+      if (mTelBoth)
+         return {
+            raw,
+            kind: "phone",
+            phoneScope: "both",
+            digits: mTelBoth[1].replace(/\D+/g, ""),
+         };
+      const mTelInst = /^(?:tel\-?i)\s*[:\-]?\s*(\+?\d[\d\s]*)$/i.exec(t);
+      if (mTelInst)
+         return {
+            raw,
+            kind: "phone",
+            phoneScope: "inst",
+            digits: mTelInst[1].replace(/\D+/g, ""),
+         };
+      const mTelStud = /^(?:tel\-?s)\s*[:\-]?\s*(\+?\d[\d\s]*)$/i.exec(t);
+      if (mTelStud)
+         return {
+            raw,
+            kind: "phone",
+            phoneScope: "stud",
+            digits: mTelStud[1].replace(/\D+/g, ""),
+         };
+
+      const onlyDigits = t.replace(/\D+/g, "");
+      const looksLikePhone =
+         /^\+?\d[\d\s\-()]{4,}$/.test(t) || onlyDigits.length >= 6;
+      if (looksLikePhone)
+         return { raw, kind: "phone", phoneScope: "both", digits: onlyDigits };
+
+      // text:...
       const m = /^([a-zăâîșț]+)\s*:(.*)$/i.exec(t);
       const val = (m ? m[2] : t).trim();
-
       const valNorm = norm(val);
       const valDigits = digitsOnly(val);
       const valPlate = normPlate(val);
+
       const hasLetters = /[a-z]/i.test(val);
       const hasDigits = /\d/.test(val);
-
       const hasColonOrDot = /[:\.]/.test(val);
       const hasSuffixH = /h$/i.test(val);
       const isPlainHour = /^\d{1,2}$/.test(val);
@@ -897,17 +859,110 @@ export default function CustomDayViewOptimized(props = {}) {
       () => (deferredQuery || "").split(/\s+/).filter(Boolean),
       [deferredQuery]
    );
-   const tokens = useMemo(() => {
-      return rawTokens
-         .map(parseToken)
-         .filter(Boolean)
-         .filter((t) => {
-            if (!hasAlphaNum(t.raw || "")) return false;
-            if (t.kind === "text" && (t.norm || "").length < 2) return false;
-            return true;
-         });
-   }, [rawTokens]);
+   const tokens = useMemo(
+      () =>
+         rawTokens
+            .map(parseToken)
+            .filter(Boolean)
+            .filter((t) => {
+               if (!hasAlphaNum(t.raw || "")) return false;
+               if (t.kind === "text" && (t.norm || "").length < 2) return false;
+               return true;
+            }),
+      [rawTokens]
+   );
    const anyTokens = tokens.length > 0;
+
+   const textMatchesAllTokens = useCallback(
+      (rawText) => {
+         if (!anyTokens) return true;
+         const s = norm(rawText || "");
+         const sDigits = s.replace(/\D+/g, "");
+         const sPlate = normPlate(rawText || "");
+
+         for (const t of tokens) {
+            switch (t.kind) {
+               case "time": {
+                  if (t.hhmmPrefix && !s.includes(t.hhmmPrefix)) return false;
+                  break;
+               }
+               case "digits": {
+                  if (t.digits && !sDigits.includes(t.digits)) return false;
+                  break;
+               }
+               case "plate": {
+                  if (t.plate && !sPlate.includes(t.plate)) return false;
+                  break;
+               }
+               default: {
+                  if (t.norm && !s.includes(t.norm)) return false;
+               }
+            }
+         }
+         return true;
+      },
+      [anyTokens, tokens]
+   );
+
+   const scrollYToFirstMatchInDay = useCallback(
+      (targetDate) => {
+         const el = scrollRef.current;
+         if (!el) return false;
+
+         const ts = startOfDayTs(targetDate);
+         const dayId = `day_${ts}`;
+         const daySection = el.querySelector(`[data-dayid="${dayId}"]`);
+         if (!daySection) return false;
+
+         let nodes = Array.from(daySection.querySelectorAll(".dayview__event"));
+         if (!nodes.length) return false;
+
+         const likelyCards = nodes.filter(
+            (n) =>
+               n.hasAttribute("data-reservation-id") ||
+               n.getAttribute("role") === "button" ||
+               /card/i.test(n.className)
+         );
+         if (likelyCards.length) nodes = likelyCards;
+
+         if (anyTokens) {
+            const filtered = nodes.filter((n) =>
+               textMatchesAllTokens(n.textContent || "")
+            );
+            if (filtered.length) nodes = filtered;
+         }
+
+         nodes.sort(
+            (a, b) =>
+               a.getBoundingClientRect().top - b.getBoundingClientRect().top
+         );
+
+         const targetEl = nodes[0];
+         if (!targetEl) return false;
+
+         const crect = el.getBoundingClientRect();
+         const r = targetEl.getBoundingClientRect();
+         const M_TOP = 16,
+            M_BOTTOM = 16;
+
+         let dy = 0;
+         if (r.top < crect.top + M_TOP) {
+            dy = r.top - (crect.top + M_TOP);
+         } else if (r.bottom > crect.bottom - M_BOTTOM) {
+            dy = r.bottom - (crect.bottom - M_BOTTOM);
+         }
+
+         if (Math.abs(dy) > 1) {
+            requestAnimationFrame(() => {
+               requestAnimationFrame(() => {
+                  el.scrollTop += dy;
+               });
+            });
+         }
+         return true;
+      },
+      [anyTokens, textMatchesAllTokens]
+   );
 
    const tokensRegex = useMemo(() => {
       if (!tokens?.length) return null;
@@ -930,7 +985,6 @@ export default function CustomDayViewOptimized(props = {}) {
       },
       [tokensRegex]
    );
-
    const tokensKey = useMemo(
       () => tokens.map((t) => t.raw).join("|"),
       [tokens]
@@ -939,7 +993,6 @@ export default function CustomDayViewOptimized(props = {}) {
    /* ===== Mapare rezervări -> evenimente ===== */
    const mapReservationToEvent = useCallback(
       (r) => {
-         // Timp
          const startRaw =
             r.startTime ??
             r.start ??
@@ -950,7 +1003,6 @@ export default function CustomDayViewOptimized(props = {}) {
             null;
          const endRaw =
             r.endTime ?? r.end ?? r.end_at ?? r.endDate ?? r.end_date ?? null;
-
          const start = startRaw ? toFloatingDate(startRaw) : new Date();
          const durationMin =
             r.durationMinutes ??
@@ -961,8 +1013,6 @@ export default function CustomDayViewOptimized(props = {}) {
          const end = endRaw
             ? toFloatingDate(endRaw)
             : new Date(start.getTime() + durationMin * 60000);
-
-         // Instructor / Grup
          const instructorIdRaw =
             r.instructorId ??
             r.instructor_id ??
@@ -975,8 +1025,6 @@ export default function CustomDayViewOptimized(props = {}) {
             r.groupId ??
             r.group_id ??
             null;
-
-         // Student / User
          const studentIdRaw =
             r.studentId ??
             r.userId ??
@@ -986,14 +1034,10 @@ export default function CustomDayViewOptimized(props = {}) {
             r.user_id ??
             null;
          const studentId = studentIdRaw != null ? String(studentIdRaw) : null;
-
-         const fromStore = studentId
-            ? studentDictRef.current?.get(studentId)
-            : null;
-
+         const fromStore = studentDictRef.current?.get(studentId);
+         const studentPrivateMsg = fromStore?.privateMessage ?? "";
          const fallbackName =
             r.clientName ?? r.customerName ?? r.name ?? r.user?.name ?? "";
-
          const fallbackPhone =
             r.studentPhone ??
             r.user?.phone ??
@@ -1001,33 +1045,26 @@ export default function CustomDayViewOptimized(props = {}) {
             r.phoneNumber ??
             r.phone ??
             null;
-
          const first =
             fromStore?.firstName ??
             r.studentFirst ??
             r.user?.firstName ??
             (fallbackName ? fallbackName.split(" ")[0] : "");
-
          const last =
             fromStore?.lastName ??
             r.studentLast ??
             r.user?.lastName ??
             (fallbackName ? fallbackName.split(" ").slice(1).join(" ") : "");
-
          const phone = fromStore?.phone ?? fallbackPhone ?? null;
-
          const groupName = (() => {
             const g = (instructorsGroups || []).find(
                (g) => String(g.id) === String(groupIdRaw)
             );
             return g?.name || (g ? `Grupa ${g.id}` : "");
          })();
-
          const instIdStr =
             instructorIdRaw != null ? String(instructorIdRaw) : "__unknown";
          const instMetaLocal = instructorMeta.get(instIdStr);
-
-         // Cutie de viteze
          const gearboxRaw =
             r.gearbox ??
             r.transmission ??
@@ -1035,6 +1072,7 @@ export default function CustomDayViewOptimized(props = {}) {
             r.transmissionType ??
             instMetaLocal?.gearbox ??
             null;
+
          const gearboxNorm = gearboxRaw
             ? String(gearboxRaw).toLowerCase()
             : null;
@@ -1045,7 +1083,6 @@ export default function CustomDayViewOptimized(props = {}) {
                ? "M"
                : String(gearboxRaw)
             : null;
-
          const isConfirmed = Boolean(
             r.isConfirmed ??
                r.confirmed ??
@@ -1053,43 +1090,36 @@ export default function CustomDayViewOptimized(props = {}) {
                (typeof r.status === "string" &&
                   r.status.toLowerCase().includes("confirm"))
          );
-
          const instPlateNorm = normPlate(instMetaLocal?.plateRaw ?? "");
-
          return {
-            id: r.id ?? genId(),
+            id: String(r.id ?? reservationStableKey(r)),
             title: r.title ?? "Programare",
             start,
             end,
-
             instructorId: instIdStr,
             groupId: groupIdRaw != null ? String(groupIdRaw) : "__ungrouped",
             groupName,
             sector: (r.sector || "").toString(),
-
-            // — CHEIE: câmpuri pentru EventCard
             studentId,
             studentFirst: first,
             studentLast: last,
             studentPhone: phone,
-
-            privateMessage: r.privateMessage ?? r.note ?? r.comment ?? "",
+            eventPrivateMessage: r.privateMessage ?? "",
+            privateMessage: studentPrivateMsg,
             color: r.color ?? undefined,
             gearboxLabel,
             isConfirmed,
             programareOrigine: null,
             instructorPlateNorm: instPlateNorm,
-
             raw: r,
          };
       },
       [instructorsGroups, instructorMeta]
    );
 
-   // toate evenimentele, grupate pe zi (folosește *UI snapshot* în timpul interacțiunii)
    const eventsByDay = useMemo(() => {
-      const map = new Map(); // ts -> Event[]
-      (reservationsUI || []).forEach((r) => {
+      const map = new Map();
+      (reservationsUIDedup || []).forEach((r) => {
          const startRaw =
             r.startTime ??
             r.start ??
@@ -1110,10 +1140,16 @@ export default function CustomDayViewOptimized(props = {}) {
       });
       map.forEach((arr) => arr.sort((a, b) => a.start - b.start));
       return map;
-   }, [reservationsUI, mapReservationToEvent]);
+   }, [reservationsUIDedup, mapReservationToEvent]);
 
-   /* ===== Facts cache pentru căutare ===== */
+   /* ====== Search facts / matchers ====== */
+   const [matchCursor, setMatchCursor] = useState(-1);
    const factsCacheRef = useRef(new WeakMap());
+   const matchCacheRef = useRef(new Map());
+   useEffect(() => {
+      matchCacheRef.current = new Map();
+   }, [tokensKey]);
+
    const getFacts = useCallback(
       (ev) => {
          let f = factsCacheRef.current.get(ev);
@@ -1123,13 +1159,12 @@ export default function CustomDayViewOptimized(props = {}) {
             ev.studentLast || ""
          }`.trim();
          const timeStr = hhmm(ev.start);
+         const studentPhoneDigits = digitsOnly(ev.studentPhone || "");
+         const instPhoneDigits = inst.phoneDigits || "";
          f = {
             studentName: norm(studentFull),
             instName: inst.nameNorm || "",
-            phones: [
-               digitsOnly(ev.studentPhone || ""),
-               inst.phoneDigits || "",
-            ].filter(Boolean),
+            phones: [studentPhoneDigits, instPhoneDigits].filter(Boolean),
             time: timeStr,
             timeDigits: timeStr.replace(":", ""),
             hourOnly: timeStr.slice(0, 2),
@@ -1137,6 +1172,9 @@ export default function CustomDayViewOptimized(props = {}) {
             plateDigits: inst.plateDigits || "",
             groupName: norm(ev.groupName || ""),
             note: norm(ev.privateMessage || ""),
+            instIdDigits: inst.idDigits || "",
+            instPhoneDigits,
+            studentPhoneDigits,
          };
          factsCacheRef.current.set(ev, f);
          return f;
@@ -1179,71 +1217,101 @@ export default function CustomDayViewOptimized(props = {}) {
    const eventMatchesAllTokens = useCallback(
       (ev) => {
          if (!anyTokens) return true;
+         const key = `${ev.id}|${tokensKey}`;
+         if (matchCacheRef.current.has(key))
+            return matchCacheRef.current.get(key);
          const facts = getFacts(ev);
-         return tokens.every((t) => tokenHitsFacts(facts, t));
+         const ok = tokens.every((t) => tokenHitsFacts(facts, t));
+         matchCacheRef.current.set(key, ok);
+         return ok;
       },
-      [anyTokens, tokens, getFacts]
+      [anyTokens, tokens, tokensKey, getFacts]
+   );
+
+   const headerMatchesAllTokens = useCallback(
+      (iid) => {
+         const m = instructorMeta.get(String(iid));
+         if (!m || !tokens?.length) return false;
+         return tokens.every((t) => {
+            switch (t.kind) {
+               case "digits":
+                  return (
+                     (m.phoneDigits || "").includes(t.digits) ||
+                     (m.plateDigits || "").includes(t.digits)
+                  );
+               case "plate":
+                  return (m.plateNorm || "").includes(t.plate);
+               default:
+                  return (
+                     (m.nameNorm || "").includes(t.norm) ||
+                     (m.plateNorm || "").includes(t.norm)
+                  );
+            }
+         });
+      },
+      [tokens, instructorMeta]
    );
 
    /* ===========================================================
-   FEREASTRĂ FIXĂ: [-30 .. +60] zile față de `date`
-   + WINDOWING: randăm doar zilele vizibile
-  ============================================================ */
-   const visibleDaysForAll = useMemo(() => {
-      const mid = new Date(date);
-      mid.setHours(0, 0, 0, 0);
+      INTERVAL: doar luna curentă (1 → ultima zi a lunii lui `date`)
+      ============================================================ */
+
+   const allAllowedDays = useMemo(() => {
+      const base = new Date(date);
+      const year = base.getFullYear();
+      const month = base.getMonth();
+      const first = new Date(year, month, 1);
       const out = [];
-      for (let i = -30; i <= +60; i++) {
-         const d = new Date(mid);
-         d.setDate(mid.getDate() + i);
-         out.push(d);
+      let d = new Date(first);
+      while (d.getMonth() === month) {
+         out.push(new Date(d));
+         d.setDate(d.getDate() + 1);
       }
       return out;
    }, [date]);
 
-   // zile cu potriviri (pentru navigație când există query)
-   const matchDaysWithinWindow = useMemo(() => {
-      const list = [];
-      for (const d of visibleDaysForAll) {
-         const ts = startOfDayTs(d);
-         const dayEventsRaw = eventsByDay.get(ts) || [];
-         for (const ev of dayEventsRaw) {
-            const iid = String(ev.instructorId ?? "__unknown");
-            const sectorOk =
-               !allowedInstBySector || allowedInstBySector.has(iid);
-            if (sectorOk && eventMatchesAllTokens(ev)) {
-               list.push(new Date(ts));
-               break;
+   const findIndexForDate = useCallback(
+      (targetDate) => {
+         if (!allAllowedDays.length) return 0;
+         const tsTarget = startOfDayTs(targetDate);
+         let bestIdx = 0;
+         let bestDiff = Infinity;
+         allAllowedDays.forEach((d, idx) => {
+            const diff = Math.abs(startOfDayTs(d) - tsTarget);
+            if (diff < bestDiff) {
+               bestDiff = diff;
+               bestIdx = idx;
             }
-         }
-      }
-      list.sort((a, b) => a - b);
-      return list;
-   }, [
-      visibleDaysForAll,
-      eventsByDay,
-      allowedInstBySector,
-      eventMatchesAllTokens,
-   ]);
+         });
+         return bestIdx;
+      },
+      [allAllowedDays]
+   );
 
-   // Actualizăm NAV STATE
+   // Încărcăm toate zilele din luna curentă
+   const loadedDays = allAllowedDays;
+
    useEffect(() => {
-      __DV_NAV_STATE__.allDaysSorted = visibleDaysForAll
+      __DV_NAV_STATE__.allDaysSorted = allAllowedDays
          .map(startOfDayTs)
          .sort((a, b) => a - b);
-      __DV_NAV_STATE__.matchDays = anyTokens
-         ? matchDaysWithinWindow.map(startOfDayTs)
-         : [];
-      __DV_NAV_STATE__.queryKey = anyTokens
-         ? tokens.map((t) => `${t.kind}:${t.raw}`).join("#") +
-           `|${sectorFilter}`
-         : "";
+   }, [allAllowedDays]);
+
+   const matchDaysAll = useMemo(() => {
+      if (!anyTokens) return [];
+      const out = [];
+      for (const d of allAllowedDays) {
+         const ts = startOfDayTs(d);
+         const evs = eventsByDay.get(ts) || [];
+         if (evs.some(eventMatchesAllTokens)) out.push(new Date(ts));
+      }
+      return out;
    }, [
-      visibleDaysForAll,
       anyTokens,
-      matchDaysWithinWindow,
-      tokens,
-      sectorFilter,
+      allAllowedDays,
+      eventsByDay,
+      eventMatchesAllTokens,
+      tokensKey,
    ]);
 
    /* ===== UI metrics ===== */
@@ -1253,8 +1321,10 @@ export default function CustomDayViewOptimized(props = {}) {
       "--group-gap": GROUP_GAP,
       "--day-header-h": `44px`,
       "--row-header-h": `auto`,
-      "--font-scale": 1,
+      "--font-scale": zoom,
+      "--zoom": zoom,
    };
+
    const px = (v) => parseFloat(String(v || 0));
    const visibleSlotCount = useMemo(
       () => mkStandardSlots().length,
@@ -1262,166 +1332,290 @@ export default function CustomDayViewOptimized(props = {}) {
    );
    const baseMetrics = useMemo(() => {
       const baseColw = px(COL_W);
-      const baseSlot = px(SLOT_H);
       const baseDayWidth = maxColsPerGroup * baseColw;
-      return {
-         colw: baseColw,
-         slot: baseSlot,
-         dayWidth: baseDayWidth, // fără gap
-      };
-   }, [COL_W, SLOT_H, maxColsPerGroup]);
+      return { colw: baseColw, dayWidth: baseDayWidth };
+   }, [COL_W, maxColsPerGroup]);
 
-   // IMPORTANT: lățime unitate (zi) + gap, folosită peste tot
-   const UNIT_W = baseMetrics.dayWidth + 12 + DAY_GAP; // secțiune + spațiu
-   const DAY_W_BASE = UNIT_W;
-
+   const DAY_W_BASE = baseMetrics.dayWidth + 12 + DAY_GAP;
    const contentW = useMemo(
-      () => visibleDaysForAll.length * DAY_W_BASE,
-      [visibleDaysForAll.length, DAY_W_BASE]
+      () => loadedDays.length * DAY_W_BASE,
+      [loadedDays.length, DAY_W_BASE]
    );
 
-   /* ===== Windowing (render only visible indexes) ===== */
-   const [win, setWin] = useState({ from: 0, to: -1 });
-
-   const recalcWindow = useCallback(() => {
-      const el = scrollRef.current;
-      const len = visibleDaysForAll.length;
-      if (!el || !len) return;
-
-      const dayWScaled = DAY_W_BASE * zoom;
-      const visStart = Math.floor(el.scrollLeft / dayWScaled);
-      const visEnd =
-         Math.ceil((el.scrollLeft + el.clientWidth) / dayWScaled) - 1;
-
-      const OVER = 6; // overscan
-      const from = clamp(visStart - OVER, 0, len - 1);
-      const to = clamp(visEnd + OVER, 0, len - 1);
-
-      setWin((prev) =>
-         prev.from === from && prev.to === to ? prev : { from, to }
-      );
-   }, [visibleDaysForAll.length, DAY_W_BASE, zoom]);
-
-   // Seed: pornește în jurul zilei curente + centrează (O SINGURĂ DATĂ)
-   const didSeedRef = useRef(false);
+   const zoomRef = useRef(zoom);
    useEffect(() => {
+      zoomRef.current = zoom;
+   }, [zoom]);
+
+   /* ===== center-date din scroll (fără windowing) ===== */
+   const getCenterDateFromScroll = useCallback(() => {
       const el = scrollRef.current;
-      const len = visibleDaysForAll.length;
-      if (!len || !el || didSeedRef.current) return;
-      didSeedRef.current = true;
+      const ld = loadedDays;
+      if (!el || !ld.length) return null;
+      const W = DAY_W_BASE;
+      if (W <= 0) return null;
+      const mid = el.scrollLeft + el.clientWidth / 2;
+      const iLocal = clamp(Math.round(mid / W - 0.5), 0, ld.length - 1);
+      return ld[iLocal] || null;
+   }, [loadedDays, DAY_W_BASE]);
 
-      const curTs = startOfDayTs(date);
-      let midIdx = visibleDaysForAll.findIndex(
-         (d) => startOfDayTs(d) === curTs
-      );
-      if (midIdx < 0) midIdx = Math.floor(len / 2);
-
-      const SEED = 6;
-      const from = clamp(midIdx - SEED, 0, len - 1);
-      const to = clamp(midIdx + SEED, 0, len - 1);
-      setWin({ from, to });
-
-      const dayWScaled = DAY_W_BASE * zoom;
-      const left = midIdx * dayWScaled + dayWScaled / 2 - el.clientWidth / 2;
-      el.scrollLeft = clamp(left, 0, el.scrollWidth - el.clientWidth);
-   }, [visibleDaysForAll, DAY_W_BASE, zoom, date]);
-
-   // Unic listener de wheel: pinch-zoom + Y→X și recalc la scroll
    useEffect(() => {
       const el = scrollRef.current;
       if (!el) return;
+      let t = null;
+      const onScrollIdle = () => {
+         if (t) clearTimeout(t);
+         t = setTimeout(() => {
+            if (suspendFlagsRef.current?.navActive) return;
+            const c = getCenterDateFromScroll();
+            if (c) saveCenterDay(c);
+         }, 350);
+      };
+      el.addEventListener("scroll", onScrollIdle, { passive: true });
+      return () => {
+         if (t) clearTimeout(t);
+         el.removeEventListener("scroll", onScrollIdle);
+      };
+   }, [getCenterDateFromScroll]);
 
+   const didSeedRef = useRef(false);
+   useEffect(() => {
+      const el = scrollRef.current;
+      const len = loadedDays.length;
+      if (!len || !el || didSeedRef.current) return;
+
+      const saved = loadCenterDay();
+      didSeedRef.current = true;
+
+      const dayWScaled = DAY_W_BASE * zoom;
+
+      if (saved) {
+         const idxSaved = findIndexForDate(saved);
+         const left =
+            idxSaved * dayWScaled + dayWScaled / 2 - el.clientWidth / 2;
+         el.scrollLeft = clamp(left, 0, el.scrollWidth - el.clientWidth);
+         const centered = loadedDays[idxSaved] || saved;
+         const id = requestAnimationFrame(() => {
+            el.dispatchEvent(new Event("scroll"));
+            saveCenterDay(centered);
+         });
+         return () => cancelAnimationFrame(id);
+      }
+
+      const curIdxGlobal = findIndexForDate(date);
+      const midIdx = clamp(curIdxGlobal, 0, Math.max(0, len - 1));
+      const left = midIdx * dayWScaled + dayWScaled / 2 - el.clientWidth / 2;
+      el.scrollLeft = clamp(left, 0, el.scrollWidth - el.clientWidth);
+      const centered = loadedDays[midIdx] || date;
+      saveCenterDay(centered);
+   }, [
+      loadedDays.length,
+      DAY_W_BASE,
+      zoom,
+      date,
+      findIndexForDate,
+      loadedDays,
+   ]);
+
+   /* ===== Trackpad wheel / scroll ===== */
+   useEffect(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const endWheel = () => {
+         if (!wheelStateRef.current.active) return;
+         wheelStateRef.current.active = false;
+         el.classList?.remove?.("is-panning");
+         el.style.cursor = "grab";
+         if (suspendFlagsRef?.current)
+            suspendFlagsRef.current.isInteracting = false;
+         el.dispatchEvent(new CustomEvent("dvpanend"));
+      };
+      const armIdle = () => {
+         if (wheelStateRef.current.timer) {
+            clearTimeout(wheelStateRef.current.timer);
+         }
+         wheelStateRef.current.timer = setTimeout(endWheel, 140);
+      };
+      const beginInteractionIfNeeded = () => {
+         if (wheelStateRef.current.active) return;
+         wheelStateRef.current.active = true;
+         el.classList?.add?.("is-panning");
+         el.style.cursor = "grabbing";
+         if (suspendFlagsRef?.current) {
+            suspendFlagsRef.current.isInteracting = true;
+            suspendFlagsRef.current.centerOnDateNextTick = false;
+            suspendFlagsRef.current.suspendAutoJump = true;
+            suspendFlagsRef.current.suspendScrollSnap = true;
+         }
+      };
       const onWheel = (e) => {
-         // 1) pinch/gesture zoom (Ctrl/⌘/Alt)
          if (e.ctrlKey || e.metaKey || e.altKey) {
             e.preventDefault();
+            beginInteractionIfNeeded();
             const factor = Math.pow(1.0035, -e.deltaY);
             const clientX =
                e.clientX ??
                el.getBoundingClientRect().left + el.clientWidth / 2;
             zoomAt(factor, clientX);
+            armIdle();
             return;
          }
-
-         // 2) interacțiune manuală => oprește auto-center/snap
-         if (suspendFlagsRef?.current) {
-            suspendFlagsRef.current.centerOnDateNextTick = false;
-            suspendFlagsRef.current.suspendAutoJump = true;
-            suspendFlagsRef.current.suspendScrollSnap = true;
-         }
-
-         // 3) mapare Y → X (dar acceptăm X nativ)
-         const dx =
-            Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-         el.scrollLeft += dx / (getZoom() || 1);
-
          e.preventDefault();
          e.stopPropagation();
-      };
-
-      const onScroll = () => {
-         if (suspendFlagsRef?.current) {
+         beginInteractionIfNeeded();
+         const z = zoomRef.current || 1;
+         el.scrollLeft += e.deltaX / z;
+         el.scrollTop += e.deltaY;
+         if (suspendFlagsRef?.current)
             suspendFlagsRef.current.centerOnDateNextTick = false;
-         }
-         // NU recalculăm fereastra în timpul interacțiunii (evită micro “agațări”)
-         if (!suspendFlagsRef?.current?.isInteracting) recalcWindow();
+         armIdle();
       };
-
-      el.addEventListener("wheel", onWheel, { passive: false });
-      el.addEventListener("scroll", onScroll, { passive: true });
+      el.addEventListener("wheel", onWheel, { passive: false, capture: true });
       return () => {
-         el.removeEventListener("wheel", onWheel);
-         el.removeEventListener("scroll", onScroll);
+         if (wheelStateRef.current.timer) {
+            clearTimeout(wheelStateRef.current.timer);
+            wheelStateRef.current.timer = null;
+         }
+         endWheel();
+         el.removeEventListener("wheel", onWheel, { capture: true });
       };
-   }, [getZoom, zoomAt, recalcWindow]);
+   }, [zoomAt]);
 
-   // Recalc și la zoom
-   useEffect(() => {
-      recalcWindow();
-   }, [zoom, recalcWindow]);
-
-   /* ===== Pan inertial ===== */
+   /* ===== Pan inertial (mouse/pen/touch drag) ===== */
    useInertialPan(scrollRef, {
       suspendFlagsRef,
       shouldIgnore: isInteractiveTarget,
       pixelScaleX: zoom,
       pixelScaleY: 1,
+      inertiaX: true,
+      inertiaY: true,
+      slopPx: 6,
    });
 
-   /* ===== Centrare utilitar ===== */
-   useEffect(() => {
-      __DV_NAV_STATE__.centerOnDateNextTick = true;
-   }, []);
+   /* ===== Navigație pe meciuri (search) ===== */
+   const findClosestMatchIdx = useCallback(
+      (targetDate) => {
+         if (!matchDaysAll.length) return -1;
+         const t = startOfDayTs(targetDate);
+         let lo = 0,
+            hi = matchDaysAll.length - 1,
+            ans = -1;
+         while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const mts = startOfDayTs(matchDaysAll[mid]);
+            if (mts <= t) {
+               ans = mid;
+               lo = mid + 1;
+            } else hi = mid - 1;
+         }
+         return ans === -1 ? 0 : ans;
+      },
+      [matchDaysAll]
+   );
+
+   const setCursorForDate = useCallback(
+      (d) => {
+         if (!anyTokens || !matchDaysAll.length) {
+            setMatchCursor(-1);
+            return;
+         }
+         setMatchCursor(findClosestMatchIdx(d));
+      },
+      [anyTokens, matchDaysAll, findClosestMatchIdx]
+   );
+
    const centerDayHorizontally = useCallback(
       (targetDate) => {
          const el = scrollRef.current;
-         if (!el || !visibleDaysForAll.length) return;
-         const ts = startOfDayTs(targetDate);
-         let idx = visibleDaysForAll.findIndex((d) => startOfDayTs(d) === ts);
-         if (idx === -1) {
-            idx = visibleDaysForAll.findIndex((d) => startOfDayTs(d) >= ts);
-            if (idx === -1) idx = visibleDaysForAll.length - 1;
-         }
+         if (!el || !loadedDays.length) return;
+
+         const globalIdx = findIndexForDate(targetDate);
+         const idx = clamp(globalIdx, 0, loadedDays.length - 1);
+
          const dayWScaled = DAY_W_BASE * zoom;
          const left = idx * dayWScaled + dayWScaled / 2 - el.clientWidth / 2;
          el.scrollLeft = clamp(left, 0, el.scrollWidth - el.clientWidth);
-         recalcWindow();
+
+         saveCenterDay(targetDate);
+
+         if (!suspendFlagsRef.current?.navActive) {
+            setCursorForDate(targetDate);
+         }
+
+         if (anyTokens) {
+            requestAnimationFrame(() => {
+               requestAnimationFrame(() => {
+                  scrollYToFirstMatchInDay(targetDate);
+               });
+            });
+         }
       },
-      [visibleDaysForAll, DAY_W_BASE, zoom, recalcWindow]
+      [
+         anyTokens,
+         loadedDays.length,
+         findIndexForDate,
+         DAY_W_BASE,
+         zoom,
+         scrollYToFirstMatchInDay,
+         setCursorForDate,
+      ]
    );
+
    useEffect(() => {
-      if (!visibleDaysForAll.length) return;
-      if (!__DV_NAV_STATE__.centerOnDateNextTick) return;
+      const el = scrollRef.current;
+      if (!el) return;
+
+      let raf;
+      const tryScroll = () => {
+         const wanted = __DV_NAV_STATE__.pendingScrollYForDate;
+         if (!wanted) return;
+         const wantedTs = startOfDayTs(wanted);
+         raf = requestAnimationFrame(() => {
+            const ok = scrollYToFirstMatchInDay(wanted);
+            if (ok) {
+               __DV_NAV_STATE__.pendingScrollYForDate = null;
+               if (
+                  suspendFlagsRef.current?.navActive &&
+                  suspendFlagsRef.current?.navTargetTs === wantedTs
+               ) {
+                  endNavLockSoon(240);
+               }
+            } else {
+               requestAnimationFrame(() => {
+                  if (scrollYToFirstMatchInDay(wanted)) {
+                     __DV_NAV_STATE__.pendingScrollYForDate = null;
+                     if (
+                        suspendFlagsRef.current?.navActive &&
+                        suspendFlagsRef.current?.navTargetTs === wantedTs
+                     ) {
+                        endNavLockSoon(240);
+                     }
+                  }
+               });
+            }
+         });
+      };
+
+      tryScroll();
+      return () => cancelAnimationFrame(raf);
+   }, [loadedDays.length, tokensKey, scrollYToFirstMatchInDay, endNavLockSoon]);
+
+   useEffect(() => {
+      if (!loadedDays.length || !__DV_NAV_STATE__.centerOnDateNextTick) return;
+      const target = __DV_NAV_STATE__.pendingCenterDate || date;
       const id = requestAnimationFrame(() => {
-         centerDayHorizontally(date);
+         centerDayHorizontally(target);
          __DV_NAV_STATE__.centerOnDateNextTick = false;
+         __DV_NAV_STATE__.pendingCenterDate = null;
          const el = scrollRef.current;
          if (el) el.dispatchEvent(new Event("scroll"));
+         if (!suspendFlagsRef.current?.navActive) {
+            setCursorForDate(target);
+         }
       });
       return () => cancelAnimationFrame(id);
-   }, [date, visibleDaysForAll.length, centerDayHorizontally]);
+   }, [date, loadedDays.length, centerDayHorizontally, setCursorForDate]);
 
-   /* ===== Cache pentru sloturi per-zi ===== */
    const slotsCacheRef = useRef(new Map());
    const getSlotsForTs = useCallback(
       (ts) => {
@@ -1435,12 +1629,46 @@ export default function CustomDayViewOptimized(props = {}) {
       [mkStandardSlotsForDay]
    );
 
-   /* ===== Build UI zi ===== */
+   const dayCacheRef = useRef(new Map());
+   const daySignatureForTs = useCallback(
+      (ts) => {
+         const arr = eventsByDay.get(ts) || [];
+         return arr
+            .map((e) =>
+               [
+                  e.id,
+                  +e.start,
+                  +e.end,
+                  e.color || "",
+                  e.eventPrivateMessage || "",
+                  e.privateMessage || "",
+                  e.isConfirmed ? 1 : 0,
+                  e.gearboxLabel || "",
+                  e.sector || "",
+                  e.studentFirst || "",
+                  e.studentLast || "",
+                  e.instructorId || "",
+               ].join(":")
+            )
+            .join("|");
+      },
+      [eventsByDay]
+   );
+
+   useEffect(() => {
+      dayCacheRef.current.clear();
+   }, [tokensKey, sectorFilterNorm]);
+
    const buildUiDay = useCallback(
       (day) => {
          const ts = startOfDayTs(day);
-         const dayEventsRaw = eventsByDay.get(ts) || [];
+         const signature = `${ts}|${tokensKey}|${sectorFilterNorm}|${daySignatureForTs(
+            ts
+         )}`;
+         const hit = dayCacheRef.current.get(signature);
+         if (hit) return hit;
 
+         const dayEventsRaw = eventsByDay.get(ts) || [];
          const filtered = dayEventsRaw.filter((ev) => {
             const iid = String(ev.instructorId ?? "__unknown");
             const sectorOk =
@@ -1448,26 +1676,17 @@ export default function CustomDayViewOptimized(props = {}) {
             return sectorOk && (anyTokens ? eventMatchesAllTokens(ev) : true);
          });
 
-         // Fallback: dacă instructorii nu au sosit încă, derivăm coloanele din rezervări
          const baseInstructors = instructors?.length
             ? instructors
             : filtered.map((e) => ({ id: e.instructorId }));
 
-         const instSet = new Set(
-            (baseInstructors || [])
-               .map((i) => String(i.id))
-               .filter(
-                  (iid) => !allowedInstBySector || allowedInstBySector.has(iid)
-               )
-         );
+         const instIds = (baseInstructors || [])
+            .map((i) => String(i.id))
+            .filter(
+               (iid) => !allowedInstBySector || allowedInstBySector.has(iid)
+            );
 
-         const { orderedIds, rows } = computeOrderedInstIdsForDay(
-            instSet,
-            day,
-            maxColsPerGroup
-         );
-
-         let idsForRender = orderedIds;
+         let idsForRender = instIds;
          if ((!idsForRender || !idsForRender.length) && filtered.length) {
             idsForRender = Array.from(
                new Set(
@@ -1475,6 +1694,11 @@ export default function CustomDayViewOptimized(props = {}) {
                )
             );
          }
+
+         const rows =
+            idsForRender.length > 0
+               ? Math.ceil(idsForRender.length / maxColsPerGroup)
+               : 1;
 
          const instructorsForDay = (
             idsForRender.length ? idsForRender : ["__pad_0_0"]
@@ -1493,7 +1717,7 @@ export default function CustomDayViewOptimized(props = {}) {
             return { inst: { id: iid, name }, events };
          });
 
-         return {
+         const result = {
             id: `day_${ts}`,
             date: day,
             name: new Intl.DateTimeFormat("ro-RO", {
@@ -1506,21 +1730,84 @@ export default function CustomDayViewOptimized(props = {}) {
             instructors: instructorsForDay,
             rowsCount: Math.max(1, rows),
          };
+
+         const MAX = 512;
+         if (dayCacheRef.current.size > MAX) {
+            const firstKey = dayCacheRef.current.keys().next().value;
+            dayCacheRef.current.delete(firstKey);
+         }
+         dayCacheRef.current.set(signature, result);
+         return result;
       },
       [
+         tokensKey,
+         sectorFilterNorm,
+         daySignatureForTs,
          eventsByDay,
          allowedInstBySector,
          anyTokens,
          eventMatchesAllTokens,
-         computeOrderedInstIdsForDay,
          maxColsPerGroup,
          instructorMeta,
          instructors,
       ]
    );
 
-   /* ======== BLACKOUTS (outline vizual pentru evenimente) ======== */
-   // Helpers TZ (compatibile cu AAddProg)
+   useEffect(() => {
+      __DV_NAV_STATE__.matchDays = anyTokens
+         ? matchDaysAll.map(startOfDayTs)
+         : [];
+      __DV_NAV_STATE__.queryKey = anyTokens
+         ? tokens.map((t) => `${t.kind}:${t.raw}`).join("#") +
+           `|${sectorFilter}`
+         : "";
+   }, [anyTokens, matchDaysAll, tokens, sectorFilter]);
+
+   const goToMatchAt = useCallback(
+      (rawIdx) => {
+         cancelPanInertia();
+         if (!matchDaysAll.length) return;
+         if (suspendFlagsRef.current?.isInteracting) return;
+         const len = matchDaysAll.length;
+         const idx = ((rawIdx % len) + len) % len;
+         setMatchCursor(idx);
+         const target = matchDaysAll[idx];
+         startNavLock(target, anyTokens ? 1400 : 700);
+         __DV_NAV_STATE__.suspendAutoJump = true;
+         centerDayHorizontally(target);
+      },
+      [
+         cancelPanInertia,
+         matchDaysAll,
+         centerDayHorizontally,
+         anyTokens,
+         startNavLock,
+      ]
+   );
+
+   const goPrevMatch = useCallback(() => {
+      if (!matchDaysAll.length) return;
+      const cur = matchCursor < 0 ? 0 : matchCursor;
+      goToMatchAt(cur - 1);
+   }, [matchCursor, matchDaysAll.length, goToMatchAt]);
+
+   const goNextMatch = useCallback(() => {
+      if (!matchDaysAll.length) return;
+      const cur = matchCursor < 0 ? -1 : matchCursor;
+      goToMatchAt(cur + 1);
+   }, [matchCursor, matchDaysAll.length, goToMatchAt]);
+
+   const onSearchKeyDown = useCallback(
+      (e) => {
+         if (e.key !== "Enter") return;
+         cancelPanInertia();
+         if (e.shiftKey) goPrevMatch();
+         else goNextMatch();
+      },
+      [cancelPanInertia, goPrevMatch, goNextMatch]
+   );
+
+   /* ======== BLACKOUTS ======== */
    function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
       const p = new Intl.DateTimeFormat("en-GB", {
          timeZone,
@@ -1567,9 +1854,8 @@ export default function CustomDayViewOptimized(props = {}) {
    function getBlackoutDT(b) {
       if (typeof b === "string") return b;
       const t = String(b?.type || "").toUpperCase();
-      if (t === "REPEAT") {
+      if (t === "REPEAT")
          return b?.startDateTime || b?.dateTime || b?.datetime || null;
-      }
       return (
          b?.dateTime ||
          b?.datetime ||
@@ -1583,12 +1869,10 @@ export default function CustomDayViewOptimized(props = {}) {
       const out = [];
       const t = String(b?.type || "").toUpperCase();
       if (t !== "REPEAT") return out;
-
       const stepDays = Math.max(1, Number(b?.repeatEveryDays || 1));
       const first = b?.startDateTime || b?.dateTime;
       const last = b?.endDateTime || first;
       if (!first || !last) return out;
-
       let cur = new Date(first).getTime();
       const lastMs = new Date(last).getTime();
       while (cur <= lastMs) {
@@ -1599,39 +1883,32 @@ export default function CustomDayViewOptimized(props = {}) {
       return out;
    }
 
-   // 1) Cheile permise în fereastra vizibilă
-   const fromIdx = Math.max(0, win.from);
-   const toIdx = Math.max(fromIdx, win.to);
+   // toate sloturile pentru întreaga lună
    const allowedKeysSet = useMemo(() => {
       const set = new Set();
-      for (let i = fromIdx; i <= toIdx; i++) {
-         const d = visibleDaysForAll[i];
-         if (!d) continue;
+      for (const d of loadedDays) {
          const ts = startOfDayTs(d);
-         const slots = getSlotsForTs(ts);
+         const slots = mkStandardSlotsForDay(new Date(ts));
          for (const s of slots) set.add(localKeyFromTs(s.start));
       }
       return set;
-   }, [fromIdx, toIdx, visibleDaysForAll, getSlotsForTs]);
+   }, [loadedDays, mkStandardSlotsForDay]);
 
-   // 2) Cache: instructorId -> Set(localKeys)
-   const blackoutKeyMapRef = useRef(new Map()); // Map<string, Set<string>>
+   const blackoutKeyMapRef = useRef(new Map());
    const [blackoutVer, setBlackoutVer] = useState(0);
 
-   // 3) Instructorii din fereastra curentă
-   const instIdsInWindow = useMemo(() => {
+   const instIdsAll = useMemo(() => {
       const ids = new Set();
-      for (let i = fromIdx; i <= toIdx; i++) {
-         const day = buildUiDay(visibleDaysForAll[i]);
+      for (const d of loadedDays) {
+         const day = buildUiDay(d);
          (day?.instructors || []).forEach(({ inst }) => {
             const iid = String(inst?.id || "");
             if (!iid.startsWith("__pad_")) ids.add(iid);
          });
       }
       return Array.from(ids);
-   }, [fromIdx, toIdx, visibleDaysForAll, buildUiDay]);
+   }, [loadedDays, buildUiDay]);
 
-   // 4) Load lazy pentru fiecare instructor
    const ensureBlackoutsFor = useCallback(
       async (instId) => {
          const key = String(instId);
@@ -1659,44 +1936,50 @@ export default function CustomDayViewOptimized(props = {}) {
    );
 
    useEffect(() => {
-      instIdsInWindow.forEach((iid) => {
+      instIdsAll.forEach((iid) => {
          ensureBlackoutsFor(iid);
       });
-   }, [instIdsInWindow, ensureBlackoutsFor]);
+   }, [instIdsAll, ensureBlackoutsFor]);
 
    /* ===== Toolbar / handlers ===== */
-   const [editMode, setEditMode] = useState(false);
    const handleManualRefresh = useCallback(() => {
-      // Poți evita refresh-ul dacă userul interacționează
       if (!suspendFlagsRef.current?.isInteracting) {
          dispatch(fetchReservationsDelta());
       }
    }, [dispatch]);
-   const openReservationOnDbl = useCallback(
-      (reservationId) => {
-         if (editMode) return;
-         openPopup("reservationEdit", { reservationId });
-      },
-      [editMode]
-   );
-   const createFromEmptyOnDbl = useCallback(
-      (ev) => {
-         if (editMode) return;
-         handleCreateFromEmpty(ev);
-      },
-      [editMode]
-   );
 
-   const showFullToolbar = !isMobile && !compact;
+   useEffect(() => {
+      return listenCalendarRefresh(() => {
+         const p = dispatch(fetchReservationsDelta());
+         p.finally(() => {
+            if (suspendFlagsRef.current?.isInteracting) {
+               requestAnimationFrame(() => {
+                  scrollRef.current?.dispatchEvent(new CustomEvent("dvpanend"));
+               });
+            }
+         });
+      });
+   }, [dispatch]);
 
-   /* ================= Render ================= */
-   const count = visibleDaysForAll.length;
+   useEffect(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const onPanEnd = () => {
+         if (pendingReservationsRef.current) {
+            setReservationsUI(pendingReservationsRef.current);
+            pendingReservationsRef.current = null;
+         }
+         const center = getCenterDateFromScroll();
+         if (center) saveCenterDay(center);
+      };
+      el.addEventListener("dvpanend", onPanEnd);
+      return () => el.removeEventListener("dvpanend", onPanEnd);
+   }, [getCenterDateFromScroll]);
+
+   const count = loadedDays.length;
 
    return (
-      <div
-         className={`dayview${editMode ? " edit-mode" : ""}`}
-         style={{ ...layoutVars, height: CONTAINER_H }}
-      >
+      <div className="dayview" style={{ ...layoutVars, height: CONTAINER_H }}>
          {/* Header */}
          <div className="dayview__header">
             <div
@@ -1713,8 +1996,6 @@ export default function CustomDayViewOptimized(props = {}) {
                      <ReactSVG className="rbc-btn-group__icon" src={arrow} />
                   </button>
                )}
-
-               {/* Toggle sector: Toate / Botanica / Ciocana */}
                <button
                   className={`dv-btn dv-sector-toggle ${
                      sectorFilter === "Botanica"
@@ -1744,7 +2025,7 @@ export default function CustomDayViewOptimized(props = {}) {
             </div>
 
             {/* Toolbar */}
-            {showFullToolbar ? (
+            {!isMobile && !compact ? (
                <div
                   className="dayview__toolbar"
                   style={{ display: "flex", gap: 8 }}
@@ -1752,37 +2033,69 @@ export default function CustomDayViewOptimized(props = {}) {
                   <input
                      className="dv-search__input"
                      placeholder={
-                        dataReady
-                           ? "Caută: ion 09:00 MD-ABC ..."
-                           : "Se încarcă programările…"
+                        dataReady ? "Caută" : "Se încarcă programările…"
                      }
                      disabled={!dataReady}
                      value={query}
                      onChange={(e) => setQuery(e.target.value)}
+                     onKeyDown={onSearchKeyDown}
                   />
+                  <div
+                     className="dv-search-nav"
+                     style={{
+                        display: "inline-flex",
+                        gap: 6,
+                        alignItems: "center",
+                     }}
+                  >
+                     <button
+                        className="dv-btn"
+                        title="Căutare: anterior"
+                        disabled={!anyTokens || !matchDaysAll.length}
+                        onClick={() => {
+                           cancelPanInertia();
+                           goPrevMatch();
+                        }}
+                        aria-label="Anterior"
+                     >
+                        ‹
+                     </button>
+                     <span
+                        className="dv-search-count"
+                        style={{
+                           textAlign: "center",
+                           opacity: anyTokens ? 1 : 0.5,
+                        }}
+                     >
+                        {matchDaysAll.length ? Math.max(0, matchCursor) + 1 : 0}
+                        /{matchDaysAll.length}
+                     </span>
+                     <button
+                        className="dv-btn"
+                        title="Căutare: următor"
+                        disabled={!anyTokens || !matchDaysAll.length}
+                        onClick={() => {
+                           cancelPanInertia();
+                           goNextMatch();
+                        }}
+                        aria-label="Următor"
+                     >
+                        ›
+                     </button>
+                  </div>
                   <button
-                     className="dv-btn"
+                     className="dv-btn zoom1"
                      onClick={(e) => zoomAt(1 / 1.3, e?.clientX)}
                      title="Zoom out"
                   >
                      −
                   </button>
                   <button
-                     className="dv-btn"
+                     className="dv-btn zoom2"
                      onClick={(e) => zoomAt(1.3, e?.clientX)}
                      title="Zoom in"
                   >
                      +
-                  </button>
-                  <button
-                     className={`dv-btn ${editMode ? "dv-btn--active" : ""}`}
-                     onClick={() => setEditMode((v) => !v)}
-                     title="Editează pozițiile instructorilor"
-                  >
-                     <ReactSVG
-                        className="groups__icon react-icon"
-                        src={editIcon}
-                     />
                   </button>
                   <button
                      className="dv-btn reset"
@@ -1815,6 +2128,7 @@ export default function CustomDayViewOptimized(props = {}) {
                      disabled={!dataReady}
                      value={query}
                      onChange={(e) => setQuery(e.target.value)}
+                     onKeyDown={onSearchKeyDown}
                   />
                   <div ref={mobileMenuRef} style={{ position: "relative" }}>
                      <button
@@ -1846,6 +2160,43 @@ export default function CustomDayViewOptimized(props = {}) {
                         >
                            <button
                               className="dv-btn"
+                              onClick={() => {
+                                 cancelPanInertia();
+                                 goPrevMatch();
+                                 setMobileMenuOpen(false);
+                              }}
+                              disabled={!anyTokens || !matchDaysAll.length}
+                              title="Anterior"
+                           >
+                              ‹
+                           </button>
+                           <div
+                              className="dv-search-count"
+                              style={{
+                                 alignSelf: "center",
+                                 padding: "0 4px",
+                                 opacity: anyTokens ? 1 : 0.5,
+                              }}
+                           >
+                              {matchDaysAll.length
+                                 ? Math.max(0, matchCursor) + 1
+                                 : 0}
+                              /{matchDaysAll.length}
+                           </div>
+                           <button
+                              className="dv-btn"
+                              onClick={() => {
+                                 cancelPanInertia();
+                                 goNextMatch();
+                                 setMobileMenuOpen(false);
+                              }}
+                              disabled={!anyTokens || !matchDaysAll.length}
+                              title="Următor"
+                           >
+                              ›
+                           </button>
+                           <button
+                              className="dv-btn"
                               onClick={(e) => {
                                  zoomAt(1 / 1.3, e?.clientX);
                                  setMobileMenuOpen(false);
@@ -1863,21 +2214,6 @@ export default function CustomDayViewOptimized(props = {}) {
                               title="Zoom in"
                            >
                               +
-                           </button>
-                           <button
-                              className={`dv-btn ${
-                                 editMode ? "dv-btn--active" : ""
-                              }`}
-                              onClick={() => {
-                                 setEditMode((v) => !v);
-                                 setMobileMenuOpen(false);
-                              }}
-                              title="Editează pozițiile"
-                           >
-                              <ReactSVG
-                                 className="groups__icon react-icon"
-                                 src={editIcon}
-                              />
                            </button>
                            <button
                               className="dv-btn reset"
@@ -1904,10 +2240,10 @@ export default function CustomDayViewOptimized(props = {}) {
             className="dayview__row dv-pan"
             ref={scrollRef}
             style={{
-               touchAction: "pan-x",
+               touchAction: "none",
                height: rowHeight ? `${rowHeight}px` : undefined,
                overflowX: "auto",
-               overflowY: "hidden",
+               overflowY: "auto",
                overscrollBehavior: "contain",
                cursor: "grab",
                WebkitUserDrag: "none",
@@ -1918,7 +2254,7 @@ export default function CustomDayViewOptimized(props = {}) {
                className="dayview__track"
                style={{
                   position: "relative",
-                  width: contentW * zoom,
+                  width: contentW,
                   height: "100%",
                }}
             >
@@ -1933,13 +2269,8 @@ export default function CustomDayViewOptimized(props = {}) {
                      willChange: "transform",
                   }}
                >
-                  {/* Randăm DOAR zilele [from..to], poziționate absolut */}
                   {count > 0 &&
-                     Array.from(
-                        { length: toIdx - fromIdx + 1 },
-                        (_, k) => fromIdx + k
-                     ).map((absIdx) => {
-                        const d = visibleDaysForAll[absIdx];
+                     loadedDays.map((d, idx) => {
                         const ts = startOfDayTs(d);
                         const day = buildUiDay(d);
                         const slots = getSlotsForTs(ts);
@@ -1948,7 +2279,6 @@ export default function CustomDayViewOptimized(props = {}) {
                            maxColsPerGroup,
                            true
                         );
-
                         return (
                            <section
                               key={day.id}
@@ -1956,7 +2286,7 @@ export default function CustomDayViewOptimized(props = {}) {
                               style={{
                                  position: "absolute",
                                  left:
-                                    absIdx * (baseMetrics.dayWidth + 12 + 32),
+                                    idx * (baseMetrics.dayWidth + 12 + DAY_GAP),
                                  top: 0,
                                  width: `${baseMetrics.dayWidth + 12}px`,
                                  "--cols": maxColsPerGroup,
@@ -1975,14 +2305,11 @@ export default function CustomDayViewOptimized(props = {}) {
                                     {day.name}
                                  </div>
                               </header>
-
                               {rows.map((row, rowIdxLocal) => (
                                  <div
                                     key={`${day.id}__block__${rowIdxLocal}`}
                                     className="dayview__block"
-                                    style={{
-                                       marginTop: rowIdxLocal ? 32 : 0,
-                                    }}
+                                    style={{ marginTop: rowIdxLocal ? 32 : 0 }}
                                  >
                                     <div className="dayview__group-content dayview__group-content--row">
                                        <div
@@ -1996,26 +2323,25 @@ export default function CustomDayViewOptimized(props = {}) {
                                                         eventMatchesAllTokens
                                                      )
                                                    : events;
-
-                                                // cheie ieftină pentru listă evenimente
-                                                const first = filteredEvents[0];
-                                                const last =
-                                                   filteredEvents[
-                                                      filteredEvents.length - 1
-                                                   ];
-                                                const eventsKey =
-                                                   filteredEvents.length +
-                                                   ":" +
-                                                   (first?.id ?? "") +
-                                                   ":" +
-                                                   (last?.id ?? "") +
-                                                   ":" +
-                                                   (first?.start?.getTime?.() ??
-                                                      "") +
-                                                   ":" +
-                                                   (last?.start?.getTime?.() ??
-                                                      "");
-
+                                                const visualKey = filteredEvents
+                                                   .map((e) =>
+                                                      [
+                                                         e.id,
+                                                         e.start?.getTime?.() ??
+                                                            0,
+                                                         e.end?.getTime?.() ??
+                                                            0,
+                                                         e.color || "",
+                                                         e.privateMessage || "",
+                                                         e.isConfirmed ? 1 : 0,
+                                                         e.gearboxLabel || "",
+                                                         e.sector || "",
+                                                         e.studentFirst || "",
+                                                         e.studentLast || "",
+                                                      ].join(":")
+                                                   )
+                                                   .join("|");
+                                                const eventsKey = `${filteredEvents.length}:${visualKey}`;
                                                 return (
                                                    <MemoInstructorColumn
                                                       key={`${day.id}-${inst.id}-${colIdx}`}
@@ -2024,7 +2350,6 @@ export default function CustomDayViewOptimized(props = {}) {
                                                       events={filteredEvents}
                                                       eventsKey={eventsKey}
                                                       slots={slots}
-                                                      editMode={editMode}
                                                       instructorMeta={
                                                          instructorMeta
                                                       }
@@ -2035,33 +2360,23 @@ export default function CustomDayViewOptimized(props = {}) {
                                                          highlightTokens
                                                       }
                                                       tokensKey={tokensKey}
-                                                      getOrderStringForInst={
-                                                         getOrderStringForInst
-                                                      }
-                                                      getPosGeneric={
-                                                         getPosGeneric
-                                                      }
-                                                      getDayOnlyPos={
-                                                         getDayOnlyPos
-                                                      }
-                                                      nudgeInstructor={
-                                                         nudgeInstructor
-                                                      }
-                                                      rowIdxLocal={rowIdxLocal}
-                                                      colIdx={colIdx}
-                                                      rowsCount={day.rowsCount}
-                                                      onOpenReservation={
-                                                         openReservationOnDbl
-                                                      }
+                                                      onOpenReservation={(
+                                                         reservationId
+                                                      ) => {
+                                                         openPopup(
+                                                            "reservationEdit",
+                                                            { reservationId }
+                                                         );
+                                                      }}
                                                       onCreateFromEmpty={
-                                                         createFromEmptyOnDbl
+                                                         handleCreateFromEmpty
                                                       }
                                                       blockedKeySet={
                                                          blackoutKeyMapRef.current.get(
                                                             String(inst.id)
                                                          ) || null
-                                                      } // ⬅️ NOU
-                                                      blackoutVer={blackoutVer} // ⬅️ NOU
+                                                      }
+                                                      blackoutVer={blackoutVer}
                                                    />
                                                 );
                                              }
@@ -2080,41 +2395,76 @@ export default function CustomDayViewOptimized(props = {}) {
    );
 }
 
-/* ===== Navigație ===== */
+/* ===== Navigație / titlu pentru react-big-calendar ===== */
 CustomDayViewOptimized.navigate = (date, action) => {
    const d = new Date(date);
    const startOf = (x) =>
       new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 
+   const lockNav = (outDate) => {
+      const s = __DV_NAV_STATE__;
+      if (!s) return;
+      s.navActive = true;
+      s.navTargetTs = startOf(outDate);
+      if (s.navUnlockTimer) clearTimeout(s.navUnlockTimer);
+      s.navUnlockTimer = setTimeout(() => {
+         s.navActive = false;
+         s.navTargetTs = null;
+         s.navUnlockTimer = null;
+      }, 900);
+   };
+
    const hasQuery =
       !!__DV_NAV_STATE__.queryKey &&
       (__DV_NAV_STATE__.matchDays?.length || 0) > 0;
-
    const all = __DV_NAV_STATE__.allDaysSorted || [];
    const list =
       hasQuery && __DV_NAV_STATE__.matchDays?.length
          ? __DV_NAV_STATE__.matchDays.slice().sort((a, b) => a - b)
          : all.slice();
-
    if (!list.length) {
       switch (String(action)) {
-         case "TODAY":
-            return new Date();
-         case "PREV":
-            return new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
-         case "NEXT":
-            return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+         case "TODAY": {
+            const out = new Date();
+            __DV_NAV_STATE__.pendingCenterDate = out;
+            __DV_NAV_STATE__.centerOnDateNextTick = true;
+            lockNav(out);
+            return out;
+         }
+         case "PREV": {
+            const out = new Date(
+               d.getFullYear(),
+               d.getMonth(),
+               d.getDate() - 1
+            );
+            __DV_NAV_STATE__.pendingCenterDate = out;
+            __DV_NAV_STATE__.centerOnDateNextTick = true;
+            lockNav(out);
+            return out;
+         }
+         case "NEXT": {
+            const out = new Date(
+               d.getFullYear(),
+               d.getMonth(),
+               d.getDate() + 1
+            );
+            __DV_NAV_STATE__.pendingCenterDate = out;
+            __DV_NAV_STATE__.centerOnDateNextTick = true;
+            lockNav(out);
+            return out;
+         }
          default:
             return d;
       }
    }
-
    const curTs = startOf(d);
    if (String(action) === "NEXT") {
       const nextTs = list.find((ts) => ts > curTs) ?? list[list.length - 1];
       const out = new Date(nextTs);
       __DV_NAV_STATE__.suspendAutoJump = true;
+      __DV_NAV_STATE__.pendingCenterDate = out;
       __DV_NAV_STATE__.centerOnDateNextTick = true;
+      lockNav(out);
       return out;
    }
    if (String(action) === "PREV") {
@@ -2127,20 +2477,24 @@ CustomDayViewOptimized.navigate = (date, action) => {
       }
       const out = new Date(prevTs);
       __DV_NAV_STATE__.suspendAutoJump = true;
+      __DV_NAV_STATE__.pendingCenterDate = out;
       __DV_NAV_STATE__.centerOnDateNextTick = true;
+      lockNav(out);
       return out;
    }
    if (String(action) === "TODAY") {
+      const out = new Date();
+      __DV_NAV_STATE__.pendingCenterDate = out;
       __DV_NAV_STATE__.centerOnDateNextTick = true;
-      return new Date();
+      lockNav(out);
+      return out;
    }
    return d;
 };
 
 CustomDayViewOptimized.title = (date, { localizer } = {}) => {
-   if (localizer && typeof localizer.format === "function") {
+   if (localizer && typeof localizer.format === "function")
       return localizer.format(date, "ddd, DD MMM");
-   }
    return new Date(date).toLocaleDateString("ro-RO", {
       weekday: "short",
       day: "2-digit",

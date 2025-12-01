@@ -182,12 +182,12 @@ body {
    }
 }
 
-body.popup-open .main {
-   transform: translateX(15%);
-   @media only screen and (max-width: $mobile) {
-      transform: translateX(50%);
-   }
-}
+//body.popup-open .main {
+//   transform: translateX(15%);
+//   @media only screen and (max-width: $mobile) {
+//      transform: translateX(50%);
+//   }
+//}
 
 // scroll bar <=>
 @media only screen and (max-width: $mobile) {

@@ -1,16 +1,46 @@
 // src/components/SPanel/PracticeStatistics.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
    getAllMyPracticeHistory,
    getTicketQuestions,
 } from "../../api/examService";
 import AlertPills from "../Utils/AlertPills";
 
-/* ===== Config din .env =====
-   - VITE_TICKETS_START (ex: 246)
-   - VITE_TICKETS_COUNT (ex: 14)  ← câte bilete vrei să contezi
-   - opțional: VITE_TICKETS_LIST = "P1,P2,P5" (dacă vrei să alegi exact biletele după P#)
-*/
+/* ================= i18n ================= */
+const I18N = {
+   ro: {
+      stats_title: "Statistici practică",
+      loading: "Se încarcă…",
+      total_questions: "Total întrebări",
+      correct_answers_sum: "Răspunsuri corecte",
+      wrong_answers: "Răspunsuri greșite",
+      unanswered_questions: "Întrebări necompletate",
+      aria_correct: "Corecte {pct}%",
+      aria_wrong: "Greșite {pct}%",
+      aria_unanswered: "Necompletate {pct}%",
+      err_history: "Nu am putut încărca istoricul.",
+      err_counts:
+         "Nu am putut încărca numărul de întrebări pentru unele bilete.",
+   },
+   ru: {
+      stats_title: "Статистика практики",
+      loading: "Загрузка…",
+      total_questions: "Всего вопросов",
+      correct_answers_sum: "Правильные ответы ",
+      wrong_answers: "Неправильные ответы",
+      unanswered_questions: "Без ответа",
+      aria_correct: "Верно {pct}%",
+      aria_wrong: "Ошибки {pct}%",
+      aria_unanswered: "Без ответа {pct}%",
+      err_history: "Не удалось загрузить историю.",
+      err_counts: "Не удалось загрузить число вопросов для части билетов.",
+   },
+};
+
+const formatI18n = (str, vars) =>
+   vars ? str.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`) : str;
+
+/* ——— Helpers ——— */
 const readEnv = (viteKey, craKey) =>
    (typeof import.meta !== "undefined" &&
       import.meta?.env &&
@@ -26,7 +56,6 @@ const COUNT = Number(
 );
 const TICKETS_LIST_RAW = readEnv("VITE_TICKETS_LIST", "REACT_APP_TICKETS_LIST"); // ex: "P1,P3,P7"
 
-/* ——— Helpers ——— */
 const percent = (num, den) =>
    den > 0 ? Math.round((num * 10000) / den) / 100 : 0;
 const ts = (x) => (x ? Date.parse(x) || 0 : 0);
@@ -45,8 +74,34 @@ const idFromTicketName = (ticketName) => {
    return Number.isFinite(p) ? pToId(p) : null;
 };
 
+/* ===== limbă partajată (citește din localStorage + ascultă evenimentul "exam:lang") ===== */
+function useSharedLang() {
+   const [lang, setLang] = useState(() => {
+      const saved =
+         (typeof localStorage !== "undefined" &&
+            localStorage.getItem("exam.lang")) ||
+         "ro";
+      return saved === "ru" ? "ru" : "ro";
+   });
+
+   useEffect(() => {
+      const onCustom = (e) => setLang(e.detail === "ru" ? "ru" : "ro");
+      const onStorage = (e) => {
+         if (e.key === "exam.lang") setLang(e.newValue === "ru" ? "ru" : "ro");
+      };
+      window.addEventListener("exam:lang", onCustom);
+      window.addEventListener("storage", onStorage);
+      return () => {
+         window.removeEventListener("exam:lang", onCustom);
+         window.removeEventListener("storage", onStorage);
+      };
+   }, []);
+
+   return lang;
+}
+
 /* ============ Bară (Corecte / Greșite / Necompletate) ============ */
-function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32 }) {
+function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32, t }) {
    const [ok, setOk] = useState(0);
    const [bad, setBad] = useState(0);
    const [skip, setSkip] = useState(1);
@@ -63,6 +118,12 @@ function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32 }) {
       return () => cancelAnimationFrame(raf);
    }, [shareOk, shareBad, shareSkip]);
 
+   const ariaOk = t("aria_correct", { pct: (pctCorrect ?? 0).toFixed(1) });
+   const ariaBad = t("aria_wrong", { pct: (pctWrong ?? 0).toFixed(1) });
+   const ariaSkip = t("aria_unanswered", {
+      pct: (pctUnanswered ?? 0).toFixed(1),
+   });
+
    return (
       <div className="practice-stats__bar">
          <div
@@ -77,21 +138,21 @@ function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32 }) {
                style={{
                   width: `calc(var(--base) + (100% - var(--basesum)) * ${ok})`,
                }}
-               aria-label={`Corecte ${pctCorrect?.toFixed?.(1) ?? 0}%`}
+               aria-label={ariaOk}
             />
             <div
                className="practice-stats__bar-seg practice-stats__bar-seg--bad"
                style={{
                   width: `calc(var(--base) + (100% - var(--basesum)) * ${bad})`,
                }}
-               aria-label={`Greșite ${pctWrong?.toFixed?.(1) ?? 0}%`}
+               aria-label={ariaBad}
             />
             <div
                className="practice-stats__bar-seg practice-stats__bar-seg--skip"
                style={{
                   width: `calc(var(--base) + (100% - var(--basesum)) * ${skip})`,
                }}
-               aria-label={`Necompletate ${pctUnanswered?.toFixed?.(1) ?? 0}%`}
+               aria-label={ariaSkip}
             />
          </div>
       </div>
@@ -99,6 +160,15 @@ function SegmentedBar({ pctCorrect, pctWrong, pctUnanswered, basePx = 32 }) {
 }
 
 export default function PracticeStatistics() {
+   const lang = useSharedLang();
+   const t = useCallback(
+      (key, vars) => {
+         const base = (I18N[lang] && I18N[lang][key]) || I18N.ro[key] || key;
+         return formatI18n(base, vars);
+      },
+      [lang]
+   );
+
    const [loading, setLoading] = useState(true);
    const [pillMsgs, setPillMsgs] = useState([]);
    const [historyItems, setHistoryItems] = useState([]);
@@ -112,8 +182,8 @@ export default function PracticeStatistics() {
    const dismissLastPill = () => setPillMsgs((arr) => arr.slice(0, -1));
    useEffect(() => {
       if (!pillMsgs.length) return;
-      const t = setTimeout(dismissLastPill, 3500);
-      return () => clearTimeout(t);
+      const tmo = setTimeout(dismissLastPill, 3500);
+      return () => clearTimeout(tmo);
    }, [pillMsgs]);
 
    /* ——— lista de bilete selectate ——— */
@@ -160,12 +230,12 @@ export default function PracticeStatistics() {
             }));
             setHistoryItems(norm);
          } catch (e) {
-            pushError(e?.message || "Nu am putut încărca istoricul.");
+            pushError(t("err_history"));
          } finally {
             setLoading(false);
          }
       })();
-   }, []);
+   }, [t]);
 
    /* ——— 2) număr real de întrebări pentru fiecare bilet selectat ——— */
    useEffect(() => {
@@ -193,15 +263,13 @@ export default function PracticeStatistics() {
             for (const [tid, cnt] of entries) map[tid] = cnt;
             setTicketQuestionCount(map);
          } catch (e) {
-            pushError(
-               "Nu am putut încărca numărul de întrebări pentru unele bilete."
-            );
+            pushError(t("err_counts"));
          }
       })();
       return () => {
          alive = false;
       };
-   }, [selectedTicketIds]);
+   }, [selectedTicketIds, t]);
 
    /* ——— 3) ultima încercare FINALIZATĂ per bilet (după ticketName -> P# -> ticketId) ——— */
    const lastFinishedByTicketId = useMemo(() => {
@@ -228,11 +296,7 @@ export default function PracticeStatistics() {
       );
    }, [selectedTicketIds, ticketQuestionCount]);
 
-   /* ——— 5) agregare: corecte / greșite / necompletate ———
-        - Pentru fiecare bilet selectat:
-            dacă are o încercare finalizată:  corecte += scor; greșite += (întrebări_bilet - scor)
-            altfel:                          necompletate += întrebări_bilet
-  */
+   /* ——— 5) agregare: corecte / greșite / necompletate ——— */
    const aggregates = useMemo(() => {
       let correct = 0;
       let wrong = 0;
@@ -267,31 +331,17 @@ export default function PracticeStatistics() {
       universeTotal,
    ]);
 
-   /* ——— recent (informativ) ——— */
-   const recent = useMemo(() => {
-      const arr = [...(historyItems || [])]
-         .filter((a) => {
-            const tid = idFromTicketName(a.ticketName);
-            return tid && selectedTicketIds.includes(tid);
-         })
-         .sort(
-            (a, b) =>
-               ts(b.finishedAt || b.startedAt) - ts(a.finishedAt || a.startedAt)
-         );
-      return arr.slice(0, 10);
-   }, [historyItems, selectedTicketIds]);
-
    return (
       <div className="practice-stats">
          <AlertPills messages={pillMsgs} onDismiss={dismissLastPill} />
 
          <div className="practice-stats__head">
-            <h2>
-               Statistici Practică 
-            </h2>
+            <h2>{t("stats_title")}</h2>
          </div>
 
-         {loading && <div className="practice-stats__loading">Se încarcă…</div>}
+         {loading && (
+            <div className="practice-stats__loading">{t("loading")}</div>
+         )}
 
          {!loading && (
             <>
@@ -300,19 +350,19 @@ export default function PracticeStatistics() {
                   <div className="practice-stats__table">
                      <div className="practice-stats__col">
                         <div className="practice-stats__item">
-                           <p>Total întrebări </p>
+                           <p>{t("total_questions")}</p>
                            <span>{aggregates.totalUniverse}</span>
                         </div>
                         <div className="practice-stats__item">
-                           <p>Răspunsuri corecte (sumă scoruri)</p>
+                           <p>{t("correct_answers_sum")}</p>
                            <span>{aggregates.correct}</span>
                         </div>
                         <div className="practice-stats__item">
-                           <p>Răspunsuri greșite</p>
+                           <p>{t("wrong_answers")}</p>
                            <span>{aggregates.wrong}</span>
                         </div>
                         <div className="practice-stats__item">
-                           <p>Întrebări necompletate</p>
+                           <p>{t("unanswered_questions")}</p>
                            <span>{aggregates.unanswered}</span>
                         </div>
                      </div>
@@ -325,6 +375,13 @@ export default function PracticeStatistics() {
                      pctCorrect={aggregates.pctCorrect}
                      pctWrong={aggregates.pctWrong}
                      pctUnanswered={aggregates.pctUnanswered}
+                     t={(key, vars) => {
+                        const base =
+                           (I18N[lang] && I18N[lang][key]) ||
+                           I18N.ro[key] ||
+                           key;
+                        return formatI18n(base, vars);
+                     }}
                   />
                </div>
             </>

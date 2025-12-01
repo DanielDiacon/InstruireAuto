@@ -1,5 +1,11 @@
-// src/components/SPanel/Practice.jsx
-import React, { useMemo, useRef, useState, useEffect, useContext } from "react";
+import React, {
+   useMemo,
+   useRef,
+   useState,
+   useEffect,
+   useContext,
+   useCallback,
+} from "react";
 import AlertPills from "../Utils/AlertPills";
 import { UserContext } from "../../UserContext";
 import {
@@ -7,8 +13,62 @@ import {
    getPracticeSession,
    submitPracticeAnswer,
    getTicketQuestions,
-   getAllMyPracticeHistory, // status-urile biletelor
+   getAllMyPracticeHistory,
 } from "../../api/examService";
+
+/* ================= i18n ================= */
+const I18N = {
+   ro: {
+      practice_title: "Practica",
+      lang_ro: "Română",
+      lang_ru: "Русский",
+      ticket_n: "Bilet {n}",
+      start_ticket_title: "Start bilet {n}",
+      back: "Înapoi",
+      question_index: "Întrebarea {i}/{total}",
+      question_n: "Întrebarea {n}",
+      question_alt: "Întrebare",
+      answered_count: "Răspunse: {n}",
+      left_count: "Nerăspunse: {n}",
+      correct_count: "Corecte: {n}",
+      wrong_count: "Greșite: {n}",
+      next: "Următorul",
+      finish: "Finalizează",
+      choose_answer: "Alege răspunsul",
+      cannot_start_practice: "Nu am putut porni/relua sesiunea de practică.",
+      cannot_submit: "Nu am putut trimite răspunsul.",
+      session_closed_switch_local:
+         "Sesiunea server s-a închis/expirat. Trec pe mod local curat.",
+   },
+   ru: {
+      practice_title: "Практика",
+      lang_ro: "Română",
+      lang_ru: "Русский",
+      ticket_n: "Билет {n}",
+      start_ticket_title: "Открыть билет {n}",
+      back: "Назад",
+      question_index: "Вопрос {i}/{total}",
+      question_n: "Вопрос {n}",
+      question_alt: "Вопрос",
+      answered_count: "Отвечено: {n}",
+      left_count: "Осталось: {n}",
+      correct_count: "Верно: {n}",
+      wrong_count: "Ошибки: {n}",
+      next: "Далее",
+      finish: "Завершить",
+      choose_answer: "Выберите ответ",
+      cannot_start_practice:
+         "Не удалось запустить/возобновить сессию практики.",
+      cannot_submit: "Не удалось отправить ответ.",
+      session_closed_switch_local:
+         "Серверная сессия закрыта/истекла. Перехожу в локальный режим.",
+   },
+};
+
+function formatI18n(str, vars) {
+   if (!vars) return str;
+   return str.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
+}
 
 /* ===== Config din .env ===== */
 const readEnv = (viteKey, craKey) =>
@@ -61,8 +121,34 @@ function rewriteImageUrl(raw) {
    }
 }
 
-/** Normalizează structura venită din GET /exams/practice/{id} în formatul UI */
-function normalizeSessionToTicket(sess) {
+/* pick text ro/ru (acceptă și string JSON {"ro":"","ru":""}) */
+const pickLang = (v, lang) => {
+   if (v == null) return "";
+   if (typeof v === "string") {
+      const s = v.trim();
+      if (s.startsWith("{") && (s.includes('"ro"') || s.includes('"ru"'))) {
+         try {
+            const obj = JSON.parse(s);
+            if (obj && typeof obj === "object") {
+               return String(obj[lang] ?? obj.ro ?? obj.ru ?? "");
+            }
+         } catch {}
+      }
+      return s;
+   }
+   if (typeof v === "object") {
+      if (v[lang] != null) return String(v[lang]);
+      if (v.ro != null || v.ru != null) return String(v.ro ?? v.ru ?? "");
+   }
+   try {
+      return String(v);
+   } catch {
+      return "";
+   }
+};
+
+/** Normalizează sesiunea -> ticket (extrage și textele pe limba curentă) */
+function normalizeSessionToTicket(sess, lang) {
    if (!sess) return null;
 
    const ticket = sess.ticket || {};
@@ -72,29 +158,33 @@ function normalizeSessionToTicket(sess) {
          ? Number(tidRaw)
          : null;
 
-   const name =
-      ticket?.name || sess.ticketName || (tid ? `Bilet ${tid}` : "Bilet");
+   const name = pickLang(
+      ticket?.name || sess.ticketName || (tid ? `Bilet ${tid}` : "Bilet"),
+      lang
+   );
    const rawQs = ticket?.questions || sess.questions || [];
 
-   const questions = (rawQs || []).map((q, i) => ({
-      id: Number(q?.id ?? q?.questionId ?? i + 1),
-      text: q?.text ?? q?.question ?? q?.title ?? "",
-      answers: Array.isArray(q?.answers)
+   const questions = (rawQs || []).map((q, i) => {
+      const answersRaw = Array.isArray(q?.answers)
          ? q.answers
-         : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null),
-      correctAnswer:
-         q?.correctAnswer ?? q?.correctIndex ?? q?.rightIndex ?? undefined,
-      image: rewriteImageUrl(q?.image || q?.img || ""),
-      order: Number.isFinite(q?.order) ? q.order : i,
-   }));
+         : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null);
+
+      return {
+         id: Number(q?.id ?? q?.questionId ?? i + 1),
+         text: pickLang(q?.text ?? q?.question ?? q?.title ?? "", lang),
+         answers: answersRaw.map((a) => pickLang(a, lang)).filter(Boolean),
+         image: rewriteImageUrl(pickLang(q?.image || q?.img || "", lang)),
+         order: Number.isFinite(q?.order) ? Number(q.order) : i,
+      };
+   });
 
    return { id: tid, name, questions };
 }
 
-/* prag „admis” (22/26 sau 85%) */
+/* prag „admis” (22/26 sau 85%) — folosit doar la statistica locală */
 const requiredOk = (total) => (total >= 26 ? 22 : Math.ceil(total * 0.85));
 
-/* extras numărul P din “Practice P2”, “P 12”, “PracticeP7” etc. */
+/* extras P# din denumire “Practice P2” etc. */
 function getTicketNrFromName(name) {
    const m = String(name || "").match(/P\s*([0-9]+)/i);
    const n = m ? Number(m[1]) : NaN;
@@ -108,57 +198,51 @@ const rememberPractice = (tid, pid) => {
       localStorage.setItem(lastKeyForTicket(tid), String(pid));
    } catch {}
 };
-const recallPractice = (tid) => {
+
+/* ===== Helpers resume/hidratare ===== */
+function buildBaselineFromSession(sess) {
+   const qs = sess?.ticket?.questions || sess?.questions || [];
+   const map = {};
+   qs.forEach((q) => {
+      const qid = Number(q?.id ?? q?.questionId);
+      const sel = q?.selectedAnswer ?? q?.userAnswer; // server: 1-based
+      if (Number.isInteger(qid) && Number.isInteger(sel)) {
+         const zeroBased = sel >= 1 ? sel - 1 : sel; // -> 0-based pt. UI/diff
+         map[qid] = zeroBased;
+      }
+   });
+   return map;
+}
+
+function firstUnansweredIndex(ticket, pendingMap) {
+   const i = (ticket?.questions || []).findIndex(
+      (q) => !(pendingMap[q.id] && pendingMap[q.id].selected != null)
+   );
+   return i >= 0 ? i : 0;
+}
+async function tryResumeFromLocal(tid, lang) {
    try {
-      const v = localStorage.getItem(lastKeyForTicket(tid));
-      const n = v ? Number(v) : null;
-      return Number.isInteger(n) && n > 0 ? n : null;
+      const last = localStorage.getItem(lastKeyForTicket(tid));
+      if (!last) return null;
+      const sess = await getPracticeSession(last, lang);
+      return { pid: Number(last), sess };
    } catch {
       return null;
    }
-};
-const forgetPractice = (tid) => {
-   try {
-      localStorage.removeItem(lastKeyForTicket(tid));
-   } catch {}
-};
-
-/* ====== Salvare rezultat local pentru statistici ====== */
-function saveLocalPracticeResult(ticketId, { ok, bad, total }) {
-   try {
-      const ts = Date.now();
-      const key = `practice_attempt_result_${ticketId}_${ts}`;
-      const obj = {
-         ok: Number(ok || 0),
-         bad: Number(bad || 0),
-         skip: Math.max(
-            0,
-            Number(total || 0) - Number(ok || 0) - Number(bad || 0)
-         ),
-         finishedAt: new Date(ts).toISOString(),
-      };
-      localStorage.setItem(key, JSON.stringify(obj));
-   } catch {}
 }
 
-/* Heuristic: sesiunea are deja răspunsuri? */
-function sessionHasAnswers(sess) {
-   const answered =
-      Number(sess?.progress?.answered ?? sess?.answered ?? 0) || 0;
-   if (answered > 0) return true;
-   const qs = sess?.questions || sess?.ticket?.questions || [];
-   return qs.some(
-      (q) =>
-         q?.selectedAnswer != null ||
-         q?.userAnswer != null ||
-         q?.answer != null ||
-         q?.answered === true
-   );
+/* === normalize correct index (0-based) din getTicketQuestions === */
+function normalizeCorrectIdx(raw, answersLen) {
+   const n = Number(raw);
+   if (!Number.isInteger(n) || answersLen <= 0) return null;
+   if (n >= 0 && n < answersLen) return n; // 0-based
+   if (n >= 1 && n <= answersLen) return n - 1; // 1-based
+   return null;
 }
 
 export default function Practice() {
    const { user } = useContext(UserContext) || {};
-   const [view, setView] = useState("tickets"); // 'tickets' | 'test'
+   const [view, setView] = useState("tickets");
    const DISPLAY_BASE = START_ID - 1;
 
    const tickets = useMemo(
@@ -166,28 +250,57 @@ export default function Practice() {
       [DISPLAY_BASE]
    );
 
-   // status vizual pt. bilete: { [localTicketId]: 'ok'|'bad' }
+   // === i18n state
+   const [lang, setLang] = useState(() => {
+      const saved =
+         (typeof localStorage !== "undefined" &&
+            localStorage.getItem("exam.lang")) ||
+         "ro";
+      return saved === "ru" ? "ru" : "ro";
+   });
+   useEffect(() => {
+      try {
+         localStorage.setItem("exam.lang", lang);
+      } catch {}
+      window.dispatchEvent(new CustomEvent("exam:lang", { detail: lang }));
+   }, [lang]);
+
+   const t = useCallback(
+      (key, vars) => {
+         const base = (I18N[lang] && I18N[lang][key]) || I18N.ro[key] || key;
+         return formatI18n(base, vars);
+      },
+      [lang]
+   );
+
+   // status vizual pt. bilete
    const [ticketStatusMap, setTicketStatusMap] = useState({});
    const [historyLoading, setHistoryLoading] = useState(false);
 
    // state sesiune practice
-   const [practiceId, setPracticeId] = useState(null); // doar pt. mod 'server'
-   const [localAttemptId, setLocalAttemptId] = useState(null); // pt. mod 'local'
+   const [practiceId, setPracticeId] = useState(null); // server
+   const [localAttemptId, setLocalAttemptId] = useState(null); // local
    const [practiceMode, setPracticeMode] = useState("server"); // 'server' | 'local'
 
    const [ticketId, setTicketId] = useState(null);
-   const [ticket, setTicket] = useState(null); // {id,name,questions:[]}
-   const [idx, setIdx] = useState(0);
+   const [ticket, setTicket] = useState(null);
+
+   // PENDING răspunsuri din această încercare (vizibile în UI)
    const [answersMap, setAnswersMap] = useState({});
+   // BASELINE din server (ascuns în UI). qid -> selectedIndex (number)
+   const [baselineMap, setBaselineMap] = useState({});
+
+   // HARTA cu răspunsul corect (0-based) pt fiecare întrebare (local, fără server)
+   const [correctMap, setCorrectMap] = useState({});
+   const [correctLoaded, setCorrectLoaded] = useState(false);
+
+   const [idx, setIdx] = useState(0);
    const [loading, setLoading] = useState(false);
    const [pillMsgs, setPillMsgs] = useState([]);
 
    const qTextRef = useRef(null);
    const timerRef = useRef(null);
    const [remaining, setRemaining] = useState(20 * 60);
-
-   const [correctMap, setCorrectMap] = useState({});
-   const [correctLoaded, setCorrectLoaded] = useState(false);
 
    const pushError = (text) =>
       setPillMsgs((arr) => [
@@ -197,8 +310,8 @@ export default function Practice() {
    const dismissLastPill = () => setPillMsgs((arr) => arr.slice(0, -1));
    useEffect(() => {
       if (!pillMsgs.length) return;
-      const t = setTimeout(dismissLastPill, 4000);
-      return () => clearTimeout(t);
+      const tmo = setTimeout(dismissLastPill, 4000);
+      return () => clearTimeout(tmo);
    }, [pillMsgs]);
 
    useEffect(() => {
@@ -211,16 +324,13 @@ export default function Practice() {
          setRemaining((r) => (r <= 1 ? 0 : r - 1));
       }, 1000);
    }, [practiceId, localAttemptId, practiceMode]);
-
-   // La expirarea timpului — finalizează sesiunea (și salvează local dacă e cazul)
    useEffect(() => {
       if (remaining === 0 && (practiceId || localAttemptId)) {
          (async () => {
-            await finalizeAttempt("timeout");
+            await finalizeAttempt("timeout"); // nu trimitem dif-urile
          })();
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [remaining, practiceId, localAttemptId]);
+   }, [remaining, practiceId, localAttemptId]); // eslint-disable-line
 
    const scrollToCurrent = () => {
       const el = qTextRef.current;
@@ -230,7 +340,6 @@ export default function Practice() {
          window.scrollTo({ top, behavior: "smooth" });
       }
    };
-
    useEffect(() => {
       if (!ticket) return;
       const raf = requestAnimationFrame(() =>
@@ -239,7 +348,7 @@ export default function Practice() {
       return () => cancelAnimationFrame(raf);
    }, [ticket, idx]);
 
-   /* ====== Culoarea biletelor din istoricul meu (după NUME: “Practice P#”) ====== */
+   /* ====== Culoarea biletelor din istoric (fallback pe P#) ====== */
    useEffect(() => {
       if (view !== "tickets") return;
       let alive = true;
@@ -248,16 +357,14 @@ export default function Practice() {
          setHistoryLoading(true);
          try {
             const all = await getAllMyPracticeHistory({
-               pageSize: 100,
+               pageSize: 300,
                maxPages: 10,
             });
             const items = Array.isArray(all)
                ? all
                : all?.data || all?.items || [];
 
-            // Ținem doar ultima încercare per P# (după completedAt, altfel startedAt)
-            const lastByPNr = new Map(); // key: pNr -> { ts, status, total, correct }
-
+            const lastByPNr = new Map();
             for (const it of items) {
                const pNr = getTicketNrFromName(
                   it.ticketName || it.ticket?.name
@@ -300,22 +407,18 @@ export default function Practice() {
 
             const mapObj = {};
             for (const [pNr, v] of lastByPNr.entries()) {
-               // P1 -> 246, P2 -> 247, ...
                const localId = START_ID + (pNr - 1);
-
-               // IN_PROGRESS nu colorează
-               if (v.status.includes("IN_PROGRESS")) continue;
+               if (String(v.status).toUpperCase().includes("IN_PROGRESS"))
+                  continue;
 
                let cls;
-               if (v.status.includes("FAILED")) {
-                  cls = "bad";
-               } else if (v.status.includes("PASSED")) {
-                  cls = "ok";
-               } else if (v.total > 0 && Number.isFinite(v.correct)) {
+               const up = String(v.status || "").toUpperCase();
+               if (up.includes("FAILED")) cls = "bad";
+               else if (up.includes("PASSED")) cls = "ok";
+               else if (v.total > 0 && Number.isFinite(v.correct)) {
                   const need = requiredOk(v.total);
                   cls = v.correct >= need ? "ok" : "bad";
                }
-
                if (cls) mapObj[localId] = cls;
             }
 
@@ -332,7 +435,7 @@ export default function Practice() {
       };
    }, [view]);
 
-   /* ========= START LOCAL FRESH (fără server) ========= */
+   /* ========= START LOCAL FRESH (fallback fără server) ========= */
    async function startLocalFresh(tid) {
       setPracticeMode("local");
       setPracticeId(null);
@@ -341,65 +444,113 @@ export default function Practice() {
       );
       setTicketId(tid);
       setAnswersMap({});
-      setIdx(0);
+      setBaselineMap({});
       setCorrectMap({});
       setCorrectLoaded(false);
+      setIdx(0);
 
       const qs = await getTicketQuestions(tid);
-      const t = {
+      const tkt = {
          id: Number(tid),
          name: `Bilet ${Number(tid) - (START_ID - 1)}`,
          questions: (qs || [])
             .map((q, i) => ({
                id: Number(q?.id ?? i + 1),
-               text: q?.text ?? q?.question ?? q?.title ?? "",
-               answers: Array.isArray(q?.answers)
+               text: pickLang(q?.text ?? q?.question ?? q?.title ?? "", lang),
+               answers: (Array.isArray(q?.answers)
                   ? q.answers
-                  : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null),
-               image: rewriteImageUrl(q?.image || q?.img || ""),
-               order: Number.isFinite(q?.order) ? q.order : i,
+                  : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null)
+               )
+                  .map((a) => pickLang(a, lang))
+                  .filter(Boolean),
+               image: rewriteImageUrl(pickLang(q?.image || q?.img || "", lang)),
+               order: Number.isFinite(q?.order) ? Number(q.order) : i,
             }))
             .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
       };
-      setTicket(t);
+      setTicket(tkt);
 
-      // corectele (0- sau 1-based)
-      const m = {};
-      (qs || []).forEach((q) => {
+      // corecte locale
+      const cm = {};
+      (qs || []).forEach((q, i) => {
+         const qid = Number(q?.id ?? i + 1);
          const answersLen = Array.isArray(q?.answers) ? q.answers.length : 0;
-         const n = Number(q?.correctAnswer);
-         let ci = null;
-         if (Number.isInteger(n) && answersLen > 0) {
-            if (n >= 0 && n < answersLen) ci = n;
-            else if (n >= 1 && n <= answersLen) ci = n - 1;
-         }
-         if (Number.isInteger(q?.id) && Number.isInteger(ci))
-            m[Number(q.id)] = ci;
+         const ci = normalizeCorrectIdx(q?.correctAnswer, answersLen);
+         if (Number.isInteger(qid) && Number.isInteger(ci)) cm[qid] = ci;
       });
-      setCorrectMap(m);
+      setCorrectMap(cm);
       setCorrectLoaded(true);
 
       setView("test");
    }
 
-   // pornește PRACTICA pe un bilet — încearcă server; dacă reia vechea sesiune, comută local
+   // pornește PRACTICA: resume dacă există, altfel creează; NU arătăm răsp. vechi
    const enterTicket = async (tid) => {
       setLoading(true);
 
-      // Golire UI înainte de init
       setPracticeId(null);
       setLocalAttemptId(null);
       setPracticeMode("server");
       setTicket(null);
       setTicketId(null);
+      setAnswersMap({});
+      setBaselineMap({});
       setCorrectMap({});
       setCorrectLoaded(false);
-      setAnswersMap({});
       setIdx(0);
 
       try {
-         // server: start sau resume
-         const started = await startPracticeSession(tid); // { id, ticketId, ... }
+         // 1) Resume prin practiceId memorat local (dacă există)
+         const resumed = await tryResumeFromLocal(tid, lang);
+         if (resumed?.sess && resumed?.pid) {
+            const pid = Number(resumed.pid);
+            const sess = resumed.sess;
+
+            setPracticeMode("server");
+            setPracticeId(pid);
+            setTicketId(Number(tid));
+            rememberPractice(Number(tid), pid);
+
+            let tkt = normalizeSessionToTicket(sess, lang);
+            tkt = {
+               ...tkt,
+               questions: [...(tkt?.questions || [])].sort(
+                  (a, b) => (a.order ?? 0) - (b.order ?? 0)
+               ),
+            };
+            setTicket(tkt);
+
+            const base = buildBaselineFromSession(sess);
+            setBaselineMap(base);
+
+            // corecte (din setul complet de întrebări)
+            try {
+               const srvQs = await getTicketQuestions(tid);
+               const cm = {};
+               (srvQs || []).forEach((q) => {
+                  const answersLen = Array.isArray(q?.answers)
+                     ? q.answers.length
+                     : 0;
+                  const ci = normalizeCorrectIdx(q?.correctAnswer, answersLen);
+                  if (Number.isInteger(q?.id) && Number.isInteger(ci))
+                     cm[q.id] = ci;
+               });
+               setCorrectMap(cm);
+            } catch {
+               setCorrectMap({});
+            } finally {
+               setCorrectLoaded(true);
+            }
+
+            setAnswersMap({});
+            setIdx(firstUnansweredIndex(tkt, {}));
+            setView("test");
+            setLoading(false);
+            return;
+         }
+
+         // 2) altfel start (endpoint face Start sau Resume pe server)
+         const started = await startPracticeSession(tid, lang);
          const pid =
             Number(started?.id) ||
             Number(started?.practiceId) ||
@@ -413,68 +564,51 @@ export default function Practice() {
                ? serverTid
                : Number(tid);
 
-         // obține detalii
-         const sess = await getPracticeSession(pid);
+         const sess = await getPracticeSession(pid, lang);
 
-         // dacă are deja răspunsuri -> RESTART LOCAL CURAT
-         if (sessionHasAnswers(sess)) {
-            await startLocalFresh(effectiveTid);
-            // memorăm ultima sesiune de pe bilet doar ca referință (nu o folosim activ)
-            rememberPractice(effectiveTid, pid);
-            setLoading(false);
-            return;
-         }
-
-         // altfel, e o sesiune curată pe server
          setPracticeMode("server");
          setPracticeId(pid);
          setTicketId(effectiveTid);
          rememberPractice(effectiveTid, pid);
 
-         let t = normalizeSessionToTicket(sess);
-         t = {
-            ...t,
-            questions: [...(t?.questions || [])].sort(
+         let tkt = normalizeSessionToTicket(sess, lang);
+         tkt = {
+            ...tkt,
+            questions: [...(tkt?.questions || [])].sort(
                (a, b) => (a.order ?? 0) - (b.order ?? 0)
             ),
          };
-         setTicket(t);
+         setTicket(tkt);
 
-         // Fallback pentru corecte (ca în varianta inițială)
+         const base = buildBaselineFromSession(sess);
+         setBaselineMap(base);
+
+         // corecte (din setul complet de întrebări)
          try {
-            const fallbackTid =
-               Number.isInteger(t?.id) && t.id > 0 ? t.id : effectiveTid;
-
-            if (Number.isInteger(fallbackTid) && fallbackTid > 0) {
-               const srvQs = await getTicketQuestions(fallbackTid);
-               const m = {};
-               (srvQs || []).forEach((q) => {
-                  const qid = Number(q?.id);
-                  const answersLen = Array.isArray(q?.answers)
-                     ? q.answers.length
-                     : 0;
-                  const n = Number(q?.correctAnswer);
-                  let ci = null;
-                  if (Number.isInteger(n) && answersLen > 0) {
-                     if (n >= 0 && n < answersLen) ci = n;
-                     else if (n >= 1 && n <= answersLen) ci = n - 1;
-                  }
-                  if (Number.isInteger(qid) && Number.isInteger(ci))
-                     m[qid] = ci;
-               });
-               setCorrectMap(m);
-            } else {
-               setCorrectMap({});
-            }
+            const srvQs = await getTicketQuestions(effectiveTid);
+            const cm = {};
+            (srvQs || []).forEach((q) => {
+               const answersLen = Array.isArray(q?.answers)
+                  ? q.answers.length
+                  : 0;
+               const ci = normalizeCorrectIdx(q?.correctAnswer, answersLen);
+               if (Number.isInteger(q?.id) && Number.isInteger(ci))
+                  cm[q.id] = ci;
+            });
+            setCorrectMap(cm);
          } catch {
             setCorrectMap({});
          } finally {
             setCorrectLoaded(true);
          }
 
+         setAnswersMap({});
+         setIdx(firstUnansweredIndex(tkt, {}));
          setView("test");
       } catch (e) {
-         pushError(e?.message || "Nu am putut porni sesiunea de practică.");
+         setCorrectLoaded(true);
+         setCorrectMap({});
+         pushError(t("cannot_start_practice"));
       } finally {
          setLoading(false);
       }
@@ -483,19 +617,56 @@ export default function Practice() {
    const current = ticket?.questions?.[idx] || null;
    const total = ticket?.questions?.length || 0;
 
-   const counts = useMemo(() => {
-      let ok = 0,
-         bad = 0;
-      Object.values(answersMap).forEach((a) => {
-         if (a?.selected == null) return;
-         if (a.correct === true) ok++;
-         else if (a.correct === false) bad++;
+   // Recalculează corectitudinea pentru selecțiile deja făcute odată ce avem correctMap
+   useEffect(() => {
+      if (!correctLoaded || !ticket) return;
+      setAnswersMap((prev) => {
+         let changed = false;
+         const next = { ...prev };
+         for (const q of ticket.questions || []) {
+            const qid = q.id;
+            const sel = next[qid]?.selected;
+            if (sel != null) {
+               const ci = Number.isInteger(correctMap[qid])
+                  ? correctMap[qid]
+                  : null;
+               const corr =
+                  Number.isInteger(ci) && Number.isInteger(sel)
+                     ? Number(sel) === Number(ci)
+                     : null;
+               if (
+                  next[qid]?.correct !== corr ||
+                  next[qid]?.correctIdx !== ci
+               ) {
+                  next[qid] = {
+                     ...next[qid],
+                     correct: corr,
+                     correctIdx: Number.isInteger(ci) ? ci : null,
+                  };
+                  changed = true;
+               }
+            }
+         }
+         return changed ? next : prev;
       });
-      return { ok, bad };
-   }, [answersMap]);
+   }, [correctLoaded, correctMap, ticket]);
 
-   const allAnswered = useMemo(() => {
-      if (!ticket) return false;
+   // metrice pentru UI (din pending)
+   const metrics = useMemo(() => {
+      let ok = 0,
+         bad = 0,
+         answered = 0;
+      Object.values(answersMap).forEach((a) => {
+         if (a?.selected != null) answered++;
+         if (a?.correct === true) ok++;
+         else if (a?.correct === false) bad++;
+      });
+      return { ok, bad, answered, left: Math.max(0, total - answered) };
+   }, [answersMap, total]);
+
+   // Finalizează apare DOAR dacă ai răspuns la toate întrebările în această încercare
+   const allAnsweredNow = useMemo(() => {
+      if (!ticket?.questions?.length) return false;
       return ticket.questions.every((q) => {
          const a = answersMap[q.id];
          return a && a.selected != null;
@@ -512,128 +683,82 @@ export default function Practice() {
       setIdx(Math.min(idx + 1, total - 1));
    };
 
-   // finalizează încercarea (curăță local; salvează local dacă e mod 'local')
-   const finalizeAttempt = async (reason = "manual-exit") => {
-      // salvăm local doar în mod 'local'
-      if (practiceMode === "local" && ticketId && ticket) {
-         saveLocalPracticeResult(ticketId, {
-            ok: counts.ok,
-            bad: counts.bad,
-            total,
-         });
-         // actualizează vizual biletul curent
-         const need = requiredOk(total);
-         setTicketStatusMap((m) => ({
-            ...m,
-            [ticketId]: counts.ok >= need ? "ok" : "bad",
-         }));
+   // Trimite DOAR dif-urile (ce ai modificat față de baseline) — doar la Finish
+   async function sendPendingDiffs() {
+      if (practiceMode !== "server" || !practiceId) return;
+
+      const diffs = [];
+      for (const q of ticket?.questions || []) {
+         const qid = Number(q.id);
+         const pendingSel =
+            answersMap[qid] && Number.isInteger(answersMap[qid].selected)
+               ? Number(answersMap[qid].selected)
+               : null;
+         if (pendingSel == null) continue;
+
+         const baselineSel = Number.isInteger(baselineMap[qid])
+            ? Number(baselineMap[qid])
+            : null;
+
+         if (baselineSel === null || pendingSel !== baselineSel) {
+            diffs.push({ questionId: qid, selectedAnswer: pendingSel + 1 });
+         }
       }
-      // UI reset
+
+      for (const d of diffs) {
+         try {
+            await submitPracticeAnswer(practiceId, d);
+         } catch (e) {
+            // ignorăm punctual, nu blocăm restul
+         }
+      }
+   }
+
+   const finalizeAttempt = async (reason = "user-finish") => {
+      if (reason === "user-finish") {
+         try {
+            await sendPendingDiffs();
+         } catch {}
+      }
+
+      // curățare state și revenire la listă
       setView("tickets");
       setPracticeId(null);
       setLocalAttemptId(null);
       setPracticeMode("server");
       setTicket(null);
       setTicketId(null);
+      setAnswersMap({});
+      setBaselineMap({});
       setCorrectMap({});
       setCorrectLoaded(false);
-      setAnswersMap({});
       setIdx(0);
    };
 
-   // submit la fiecare răspuns — NU auto-next
-   const onChoose = async (answerIdx) => {
+   // onChoose: setăm pending în UI + marcăm corect/greșit local (fără server)
+   const onChoose = (answerIdx) => {
       if (!current) return;
+      if (answersMap[current.id]?.selected != null) return;
 
-      const existing = answersMap[current.id];
-      if (existing && existing.selected != null) return;
+      const selected = Number(answerIdx);
 
-      // Înregistrăm selectarea
-      let nextMap = {
-         ...answersMap,
+      const ci = Number.isInteger(correctMap[current.id])
+         ? Number(correctMap[current.id])
+         : null;
+      const corr =
+         Number.isInteger(ci) && Number.isInteger(selected)
+            ? Number(selected) === Number(ci)
+            : null;
+
+      setAnswersMap((prevMap) => ({
+         ...prevMap,
          [current.id]: {
-            selected: Number(answerIdx),
-            correct: null,
+            selected,
+            correct: corr,
+            correctIdx: Number.isInteger(ci) ? ci : null,
             at: new Date().toISOString(),
          },
-      };
-      setAnswersMap(nextMap);
-
-      // Mod LOCAL: verificăm corectitudinea din correctMap (fără server)
-      if (practiceMode === "local") {
-         const effectiveCorrectIdx = Object.prototype.hasOwnProperty.call(
-            correctMap,
-            current.id
-         )
-            ? Number(correctMap[current.id])
-            : null;
-
-         const finalCorrect =
-            Number.isInteger(effectiveCorrectIdx) &&
-            Number(answerIdx) === Number(effectiveCorrectIdx);
-
-         nextMap = {
-            ...nextMap,
-            [current.id]: {
-               ...nextMap[current.id],
-               correct: finalCorrect,
-               correctIdx: Number.isInteger(effectiveCorrectIdx)
-                  ? Number(effectiveCorrectIdx)
-                  : null,
-               explanation: null,
-            },
-         };
-         setAnswersMap(nextMap);
-         return;
-      }
-
-      // Mod SERVER: trimitem la backend
-      if (!practiceId) return;
-
-      try {
-         const normalize = await submitPracticeAnswer(practiceId, {
-            questionId: Number(current.id),
-            selectedAnswer: Number(answerIdx),
-         });
-
-         const answersLen = (current.answers || []).length;
-         const { correct, correctIdx, explanation } = normalize(answersLen);
-
-         let finalCorrect = correct;
-         const effectiveCorrectIdx = Number.isInteger(correctIdx)
-            ? correctIdx
-            : Object.prototype.hasOwnProperty.call(correctMap, current.id)
-            ? Number(correctMap[current.id])
-            : null;
-
-         if (finalCorrect == null && Number.isInteger(effectiveCorrectIdx)) {
-            finalCorrect = Number(answerIdx) === Number(effectiveCorrectIdx);
-         }
-
-         nextMap = {
-            ...nextMap,
-            [current.id]: {
-               ...nextMap[current.id],
-               correct: finalCorrect,
-               correctIdx: Number.isInteger(effectiveCorrectIdx)
-                  ? Number(effectiveCorrectIdx)
-                  : null,
-               explanation: explanation || null,
-            },
-         };
-         setAnswersMap(nextMap);
-      } catch (e) {
-         const msg = String(e?.message || "");
-         if (/Active practice session not found/i.test(msg)) {
-            pushError(
-               "Sesiunea server s-a închis/expirat. Trec pe mod local curat."
-            );
-            // trecem pe local fresh ca fallback
-            await startLocalFresh(ticketId || START_ID);
-         } else {
-            pushError(msg || "Nu am putut trimite răspunsul.");
-         }
-      }
+      }));
    };
 
    const statusBoard = useMemo(() => {
@@ -656,26 +781,63 @@ export default function Practice() {
 
          {view === "tickets" && (
             <>
-               <div className="practice__header">
-                  <h2>Practica</h2>
+               <div
+                  className="practice__header tikets-header"
+                  style={{
+                     display: "flex",
+                     alignItems: "center",
+                     gap: 10,
+                     justifyContent: "space-between",
+                     flexWrap: "wrap",
+                  }}
+               >
+                  <h2 style={{ margin: 0 }}>{t("practice_title")}</h2>
+
+                  <div
+                     className="exam-lang"
+                     style={{ display: "flex", gap: 8, alignItems: "center" }}
+                  >
+                     <button
+                        type="button"
+                        className={
+                           "practice__back bottom toggle" +
+                           (lang === "ro" ? " yellow" : "")
+                        }
+                        onClick={() => setLang("ro")}
+                        title={t("lang_ro")}
+                     >
+                        RO
+                     </button>
+                     <button
+                        type="button"
+                        className={
+                           "practice__back bottom toggle" +
+                           (lang === "ru" ? " yellow" : "")
+                        }
+                        onClick={() => setLang("ru")}
+                        title={t("lang_ru")}
+                     >
+                        RU
+                     </button>
+                  </div>
                </div>
 
                <div className="practice__grid">
-                  {tickets.map((t) => {
-                     const st = ticketStatusMap[t.id]; // 'ok' | 'bad' | undefined
+                  {tickets.map((tkt) => {
+                     const st = ticketStatusMap[tkt.id];
                      const cls =
                         "practice__ticket" +
                         (st ? ` practice__ticket--${st}` : "");
                      return (
                         <button
-                           key={t.id}
+                           key={tkt.id}
                            className={cls}
-                           onClick={() => enterTicket(t.id)}
+                           onClick={() => enterTicket(tkt.id)}
                            disabled={loading || historyLoading}
-                           title={`Start bilet ${t.nr}`}
+                           title={t("start_ticket_title", { n: tkt.nr })}
                         >
                            <div className="practice__ticket-title">
-                              Bilet {t.nr}
+                              {t("ticket_n", { n: tkt.nr })}
                            </div>
                         </button>
                      );
@@ -691,18 +853,21 @@ export default function Practice() {
                      className="practice__back"
                      onClick={() => finalizeAttempt("back-button")}
                   >
-                     Înapoi
+                     {t("back")}
                   </button>
 
                   <div className="practice__toolbar-center">
                      <div className="practice__question-index">
-                        Întrebarea {Math.min(idx + 1, total)}/{total}
+                        {t("question_index", {
+                           i: Math.min(idx + 1, total),
+                           total,
+                        })}
                      </div>
                      <span className="practice__summary-pill practice__summary-pill--ok">
-                        Corecte: {counts.ok}
+                        {t("correct_count", { n: metrics.ok })}
                      </span>
                      <span className="practice__summary-pill practice__summary-pill--bad">
-                        Greșite: {counts.bad}
+                        {t("wrong_count", { n: metrics.bad })}
                      </span>
                   </div>
 
@@ -728,7 +893,7 @@ export default function Practice() {
                            (status === "bad" ? " practice__dot--bad" : "") +
                            (status === "wait" ? " practice__dot--none" : "")
                         }
-                        title={`Întrebarea ${i + 1}`}
+                        title={t("question_n", { n: i + 1 })}
                         onClick={() => jumpTo(i)}
                      >
                         {i + 1}
@@ -753,7 +918,7 @@ export default function Practice() {
                                     (current.image.includes("?") ? "&" : "?") +
                                     `v=${keySalt}-${current.id}-${idx}`
                                  }
-                                 alt="Întrebare"
+                                 alt={t("question_alt")}
                                  onError={(e) =>
                                     (e.currentTarget.hidden = true)
                                  }
@@ -771,7 +936,7 @@ export default function Practice() {
                                     (current.image.includes("?") ? "&" : "?") +
                                     `v=${keySalt}-${current.id}-${idx}-m`
                                  }
-                                 alt="Întrebare"
+                                 alt={t("question_alt")}
                                  onError={(e) =>
                                     (e.currentTarget.hidden = true)
                                  }
@@ -782,22 +947,27 @@ export default function Practice() {
                         <div className="practice__answers">
                            {(current.answers || []).map((ans, i) => {
                               const saved = answersMap[current.id];
-                              const already = !!saved && saved.selected != null;
-                              const effectiveCorrectIdx =
-                                 already && Number.isInteger(saved?.correctIdx)
-                                    ? Number(saved.correctIdx)
-                                    : null;
+                              const selected = saved?.selected;
+                              const correctIdx = Number.isInteger(
+                                 saved?.correctIdx
+                              )
+                                 ? saved.correctIdx
+                                 : Number.isInteger(correctMap[current.id])
+                                 ? correctMap[current.id]
+                                 : null;
 
                               const isCorrectOption =
-                                 already &&
-                                 Number.isInteger(effectiveCorrectIdx) &&
-                                 i === effectiveCorrectIdx;
+                                 selected != null &&
+                                 Number.isInteger(correctIdx) &&
+                                 i === Number(correctIdx);
 
                               const isWrongSelected =
-                                 already &&
-                                 saved.selected === i &&
-                                 Number.isInteger(effectiveCorrectIdx) &&
-                                 saved.selected !== effectiveCorrectIdx;
+                                 selected != null &&
+                                 Number.isInteger(correctIdx) &&
+                                 selected === i &&
+                                 i !== Number(correctIdx);
+
+                              const isSelected = selected === i;
 
                               const className =
                                  "practice__answer" +
@@ -807,19 +977,16 @@ export default function Practice() {
                                  (isWrongSelected
                                     ? " practice__answer--wrong-selected"
                                     : "") +
-                                 (already ? " practice__answer--locked" : "");
+                                 (isSelected
+                                    ? " practice__answer--selected"
+                                    : "");
 
                               return (
                                  <button
                                     key={i}
                                     className={className}
                                     onClick={() => onChoose(i)}
-                                    disabled={already}
-                                    title={
-                                       already
-                                          ? "Răspuns blocat"
-                                          : "Alege răspunsul"
-                                    }
+                                    title={t("choose_answer")}
                                  >
                                     {ans}
                                  </button>
@@ -831,22 +998,23 @@ export default function Practice() {
                      <div className="practice__actions">
                         <div />
                         <div className="practice__spacer" />
-                        {!allAnswered ? (
-                           <button
-                              type="button"
-                              className="practice__secondary"
-                              onClick={goNext}
-                              disabled={idx >= total - 1}
-                           >
-                              Următorul
-                           </button>
-                        ) : (
+                        <button
+                           type="button"
+                           className="practice__secondary"
+                           onClick={goNext}
+                           disabled={idx >= total - 1}
+                        >
+                           {t("next")}
+                        </button>
+
+                        {allAnsweredNow && (
                            <button
                               type="button"
                               className="practice__secondary practice__secondary--primary"
                               onClick={() => finalizeAttempt("user-finish")}
+                              style={{ marginLeft: 8 }}
                            >
-                              Finalizează
+                              {t("finish")}
                            </button>
                         )}
                      </div>

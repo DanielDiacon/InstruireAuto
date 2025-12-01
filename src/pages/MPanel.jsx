@@ -32,7 +32,6 @@ import GroupManager from "../components/APanel/GroupManager";
 import InstructorManager from "../components/APanel/InstructorManager";
 import ClockDisplay from "../components/UI/ClockDisplay";
 import ReservationHistory from "../components/APanel/ReservationHistory";
-import ACalendarView from "../components/APanel/ACalendar";
 
 import { UserContext } from "../UserContext";
 import InstructorsGroupManager from "../components/APanel/InstructorsGroupManager";

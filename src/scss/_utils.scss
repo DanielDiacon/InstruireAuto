@@ -64,6 +64,7 @@
    flex-direction: column;
    gap: 8px;
    z-index: 1000;
+   margin: 0 auto;
 }
 /* containerul, dacă vrei peste tot conținutul */
 .pillstack {
@@ -71,11 +72,13 @@
    top: 16px;
    right: 16px;
    z-index: 9999;
+   pointer-events: none;
 }
 
 /* bază */
 .pill {
    display: flex;
+   pointer-events: all;
    align-items: center;
    padding: 15px 18px;
    border-radius: 32px;

@@ -22,7 +22,7 @@ import { fetchInstructors } from "../../store/instructorsSlice";
 import {
    updateReservation,
    removeReservation,
-   fetchAllReservations,
+   fetchReservationsDelta, // ✅ înlocuiește fetchAllReservations
 } from "../../store/reservationsSlice";
 import {
    createReservationsForUser,
@@ -30,7 +30,12 @@ import {
 } from "../../api/reservationsService";
 import { getInstructorBlackouts } from "../../api/instructorsService";
 
-import { closePopup as closePopupStore } from "../Utils/popupStore";
+import { triggerCalendarRefresh } from "../Utils/calendarBus"; // ✅ event-bus
+import {
+   closePopup as closePopupStore,
+   closeSubPopup as closeSubPopupStore,
+} from "../Utils/popupStore";
+
 import AlertPills from "../Utils/AlertPills";
 
 /* ===== Locale RO ===== */
@@ -516,12 +521,15 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
    // ⬇️ Funcție unificată de închidere popup
    const closeSelf = useCallback(() => {
-      try {
-         if (typeof onClose === "function") onClose();
-         else closePopupStore();
-      } catch {
-         closePopupStore();
+      if (typeof onClose === "function") {
+         return onClose(); // ✅ va apela requestCloseSubPopup()
       }
+      try {
+         closeSubPopupStore();
+      } catch {}
+      try {
+         closePopupStore();
+      } catch {}
    }, [onClose]);
 
    // Store
@@ -529,7 +537,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
    useEffect(() => {
-      if (!reservations?.length) dispatch(fetchAllReservations());
+      if (!reservations?.length) dispatch(fetchReservationsDelta()); // ✅
       if (!studentsAll?.length) dispatch(fetchStudents());
       if (!instructors?.length) dispatch(fetchInstructors());
    }, [dispatch]); // eslint-disable-line
@@ -806,13 +814,17 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       const ok = window.confirm("Ștergi această rezervare?");
       if (!ok) return;
 
-      // Închidem popup-ul cu aceeași funcție
       closeSelf();
-      setTimeout(() => {
-         dispatch(removeReservation(existing.id))
-            .then(() => dispatch(fetchAllReservations()))
-            .catch(() => {});
-      }, 0);
+
+      try {
+         await (dispatch(removeReservation(existing.id)).unwrap?.() ??
+            dispatch(removeReservation(existing.id)));
+         await (dispatch(fetchReservationsDelta()).unwrap?.() ??
+            dispatch(fetchReservationsDelta()));
+         triggerCalendarRefresh();
+      } catch (e) {
+         // opțional: pushAlert("error", "Nu am putut șterge rezervarea.");
+      }
    };
 
    const onSave = async () => {
@@ -910,17 +922,49 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                );
          }
          if (changingStudent) {
-            const conflictS = hasStudentConflict(
-               reservations,
-               studentId,
-               effectiveIsoForChecks,
-               existing.id
-            );
-            if (conflictS)
-               return pushAlert(
-                  "error",
-                  "Elevul ales are deja o rezervare la această oră."
-               );
+            const effectiveIsoToSend = changingTime
+               ? selectedIsoForBackend
+               : existing?.startTime;
+
+            const forUserPayload = {
+               userId: Number(studentId),
+               instructorId: Number(instructorId) || undefined,
+               instructorsGroupId:
+                  existing?.instructorsGroupId ??
+                  existing?.groupId ??
+                  undefined,
+               reservations: [
+                  {
+                     startTime: effectiveIsoToSend,
+                     sector,
+                     gearbox,
+                     privateMessage,
+                     color: colorToken,
+                  },
+               ],
+            };
+
+            closeSelf();
+
+            try {
+               await (dispatch(removeReservation(existing.id)).unwrap?.() ??
+                  dispatch(removeReservation(existing.id)));
+               await sleep(AFTER_DELETE_DELAY_MS);
+               await createReservationsForUser(forUserPayload);
+               await (dispatch(fetchReservationsDelta()).unwrap?.() ??
+                  dispatch(fetchReservationsDelta()));
+               triggerCalendarRefresh();
+            } catch (e) {
+               setAlerts((prev) => [
+                  ...prev,
+                  {
+                     id: Date.now(),
+                     type: "error",
+                     text: "Nu am putut reprograma elevul.",
+                  },
+               ]);
+            }
+            return;
          }
       }
 
@@ -953,7 +997,8 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             await dispatch(removeReservation(existing.id));
             await sleep(AFTER_DELETE_DELAY_MS);
             await createReservationsForUser(forUserPayload);
-            await dispatch(fetchAllReservations());
+            await dispatch(fetchReservationsDelta()); // ✅
+            triggerCalendarRefresh(); // ✅
          } catch (e) {
             setAlerts((prev) => [
                ...prev,
@@ -967,6 +1012,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          return;
       }
 
+      // ==== restul cazurilor: UPDATE pe rezervarea curentă
       // ==== restul cazurilor: UPDATE pe rezervarea curentă
       const payload = {
          sector,
@@ -986,12 +1032,30 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             : {}),
       };
 
+      // Închidem popup-ul
+      closeSelf();
+
+      try {
+         await (dispatch(
+            updateReservation({ id: existing.id, data: payload })
+         ).unwrap?.() ??
+            dispatch(updateReservation({ id: existing.id, data: payload })));
+         await (dispatch(fetchReservationsDelta()).unwrap?.() ??
+            dispatch(fetchReservationsDelta()));
+         triggerCalendarRefresh(); // 🔔 anunță DayView să aplice pending-ul
+      } catch (e) {
+         // opțional: pushAlert("error", "Nu am putut salva modificările.");
+      }
+
       // Închidem popup-ul cu aceeași funcție
       closeSelf();
 
       setTimeout(() => {
          dispatch(updateReservation({ id: existing.id, data: payload }))
-            .then(() => dispatch(fetchAllReservations()))
+            .then(async () => {
+               await dispatch(fetchReservationsDelta()); // ✅
+               triggerCalendarRefresh(); // ✅
+            })
             .catch(() => {});
       }, 0);
    };
@@ -1548,8 +1612,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                })}
             </div>
 
-           
-
             {/* Butoane */}
             <div
                className="instructors-popup__btns"
@@ -1571,7 +1633,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                <div style={{ flex: 1 }} />
 
                <button
-                  className="instructors-popup__form-button instructors-popup__form-button--delete"
+                  className="instructors-popup__form-button instructors-popup__form-button--delete edit"
                   onClick={onDelete}
                >
                   Șterge
