@@ -3,15 +3,15 @@ import React, { useContext, useEffect, useState } from "react";
 import Header from "../../components/Header/Header";
 import Popup from "../../components/Utils/Popup";
 import SubPopup from "../../components/Utils/SubPopup";
-
-import accIcon from "../../assets/svg/acc.svg";
-import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import addIcon from "../../assets/svg/mdi--calendar-plus-outline.svg";
+import accIcon from "../../assets/svg/acc.svg";
+import clockIcon from "../../assets/svg/clock.svg";
 import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
-import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
-import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
+import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
+import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../../assets/svg/mdi--account-star-outline.svg";
+import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 
 import { getAllReservations } from "../../api/reservationsService";
 import { getUsers } from "../../api/usersService";
@@ -22,8 +22,9 @@ import ReservationHistory from "../../components/APanel/ReservationHistory";
 import { UserContext } from "../../UserContext";
 
 function APHistory() {
-   const links = [
+     const links = [
       { link: "/admin", text: "Acasă", icon: homeIcon },
+      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
       { popup: "addManager", text: "Manageri", icon: managerIcon },
@@ -33,9 +34,8 @@ function APHistory() {
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
+      { link: "/admin/history", text: "Istoric", icon: clockIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
-
    ];
    const dispatch = useDispatch();
    const [reservations, setReservations] = useState([]);

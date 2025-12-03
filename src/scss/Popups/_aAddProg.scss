@@ -14,10 +14,18 @@
             background: #9af07f;
             color: #0d3700;
          }
+         &--accent {
+            background: var(--accent-l);
+            color: var(--accent-d);
+         }
          &--cancel {
             margin: 0;
          }
+         &.reservation-flag-btn {
+            margin: 0;
+         }
       }
+
       &__list-wrapper {
          position: relative;
          overflow: hidden;

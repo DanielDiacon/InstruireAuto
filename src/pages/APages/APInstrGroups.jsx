@@ -11,19 +11,24 @@ import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../../assets/svg/mdi--account-star-outline.svg";
+import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 
-import GroupManager from "../../components/APanel/GroupManager";
 import SubPopup from "../../components/Utils/SubPopup";
 import InstructorsGroupManager from "../../components/APanel/InstructorsGroupManager";
 
 function APInstrGroups() {
    const links = [
       { link: "/admin", text: "Acasă", icon: homeIcon },
+      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
       { popup: "addManager", text: "Manageri", icon: managerIcon },
       { link: "/admin/groups", text: "Grupe", icon: groupsIcon },
-      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
+      {
+         link: "/admin/instr-groups",
+         text: "Ins. Grupe",
+         icon: instrGroupsIcon,
+      },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];

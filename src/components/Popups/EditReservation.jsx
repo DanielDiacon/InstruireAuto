@@ -16,6 +16,8 @@ import successIcon from "../../assets/svg/success.svg";
 import cancelIcon from "../../assets/svg/cancel.svg";
 import clockIcon from "../../assets/svg/clock.svg";
 import editIcon from "../../assets/svg/edit.svg";
+import favIcon from "../../assets/svg/material-symbols--star-outline-rounded.svg";
+import importantIcon from "../../assets/svg/zondicons--exclamation-outline.svg";
 
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
@@ -28,7 +30,6 @@ import {
    createReservationsForUser,
    getReservationHistory,
 } from "../../api/reservationsService";
-import { getInstructorBlackouts } from "../../api/instructorsService";
 
 import { triggerCalendarRefresh } from "../Utils/calendarBus"; // ✅ event-bus
 import {
@@ -49,25 +50,15 @@ const BUSY_KEYS_MODE = "local-match";
 function localDateStrTZ(date, tz = MOLDOVA_TZ) {
    const fmt = new Intl.DateTimeFormat("en-GB", {
       timeZone: tz,
-      year: "numeric",
       month: "2-digit",
       day: "2-digit",
+      year: "numeric",
    });
    const parts = fmt.formatToParts(date);
    const day = parts.find((p) => p.type === "day")?.value ?? "01";
    const month = parts.find((p) => p.type === "month")?.value ?? "01";
    const year = parts.find((p) => p.type === "year")?.value ?? "1970";
    return `${year}-${month}-${day}`;
-}
-function timeHHMMInTZ(iso, tz = MOLDOVA_TZ) {
-   const d = new Date(iso);
-   const fmt = new Intl.DateTimeFormat("ro-RO", {
-      timeZone: tz,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-   });
-   return fmt.format(d);
 }
 function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
    const fmt = new Intl.DateTimeFormat("en-US", {
@@ -187,11 +178,13 @@ const oreDisponibile = [
    { eticheta: "15:00", oraStart: "15:00" },
    { eticheta: "16:30", oraStart: "16:30" },
    { eticheta: "18:00", oraStart: "18:00" },
+   { eticheta: "19:30", oraStart: "19:30" },
 ];
 const SLOT_MINUTES = 90;
 
 /* ===== Culori ===== */
 const COLOR_TOKENS = [
+   "--event-default", // 🔹 culoarea implicită a evenimentelor (var(--event-default))
    "--red",
    "--orange",
    "--yellow",
@@ -200,8 +193,11 @@ const COLOR_TOKENS = [
    "--indigo",
    "--purple",
    "--pink",
+   "--black-t", // 🔹 negru special (aceeași nuanță ca în calendar)
 ];
+
 const COLOR_LABEL = {
+   "event-default": "Implicit",
    red: "Roșu",
    orange: "Portocaliu",
    yellow: "Galben",
@@ -210,8 +206,11 @@ const COLOR_LABEL = {
    indigo: "Indigo",
    purple: "Mov",
    pink: "Roz",
+   "black-t": "Negru", // 🔹 chiar culoarea var(--black-t)
 };
+
 const COLOR_HINTS = {
+   "event-default": "Culoare implicită din calendar",
    yellow: "Loc Liber",
    green: "Achitată",
    red: "Grafic Închis",
@@ -220,7 +219,9 @@ const COLOR_HINTS = {
    pink: "Grafic Pentru Ciocana/Buiucani",
    blue: "Instructorul Care Activează Pe Ciocana",
    purple: "Instructorul Care Activează Pe Botanica",
+   "black-t": "Trasparent", // 🔹 exact nuanța --black-t
 };
+
 const normalizeColor = (val) => {
    if (!val) return "";
    if (typeof val !== "string") return String(val);
@@ -358,6 +359,9 @@ const FIELD_LABEL = {
    isConfirmed: "Confirmare",
    carId: "Mașină",
    instructorsGroupId: "Grup instructori",
+   isFavorite: "Favorit",
+   isImportant: "Important",
+   isCancelled: "Anulat",
 };
 const makeResolvers = (students, instructors, h) => {
    const stuById = new Map(
@@ -478,37 +482,6 @@ const iconFor = (status) => {
    }
 };
 
-/** Helper blackout: extrage timpul corect. Preferă startDateTime pentru REPEAT. */
-function getBlackoutDT(b) {
-   if (typeof b === "string") return b;
-   const t = String(b?.type || "").toUpperCase();
-   if (t === "REPEAT") return b?.startDateTime || b?.dateTime || null;
-   return (
-      b?.dateTime || b?.datetime || b?.startTime || b?.date || b?.begin || null
-   );
-}
-
-/** Expandează un blackout REPEAT în chei locale "YYYY-MM-DD|HH:mm" în fereastra curentă. */
-function expandRepeatLocalKeys(b, allowedKeysSet) {
-   const out = [];
-   const t = String(b?.type || "").toUpperCase();
-   if (t !== "REPEAT") return out;
-
-   const stepDays = Math.max(1, Number(b?.repeatEveryDays || 1));
-   const first = b?.startDateTime || b?.dateTime;
-   const last = b?.endDateTime || first;
-   if (!first || !last) return out;
-
-   let cur = new Date(first).getTime();
-   const lastMs = new Date(last).getTime();
-   while (cur <= lastMs) {
-      const key = busyLocalKeyFromStored(new Date(cur).toISOString());
-      if (!allowedKeysSet || allowedKeysSet.has(key)) out.push(key);
-      cur += stepDays * 24 * 60 * 60 * 1000;
-   }
-   return out;
-}
-
 // ⬇️ Acceptă onClose pentru a închide cu aceeași funcție peste tot
 export default function ReservationEditPopup({ reservationId, onClose }) {
    const dispatch = useDispatch();
@@ -583,6 +556,11 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const [privateMessage, setPrivateMessage] = useState("");
    const [colorToken, setColorToken] = useState("--blue");
 
+   // 🔹 Toggle-uri noi: Favorit, Important, Anulat
+   const [isFavorite, setIsFavorite] = useState(false);
+   const [isImportant, setIsImportant] = useState(false);
+   const [isCancelled, setIsCanceled] = useState(false);
+
    /* ——— Tooltip mobil / focus accesibilitate ——— */
    const [colorHoverText, setColorHoverText] = useState("");
    const colorHoverTimerRef = useRef(null);
@@ -630,6 +608,11 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          setColorToken("--blue");
       }
 
+      // 🔹 Hidratează și flag-urile noi
+      setIsFavorite(!!existing?.isFavorite);
+      setIsImportant(!!existing?.isImportant);
+      setIsCanceled(!!existing?.isCancelled);
+
       didHydrate.current = true;
    }, [existing]);
 
@@ -671,42 +654,32 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       });
    }, [instructors, qInstructor]);
 
-   // ===== Disponibilități =====
+   // ===== Disponibilități (DOAR pe baza rezervărilor, fără blackout, fără trecut) =====
    const [freeSlots, setFreeSlots] = useState([]); // ISO[]
    const freeLocalKeySet = useMemo(
       () => new Set(freeSlots.map((iso) => localKeyForIso(iso))),
       [freeSlots]
    );
 
-   // Blackout keys (chei locale "YYYY-MM-DD|HH:mm" pentru instructorul curent)
-   const [blackoutKeys, setBlackoutKeys] = useState([]); // string[]
-   const blackoutLocalKeySet = useMemo(
-      () => new Set(blackoutKeys),
-      [blackoutKeys]
-   );
-
-   const recomputeAvailability = useCallback(async () => {
+   const recomputeAvailability = useCallback(() => {
       if (!studentId || !instructorId) {
          setFreeSlots([]);
-         setBlackoutKeys([]);
          return;
       }
 
       const fullGrid = buildFullGridISO(60);
-      const allowedKeys = new Set(fullGrid.map((iso) => localKeyForIso(iso)));
       const others = (reservations || []).filter(
          (r) => String(r.id) !== String(reservationId)
       );
 
-      // Occupare pe CHEIE LOCALĂ pentru elev/instructor
       const busyStudent = new Set();
       const busyInstructor = new Set();
-      const blkKeys = [];
 
       for (const r of others) {
          const st = getStartFromReservation(r);
          if (!st) continue;
          const key = busyLocalKeyFromStored(st);
+
          if (String(r?.userId ?? r?.studentId ?? "") === String(studentId)) {
             busyStudent.add(key);
          }
@@ -715,45 +688,13 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          }
       }
 
-      // —— Blackouts instructor: tratează SINGLE + extindere REPEAT ——
-      try {
-         const blackouts = await getInstructorBlackouts(instructorId);
-         for (const b of blackouts || []) {
-            const type = String(b?.type || "").toUpperCase();
-
-            if (type === "REPEAT") {
-               const keys = expandRepeatLocalKeys(b, allowedKeys);
-               for (const key of keys) {
-                  busyInstructor.add(key);
-                  blkKeys.push(key);
-               }
-            } else {
-               const dt = getBlackoutDT(b);
-               if (!dt) continue;
-               const key = busyLocalKeyFromStored(dt);
-               if (allowedKeys.has(key)) {
-                  busyInstructor.add(key);
-                  blkKeys.push(key);
-               }
-            }
-         }
-      } catch (e) {
-         pushAlert(
-            "warning",
-            "Nu am putut încărca orele blocate ale instructorului. Se afișează doar rezervările."
-         );
-      }
-
-      const now = new Date();
-      const free = fullGrid
-         .filter((iso) => new Date(iso) > now)
-         .filter((iso) => {
-            const key = localKeyForIso(iso);
-            return !busyStudent.has(key) && !busyInstructor.has(key);
-         });
+      // NU mai filtrăm pe "în viitor" și NU mai punem blackout aici
+      const free = fullGrid.filter((iso) => {
+         const key = localKeyForIso(iso);
+         return !busyStudent.has(key) && !busyInstructor.has(key);
+      });
 
       setFreeSlots(free);
-      setBlackoutKeys(blkKeys);
    }, [studentId, instructorId, reservations, reservationId]);
 
    useEffect(() => {
@@ -857,31 +798,15 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       const changingInstructor =
          String(instructorId) !== String(originalInstructorId);
 
-      // nu permitem mutarea în trecut
-      if (changingTime) {
-         if (!selectedIsoUTC) {
-            return pushAlert(
-               "error",
-               "Selectează data și ora pentru a modifica programarea."
-            );
-         }
-         if (new Date(selectedIsoUTC) <= new Date()) {
-            return pushAlert("error", "Nu poți muta programarea în trecut.");
-         }
+      // ⚠️ NU mai blocăm mutarea în trecut
+      if (changingTime && !selectedIsoUTC) {
+         return pushAlert(
+            "error",
+            "Selectează data și ora pentru a modifica programarea."
+         );
       }
 
-      // —— BLACKOUT guard: dacă schimbi ora sau instructorul, ora trebuie să nu fie în blackouts
-      const keyToCheck = changingTime ? selectedKey : currentKey;
-      if ((changingTime || changingInstructor) && keyToCheck) {
-         if (blackoutLocalKeySet.has(keyToCheck)) {
-            return pushAlert(
-               "error",
-               "Instructorul este indisponibil la această oră (blackout)."
-            );
-         }
-      }
-
-      // validări conflict (rezervări)
+      // ⚠️ NU mai verificăm blackout (doar conflicte rezervări)
       const effectiveIsoForChecks =
          selectedIsoUTC ||
          (existing?.startTime
@@ -940,6 +865,9 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                      gearbox,
                      privateMessage,
                      color: colorToken,
+                     isFavorite,
+                     isImportant,
+                     isCancelled,
                   },
                ],
             };
@@ -968,7 +896,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          }
       }
 
-      // ==== SCHIMB elevul → DELETE vechi + CREATE prin endpoint-ul nou
+      // ==== SCHIMB elevul → DELETE vechi + CREATE prin endpoint-ul nou (cazul + schimbare oră)
       if (changingStudent) {
          const effectiveIsoToSend = changingTime
             ? selectedIsoForBackend
@@ -986,6 +914,9 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                   gearbox,
                   privateMessage,
                   color: colorToken,
+                  isFavorite,
+                  isImportant,
+                  isCancelled,
                },
             ],
          };
@@ -1013,7 +944,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       }
 
       // ==== restul cazurilor: UPDATE pe rezervarea curentă
-      // ==== restul cazurilor: UPDATE pe rezervarea curentă
       const payload = {
          sector,
          gearbox,
@@ -1022,6 +952,9 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          instructorsGroupId: null,
          privateMessage,
          color: colorToken,
+         isFavorite,
+         isImportant,
+         isCancelled,
          ...(changingTime
             ? {
                  startTime:
@@ -1046,18 +979,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       } catch (e) {
          // opțional: pushAlert("error", "Nu am putut salva modificările.");
       }
-
-      // Închidem popup-ul cu aceeași funcție
-      closeSelf();
-
-      setTimeout(() => {
-         dispatch(updateReservation({ id: existing.id, data: payload }))
-            .then(async () => {
-               await dispatch(fetchReservationsDelta()); // ✅
-               triggerCalendarRefresh(); // ✅
-            })
-            .catch(() => {});
-      }, 0);
    };
 
    /* ========= Istoric (doar lista) ========== */
@@ -1142,7 +1063,11 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const filterDate = (date) => {
       const key = localDateStr(date);
       if (existingDayKey && key === existingDayKey) return true;
-      return date >= todayAt00();
+      // ⚠️ La edit permit și zile în trecut pentru mutare manuală,
+      // dar dacă vrei să poți selecta ABSOLUT orice zi, scoți filtrul:
+      return true;
+      // dacă vrei totuși doar de azi în sus + ziua veche:
+      // return date >= todayAt00();
    };
 
    const renderHistoryList = () => (
@@ -1373,6 +1298,76 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                      }}
                      calendarClassName="aAddProg__datepicker"
                   />
+                  <div
+                     style={{
+                        display: "grid",
+                        gap: 6,
+                        gridTemplateColumns: "repeat(3, auto)",
+                     }}
+                  >
+                     {/* Favorit – successIcon */}
+                     <button
+                        type="button"
+                        className={`instructors-popup__form-button reservation-flag-btn ${
+                           isFavorite
+                              ? "instructors-popup__form-button--accent"
+                              : ""
+                        }`}
+                        onClick={() => setIsFavorite((v) => !v)}
+                        title={
+                           isFavorite
+                              ? "Scoate din favorite"
+                              : "Marchează ca favorit"
+                        }
+                     >
+                        <ReactSVG
+                           className="reservation-flag-icon react-icon"
+                           src={favIcon}
+                        />
+                     </button>
+
+                     {/* Important – temporar editIcon */}
+                     <button
+                        type="button"
+                        className={`instructors-popup__form-button reservation-flag-btn ${
+                           isImportant
+                              ? "instructors-popup__form-button--accent"
+                              : ""
+                        }`}
+                        onClick={() => setIsImportant((v) => !v)}
+                        title={
+                           isImportant
+                              ? "Scoate marcajul de important"
+                              : "Marchează ca important"
+                        }
+                     >
+                        <ReactSVG
+                           className="reservation-flag-icon react-icon"
+                           src={importantIcon}
+                        />
+                     </button>
+
+                     {/* Anulat – cancelIcon */}
+                     <button
+                        type="button"
+                        className={`instructors-popup__form-button reservation-flag-btn ${
+                           isCancelled
+                              ? "instructors-popup__form-button--accent"
+                              : ""
+                        }`}
+                        onClick={() => setIsCanceled((v) => !v)}
+                        title={
+                           isCancelled
+                              ? "Scoate marcajul de anulat"
+                              : "Marchează rezervarea ca anulată"
+                        }
+                     >
+                        <ReactSVG
+                           className="reservation-flag-icon react-icon"
+                           src={cancelIcon}
+                        />
+                     </button>
+                  </div>
                </div>
 
                {/* Ore – LISTĂ simplă */}
@@ -1407,12 +1402,15 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                         const studentUnchanged =
                            String(studentId) === String(originalStudentId);
 
+                        // disponibil dacă:
+                        //  - este slot-ul curent al rezervării și elevul e același
+                        //  - sau e liber în freeLocalKeySet (nu are rezervări)
                         const available =
                            (isExistingSlot && studentUnchanged) ||
                            (key ? freeLocalKeySet.has(key) : false);
 
-                        const disabled =
-                           !selectedDate || pastToday || !available;
+                        // ⚠️ la edit permitem și trecutul => scoatem blocarea pe pastToday
+                        const disabled = !selectedDate || !available;
 
                         return (
                            <button
@@ -1431,12 +1429,10 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                               title={
                                  !selectedDate
                                     ? "Alege o zi"
-                                    : pastToday
-                                    ? "Ora a trecut deja pentru azi"
                                     : isExistingSlot && !studentUnchanged
                                     ? "Schimbi elevul: slotul actual trebuie să fie liber pentru elevul nou"
                                     : !available
-                                    ? "Indisponibil pentru elevul/instructorul selectați"
+                                    ? "Indisponibil (există altă rezervare la această oră)"
                                     : ""
                               }
                            >

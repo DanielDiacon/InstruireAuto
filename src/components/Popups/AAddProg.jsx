@@ -796,11 +796,23 @@ export default function AAddProg({
 
       const iso = toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
 
-      // ❗Permitem și trecutul; verificăm doar “liber” pentru combo elev+instructor
+      // verificăm doar combo elev + instructor pe slotul respectiv
       if (!freeSet.has(iso)) {
          return pushPill(
             "Slot indisponibil pentru elevul și instructorul selectați."
          );
+      }
+
+      const instructorIdNum = Number(instructorId);
+      const studentIdNum = Number(studentId);
+
+      if (!Number.isFinite(instructorIdNum) || instructorIdNum <= 0) {
+         return pushPill(
+            "Instructor invalid (ID). Încearcă să-l selectezi din nou."
+         );
+      }
+      if (!Number.isFinite(studentIdNum) || studentIdNum <= 0) {
+         return pushPill("Elev invalid (ID). Încearcă să-l selectezi din nou.");
       }
 
       const startTimeToSend =
@@ -808,20 +820,11 @@ export default function AAddProg({
 
       setSaving(true);
       try {
-         const inferredGroupId = Number(
-            selectedInstructor?.instructorsGroupId ??
-               selectedInstructor?.instructorGroupId ??
-               selectedInstructor?.groupId ??
-               selectedInstructor?.group?.id ??
-               NaN
-         );
-
          const payload = {
-            instructorId: Number(instructorId),
-            ...(Number.isFinite(inferredGroupId)
-               ? { instructorsGroupId: inferredGroupId }
-               : {}),
-            userId: Number(studentId),
+            // 👇 aici e mapping-ul corect
+            userId: studentIdNum,
+            instructorId: instructorIdNum,
+
             reservations: [
                {
                   startTime: startTimeToSend,
@@ -831,7 +834,9 @@ export default function AAddProg({
                         ? "Automat"
                         : "Manual",
                   privateMessage: "",
-                  color: "#FF5733",
+                  color: "--black-t",
+                  // extra-siguranță: punem instructorId și pe rezervare
+                  instructorId: instructorIdNum,
                },
             ],
          };
@@ -842,14 +847,13 @@ export default function AAddProg({
             { id: Date.now(), type: "success", text: "Programare creată." },
          ]);
 
-         // 🔄 Auto-refresh identic cu fluxul de editare
          try {
             await (dispatch(fetchReservationsDelta()).unwrap?.() ??
                dispatch(fetchReservationsDelta()));
          } catch {}
+
          triggerCalendarRefresh();
 
-         // Mic flush pentru eventuale latențe
          setTimeout(async () => {
             try {
                await (dispatch(fetchReservationsDelta()).unwrap?.() ??

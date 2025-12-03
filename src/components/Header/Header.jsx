@@ -172,8 +172,16 @@ const Header = ({ children, links }) => {
                                        </button>
                                     ) : (
                                        <RouterLink
-                                          className="menu__link"
                                           to={item.link || "#"}
+                                          // end = true pentru linkul de Acasă ca să nu fie activ și când ești pe /admin/calendar
+                                          end={item.link === "/admin"}
+                                          className={({ isActive }) =>
+                                             `menu__link ${
+                                                isActive
+                                                   ? "menu__link--active"
+                                                   : ""
+                                             }`
+                                          }
                                        >
                                           <ReactSVG
                                              className="menu__icon"

@@ -127,12 +127,13 @@
       font-size: 14px;
       color: var(--white-s);
    }
+
    &__icon {
       color: var(--white-s);
       background: var(--black-s);
-      width: 66px;
+      width: 60px;
       //padding: 8px ;
-      padding: 13px;
+      padding: 12px;
       display: grid;
       place-items: center;
       transition: var(--elastic-s);
@@ -149,8 +150,16 @@
       }
    }
    &__link:hover .menu__icon {
-      width: 70px;
+      border-radius: 16px;
+      width: 64px;
       color: var(--white-p);
+   }
+   &__link--active .menu__icon {
+      color: var(--accent-d);
+      background: var(--accent-l);
+   }
+   &__link--active:hover .menu__icon {
+      color: var(--accent-d);
    }
 }
 // togle menu
@@ -422,6 +431,16 @@
          height: 46px;
          transition: 0.5s cubic-bezier(0.2, 0.885, 0.32, 1.1);
       }
+      &__link--active {
+         background: var(--accent-l);
+      }
+      &__link--active .menu__icon {
+         background: none;
+      }
+      &__link--active .menu__nav-text{
+         color: var(--accent-d);
+         font-weight: 500;
+      }
       &__icon {
          color: var(--white-s);
          width: 100%;
@@ -443,6 +462,7 @@
             height: 24px;
          }
       }
+
       &__nav-text {
          width: 100%;
          text-align: center;

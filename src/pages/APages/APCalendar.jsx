@@ -9,10 +9,11 @@ import addIcon from "../../assets/svg/mdi--calendar-plus-outline.svg";
 import accIcon from "../../assets/svg/acc.svg";
 import clockIcon from "../../assets/svg/clock.svg";
 import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
-import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
+import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../../assets/svg/mdi--account-star-outline.svg";
+import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 
 import { useDispatch } from "react-redux";
 import { fetchInstructors } from "../../store/instructorsSlice";
@@ -23,8 +24,9 @@ import { UserContext } from "../../UserContext";
 import SubPopup from "../../components/Utils/SubPopup";
 
 function APCalendar() {
-   const links = [
+     const links = [
       { link: "/admin", text: "Acasă", icon: homeIcon },
+      { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
       { popup: "addManager", text: "Manageri", icon: managerIcon },
