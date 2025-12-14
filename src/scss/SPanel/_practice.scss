@@ -254,7 +254,7 @@
    }
    &__row {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: 2fr 3fr;
       gap: 12px;
    }
 
@@ -461,6 +461,71 @@
    }
    /* — Mobile — */
 } /* Ticket badges (verde/galben/roșu) pe card */
+
+.practice__cat-list {
+   display: flex;
+   flex-direction: column;
+   gap: 6px;
+}
+
+.practice__cat-item {
+   width: 100%;
+   display: flex;
+   justify-content: space-between;
+   align-items: center;
+   gap: 12px;
+   border: 0;
+   cursor: pointer;
+   text-align: left;
+   padding: 16px 18px;
+   border-radius: 22px;
+   background: var(--black-p);
+}
+
+.practice__cat-left {
+   display: flex;
+   flex-direction: column;
+   gap: 4px;
+}
+.practice__cat-title {
+   font-size: 16px;
+   color: var(--white-p);
+   font-weight: 600;
+}
+.practice__cat-sub {
+   color: var(--white-p);
+   font-size: 12px;
+   opacity: 0.65;
+}
+
+.practice__cat-badge {
+   font-weight: 500;
+   white-space: nowrap;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   gap: 6px;
+   padding: 9px 12px;
+   border-radius: 99px;
+   &--ok {
+      color: #0d3700;
+      background: #9cf680;
+   }
+   &--bad {
+      color: hsl(0, 100%, 13%);
+      background: hsl(0, 87%, 73%);
+   }
+   &--none {
+      background: var(--black-s);
+      color: var(--white-p);
+   }
+}
+
+.practice__cat-empty {
+   padding: 16px;
+   opacity: 0.7;
+}
+
 .lives {
    &__pill {
       display: flex;

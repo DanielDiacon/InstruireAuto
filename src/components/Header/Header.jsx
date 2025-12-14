@@ -35,6 +35,9 @@ const Header = ({ children, links }) => {
    } else if (user?.role === "INSTRUCTOR") {
       iconSrc = wrenchIcon; // dacă ai un icon separat pt instructor, pune-l aici
       roleLabel = "Instructor";
+   } else if (user?.role === "PROFESSOR") {
+      iconSrc = wrenchIcon; // dacă ai un icon separat pt instructor, pune-l aici
+      roleLabel = "Professor";
    }
 
    // când user-ul e INSTRUCTOR, folosim numele din instructors (după userId)
@@ -86,8 +89,11 @@ const Header = ({ children, links }) => {
       };
    }, [user]);
 
-   const cols = 3;
-   const openRows = Math.max(1, Math.ceil((links?.length + 0.3 || 0) / cols));
+   const cols = 4;
+   const openRows = Math.max(
+      1,
+      Math.ceil((links?.length + 2 + 0.3 || 0) / cols)
+   );
 
    return (
       <>
@@ -173,8 +179,13 @@ const Header = ({ children, links }) => {
                                     ) : (
                                        <RouterLink
                                           to={item.link || "#"}
-                                          // end = true pentru linkul de Acasă ca să nu fie activ și când ești pe /admin/calendar
-                                          end={item.link === "/admin"}
+                                          end={[
+                                             "/admin",
+                                             "/manager",
+                                             "/instructor",
+                                             "/student",
+                                             "/professor",
+                                          ].includes(item.link)}
                                           className={({ isActive }) =>
                                              `menu__link ${
                                                 isActive
@@ -194,13 +205,13 @@ const Header = ({ children, links }) => {
                                     )}
                                  </li>
                               ))}
-                              <li className="settings__wrapper-mobile">
-                                 <DarkModeToggle />
-                              </li>
+                              <DarkModeToggle />
                            </ul>
                         </nav>
                         <div className="settings__wrapper">
-                           <DarkModeToggle />
+                           <ul className="header__settings settings pc">
+                              <DarkModeToggle />
+                           </ul>
                         </div>
                      </div>
                   </div>

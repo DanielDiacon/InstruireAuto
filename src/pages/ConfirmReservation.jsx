@@ -94,9 +94,9 @@ export default function ConfirmReservation() {
                      <span>Acasă</span>
                   </M3Link>
                </div>
-
-               <DarkModeToggle />
-
+               <ul className="header__settings settings ">
+                  <DarkModeToggle />
+               </ul>
                <div className="sign__right">
                   <div className="sign__switcher --active">
                      <div
@@ -159,7 +159,11 @@ export default function ConfirmReservation() {
                         />
                      </div>
                      <div className="sign__links">
-                        <M3Link type="accent" icon={arrowIcon} link="https://instruire-auto.md/">
+                        <M3Link
+                           type="accent"
+                           icon={arrowIcon}
+                           link="https://instruire-auto.md/"
+                        >
                            <span>Acasă</span>
                         </M3Link>
                         <M3Link type="succes" icon={addIcon} link="/login">

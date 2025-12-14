@@ -1,10 +1,9 @@
 // src/api/notesService.js
 import apiClientService from "./ApiClientService";
 
-// ApiClientService are deja base-ul /api, deci aici folosim doar " /notes "
 const NOTES_BASE = "/notes";
 
-/** Helper mic pentru parsare JSON în siguranță */
+/** Helper mic pentru parsare JSON în siguranță – îl lași cum este acum */
 async function parseJsonSafe(res, fallback) {
    const ct = res.headers?.get?.("content-type") || "";
    if (ct.includes("application/json")) {
@@ -23,7 +22,35 @@ async function parseJsonSafe(res, fallback) {
    }
 }
 
-/** GET /api/notes  – toate notițele */
+/**
+ * NOTIȚE PENTRU AȘTEPTĂRI – interval de timp (ex: luna curentă),
+ * filtrate cu type=wait-slot pe backend.
+ *
+ * GET /api/notes?from=...&to=...&type=wait-slot
+ */
+export async function fetchWaitNotesRange(fromIso, toIso) {
+   const params = new URLSearchParams();
+   if (fromIso) params.set("from", fromIso);
+   if (toIso) params.set("to", toIso);
+   params.set("type", "wait-slot"); // dacă backend-ul tău folosește acest filtru
+
+   const url =
+      params.toString().length > 0
+         ? `${NOTES_BASE}?${params.toString()}`
+         : NOTES_BASE;
+
+   const res = await apiClientService.get(url);
+
+   if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`notesService.fetchWaitNotesRange: ${txt || res.status}`);
+   }
+
+   const data = await parseJsonSafe(res, []);
+   return Array.isArray(data) ? data : [];
+}
+
+/** GET /api/notes – toate notițele */
 export async function getNotes() {
    const res = await apiClientService.get(NOTES_BASE);
 
@@ -51,7 +78,7 @@ export async function getNote(id) {
 
 /** POST /api/notes – crează o notiță nouă */
 export async function createNote(payload) {
-   // payload: { title: string, content: string }
+   // payload: { title, content, date, type?, userId? }
    const res = await apiClientService.post(
       NOTES_BASE,
       JSON.stringify(payload || {})
@@ -82,7 +109,7 @@ export async function updateNote(id, data) {
    return await parseJsonSafe(res, null);
 }
 
-/** (opțional) DELETE /api/notes/:id – ștergere notiță */
+/** DELETE /api/notes/:id */
 export async function deleteNote(id) {
    if (id == null) throw new Error("deleteNote: id este obligatoriu");
 

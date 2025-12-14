@@ -21,6 +21,7 @@ import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import testIcon from "../../assets/svg/material-symbols--book-outline.svg";
 import examIcon from "../../assets/svg/mdi--book-clock-outline.svg";
 import { openPopup } from "../../components/Utils/popupStore";
+import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 
 /* ========= Localizer + RO formats/messages ========= */
 const locales = { ro, "ro-RO": ro };
@@ -140,9 +141,11 @@ const messagesRO = {
 
 function SPCalendar() {
    const links = [
+      // 👇 nou: Acasă pentru student, ca să fie root /student
       { link: "/student", text: "Acasă", icon: homeIcon },
+      { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "sAddProg", text: "Programare", icon: addIcon },
-      { link: "/student/text", text: "Testare", icon: testIcon },
+      { link: "/student/test", text: "Testare", icon: testIcon },
       { link: "/student/exam", text: "Examen", icon: examIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];

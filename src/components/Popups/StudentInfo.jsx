@@ -88,6 +88,33 @@ function getReservationStartMs(r) {
    return Number.isNaN(ms) ? 0 : ms;
 }
 
+/**
+ * Determină dacă o rezervare trebuie tratată ca "Anulare" (isCancelled).
+ * - Prioritar: flag-uri boolean isCancelled / is_cancelled / isCanceled / is_canceled
+ * - Fallback: status === cancelled/canceled doar dacă flag-ul nu există în payload
+ */
+function isReservationCancelled(r) {
+   if (!r) return false;
+
+   const hasFlag =
+      r.isCancelled !== undefined ||
+      r.is_cancelled !== undefined ||
+      r.isCanceled !== undefined ||
+      r.is_canceled !== undefined;
+
+   const flag =
+      r?.isCancelled ??
+      r?.is_cancelled ??
+      r?.isCanceled ??
+      r?.is_canceled ??
+      null;
+
+   if (hasFlag) return Boolean(flag);
+
+   const st = String(r?.status || "").toLowerCase();
+   return st === "cancelled" || st === "canceled";
+}
+
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
 
@@ -114,7 +141,7 @@ export default function StudentInfoPopup({ student, onClose }) {
    const [liveStudent, setLiveStudent] = useState(student || {});
    const [confirmDelete, setConfirmDelete] = useState(false);
 
-   const [tab, setTab] = useState("reservations"); // 'reservations' | 'attempts'
+   const [tab, setTab] = useState("reservations"); // 'reservations' | 'cancelled' | 'attempts'
    const [attempts, setAttempts] = useState([]);
    const [attemptsLoading, setAttemptsLoading] = useState(false);
    const [attemptsError, setAttemptsError] = useState("");
@@ -290,12 +317,29 @@ export default function StudentInfoPopup({ student, onClose }) {
       return reservations.filter((r) => getReservationUserId(r) === uid);
    }, [reservations, targetUserId]);
 
+   // split: programări normale vs anulări (isCancelled)
+   const { activeReservations, cancelledReservations } = useMemo(() => {
+      const active = [];
+      const cancelled = [];
+      for (const r of myReservations) {
+         if (isReservationCancelled(r)) cancelled.push(r);
+         else active.push(r);
+      }
+      return { activeReservations: active, cancelledReservations: cancelled };
+   }, [myReservations]);
+
    // sortare crescătoare după startTime
    const myReservationsAsc = useMemo(() => {
-      const arr = [...myReservations];
+      const arr = [...activeReservations];
       arr.sort((a, b) => getReservationStartMs(a) - getReservationStartMs(b));
       return arr;
-   }, [myReservations]);
+   }, [activeReservations]);
+
+   const myCancelledAsc = useMemo(() => {
+      const arr = [...cancelledReservations];
+      arr.sort((a, b) => getReservationStartMs(a) - getReservationStartMs(b));
+      return arr;
+   }, [cancelledReservations]);
 
    useEffect(() => {
       let cancelled = false;
@@ -588,6 +632,17 @@ export default function StudentInfoPopup({ student, onClose }) {
                >
                   Programări
                </button>
+
+               <button
+                  className={
+                     "students-info__tab" +
+                     (tab === "cancelled" ? " is-active" : "")
+                  }
+                  onClick={() => setTab("cancelled")}
+               >
+                  Anulări
+               </button>
+
                <button
                   className={
                      "students-info__tab" +
@@ -595,11 +650,11 @@ export default function StudentInfoPopup({ student, onClose }) {
                   }
                   onClick={() => setTab("attempts")}
                >
-                  Încercări examen
+                  Examen
                </button>
             </div>
 
-            {tab === "reservations" && (
+            {(tab === "reservations" || tab === "cancelled") && (
                <>
                   {loading && (
                      <p className="students-info__loading">
@@ -607,6 +662,11 @@ export default function StudentInfoPopup({ student, onClose }) {
                      </p>
                   )}
                   {error && <p className="students-info__error">{error}</p>}
+               </>
+            )}
+
+            {tab === "reservations" && (
+               <>
                   {!loading && myReservationsAsc.length === 0 && (
                      <p className="students-info__empty">
                         Nu există programări.
@@ -666,6 +726,61 @@ export default function StudentInfoPopup({ student, onClose }) {
                                              src={clockIcon}
                                           />
                                        )}
+                                    </div>
+                                 </div>
+                              );
+                           })}
+                        </div>
+                     </div>
+                  )}
+               </>
+            )}
+
+            {tab === "cancelled" && (
+               <>
+                  {!loading && myCancelledAsc.length === 0 && (
+                     <p className="students-info__empty">Nu există anulări.</p>
+                  )}
+
+                  {!loading && myCancelledAsc.length > 0 && (
+                     <div className="students-info__list-wrapper">
+                        <div className="students-info__list">
+                           {myCancelledAsc.map((res, index) => {
+                              const status = res.status || "cancelled";
+                              return (
+                                 <div
+                                    key={
+                                       (res.id ?? res._id ?? "res") +
+                                       "-" +
+                                       index
+                                    }
+                                    onClick={() =>
+                                       openSubPopup("reservationEdit", {
+                                          reservationId: res.id,
+                                       })
+                                    }
+                                    className={`students-info__item students-info__item--${status}`}
+                                 >
+                                    <div className="students-info__item-left">
+                                       <h3>
+                                          {liveStudent.firstName
+                                             ? `${liveStudent.firstName} ${liveStudent.lastName}`
+                                             : res.student || "–"}
+                                       </h3>
+                                       <p>
+                                          {res.instructor?.firstName
+                                             ? `cu ${res.instructor.firstName} ${res.instructor.lastName}`
+                                             : "fără instructor"}
+                                       </p>
+                                       <span>
+                                          {fmtIsoDDMMYYYY_HHMM(res.startTime)}
+                                       </span>
+                                    </div>
+                                    <div className="students-info__item-right">
+                                       <ReactSVG
+                                          className="students-info__item-icon cancelled"
+                                          src={cancelIcon}
+                                       />
                                     </div>
                                  </div>
                               );

@@ -21,6 +21,24 @@ import {
    requestPasswordReset,
 } from "../api/authService";
 
+/* ===== Config telefon local ===== */
+const MAX_PHONE_DIGITS = 9; // ex: 067123421 (9 cifre)
+const MIN_PHONE_DIGITS = 8; // minim 8 cifre pentru a fi considerat valid
+
+// Formatăm ca 067-123-421 pe măsură ce userul tastează
+function formatLocalPhone(raw) {
+   const digits = (raw || "").replace(/\D/g, "");
+   if (!digits) return "";
+
+   if (digits.length <= 3) {
+      return digits;
+   }
+   if (digits.length <= 6) {
+      return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+   }
+   return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
 function SignPage() {
    const { setUser } = useContext(UserContext);
 
@@ -31,15 +49,11 @@ function SignPage() {
    const [resetEmail, setResetEmail] = useState("");
    const [resetLoading, setResetLoading] = useState(false);
 
-   // Phone handling: lock "+373 " prefix and only allow 8 digits after
-   const MD_PREFIX = "+373 ";
-   const MAX_MD_DIGITS = 8; // Moldova numbers: 8 digits after +373
-
    const [registerForm, setRegisterForm] = useState({
       name: "",
       email: "",
       groupToken: "",
-      phone: "", // store ONLY the local 8 digits here; UI renders with +373 prefix
+      phone: "",
       password: "",
       confirmPassword: "",
    });
@@ -73,6 +87,9 @@ function SignPage() {
             break;
          case "INSTRUCTOR":
             window.location.href = "/instructor";
+            break;
+         case "PROFESSOR":
+            window.location.href = "/professor";
             break;
          default:
             window.location.href = "/";
@@ -123,35 +140,11 @@ function SignPage() {
       setRegisterForm((prev) => ({ ...prev, [name]: value }));
    };
 
-   // Special handler for the phone field (keeps +373 locked and digits-only after)
+   // Handler nou pentru telefon (doar cifre, max 9, afișare format 067-123-421)
    const handlePhoneChange = (e) => {
-      let v = e.target.value || "";
-      // Normalize any user attempts to change the prefix
-      v = v.replace(/^\+?373\s?/, "");
-      // Keep only digits and clamp to 8
-      v = v.replace(/\D/g, "").slice(0, MAX_MD_DIGITS);
-      setRegisterForm((prev) => ({ ...prev, phone: v }));
-   };
-
-   const handlePhoneKeyDown = (e) => {
-      const el = e.target;
-      const prefixLen = MD_PREFIX.length;
-      const start = el.selectionStart ?? 0;
-      const end = el.selectionEnd ?? 0;
-
-      // Prevent backspace/delete from touching the prefix
-      if (
-         (e.key === "Backspace" && start <= prefixLen && end <= prefixLen) ||
-         (e.key === "Delete" && start < prefixLen)
-      ) {
-         e.preventDefault();
-         // Keep caret right after prefix
-         requestAnimationFrame(() => {
-            try {
-               el.setSelectionRange(prefixLen, prefixLen);
-            } catch (_) {}
-         });
-      }
+      const v = e.target.value || "";
+      const digits = v.replace(/\D/g, "").slice(0, MAX_PHONE_DIGITS);
+      setRegisterForm((prev) => ({ ...prev, phone: digits }));
    };
 
    const handleRegisterSubmit = async (e) => {
@@ -171,9 +164,10 @@ function SignPage() {
          return;
       }
 
-      if (registerForm.phone.length !== MAX_MD_DIGITS) {
+      const phoneDigits = (registerForm.phone || "").replace(/\D/g, "");
+      if (phoneDigits.length < MIN_PHONE_DIGITS) {
          addMessage(
-            "Introdu un număr de telefon moldovenesc valid (8 cifre după +373).",
+            "Introdu un număr de telefon valid (minim 8 cifre).",
             "warning"
          );
          return;
@@ -185,7 +179,7 @@ function SignPage() {
          firstName: registerForm.name.split(" ")[0],
          lastName: registerForm.name.split(" ")[1] || "",
          groupToken: registerForm.groupToken,
-         phone: "+373" + registerForm.phone, // send with country code
+         phone: phoneDigits,
       };
 
       try {
@@ -260,7 +254,9 @@ function SignPage() {
                   </M3Link>
                </div>
 
-               <DarkModeToggle />
+               <ul className="header__settings settings ">
+                  <DarkModeToggle />
+               </ul>
                <div className="sign__right">
                   <div
                      className={`sign__switcher ${
@@ -402,19 +398,17 @@ function SignPage() {
                                  required
                               />
 
-                              {/* PHONE with locked +373 prefix */}
                               <div className="sign__input-wrapper">
                                  <input
                                     type="tel"
-                                    placeholder="Nr. Telefon"
+                                    placeholder="067-123-421"
                                     className="sign__input sign__input--phone"
                                     name="phone"
-                                    value={`${MD_PREFIX}${registerForm.phone}`}
+                                    value={formatLocalPhone(registerForm.phone)}
                                     onChange={handlePhoneChange}
-                                    onKeyDown={handlePhoneKeyDown}
                                     inputMode="numeric"
-                                    maxLength={MD_PREFIX.length + MAX_MD_DIGITS}
-                                    aria-label="Număr de telefon (+373 fix)"
+                                    maxLength={13} //
+                                    aria-label="Număr de telefon (minim 8 cifre)"
                                     required
                                  />
                               </div>
@@ -497,13 +491,8 @@ function SignPage() {
                            </div>
 
                            {/* ✅ Termeni și Condiții (obligatoriu) */}
-                           <div
-                              className="sign__terms"
-                           >
-                              <label
-                                 className="sign__checkbox"
-                               
-                              >
+                           <div className="sign__terms">
+                              <label className="sign__checkbox">
                                  <input
                                     type="checkbox"
                                     checked={registerAccepted}
@@ -648,7 +637,11 @@ function SignPage() {
                         />
                      </div>
                      <div className="sign__links">
-                        <M3Link type="accent" icon={arrowIcon} link="https://instruire-auto.md/">
+                        <M3Link
+                           type="accent"
+                           icon={arrowIcon}
+                           link="https://instruire-auto.md/"
+                        >
                            <span>Acasă</span>
                         </M3Link>
                         {mode === "sign-in" ? (

@@ -98,8 +98,10 @@ const messagesRO = {
 
 function IPToday() {
    const links = [
+      // 👇 nou: link de Acasă pentru instructor, la fel ca la admin/manager
       { link: "/instructor", text: "Acasă", icon: homeIcon },
       { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
+      { link: "/instructor/today", text: "Azi", icon: todayIcon },
       { link: "/instructor/groups", text: "Grupe", icon: groupsIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];

@@ -243,15 +243,7 @@ function getGroupId(r) {
    );
 }
 function getInstructorId(r) {
-   return (
-      r?.instructorId ??
-      r?.instructor_id ??
-      r?.teacherId ??
-      r?.teacher_id ??
-      r?.instructor?.id ??
-      r?.teacher?.id ??
-      null
-   );
+   return r?.instructorId ?? r?.instructor_id ?? r?.instructor?.id ?? null;
 }
 
 function indexBusyPayload(raw) {
@@ -351,6 +343,21 @@ const reservationsSlice = createSlice({
          delete state.byStudent[sid];
          delete state.loadingByStudent[sid];
          delete state.errorByStudent[sid];
+      },
+
+      // 🔥 NEW: ștergere instant locală (optimistic)
+      removeReservationLocal(state, action) {
+         const id = String(action.payload);
+         state.list = state.list.filter((r) => String(r.id) !== id);
+      },
+      patchReservationLocal(state, action) {
+         const { id, changes } = action.payload || {};
+         if (!id || !changes) return;
+
+         const row = state.list.find((r) => String(r.id) === String(id));
+         if (!row) return;
+
+         Object.assign(row, changes);
       },
       // NEW: poți seta manual range-ul activ dacă vrei
       setActiveRange(state, action) {
@@ -585,6 +592,8 @@ export const {
    resetBusy,
    clearStudentReservations,
    setActiveRange,
+   removeReservationLocal,
+   patchReservationLocal,
 } = reservationsSlice.actions;
 
 export default reservationsSlice.reducer;

@@ -117,8 +117,9 @@ export default function ResetPassword() {
                   </M3Link>
                </div>
 
-               <DarkModeToggle />
-
+               <ul className="header__settings settings ">
+                  <DarkModeToggle />
+               </ul>
                <div className="sign__right">
                   <div className="sign__switcher --active">
                      <div className="sign__form-wrapper sign__form--active">

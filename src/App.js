@@ -29,6 +29,10 @@ import ConfirmReservation from "./pages/ConfirmReservation";
 import LegalPage from "./pages/PrivacyPage";
 import TermsPage from "./pages/TermsPage";
 import EnrollFrom from "./pages/EnrollForm";
+import PPanel from "./pages/PPanel";
+import PPStudentStatistics from "./pages/PPanel/PPStudentStatistics";
+import PPStudents from "./pages/PPanel/PPStudents";
+import PPGropus from "./pages/PPanel/PPGroups";
 
 const App = () => {
    const darkMode = localStorage.getItem("darkMode") === "enabled";
@@ -165,6 +169,38 @@ const App = () => {
                   element={
                      <ProtectedRoute allowedRoles={["MANAGER"]}>
                         <MPHistory />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/professor"
+                  element={
+                     <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <PPanel />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/professor/students"
+                  element={
+                     <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <PPStudents />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/professor/groups"
+                  element={
+                     <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <PPGropus />
+                     </ProtectedRoute>
+                  }
+               />
+               <Route
+                  path="/professor/student/:studentId/statistics"
+                  element={
+                     <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <PPStudentStatistics />
                      </ProtectedRoute>
                   }
                />

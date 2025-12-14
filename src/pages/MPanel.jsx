@@ -20,6 +20,7 @@ import instrIcon from "../assets/svg/mdi--account-cog-outline.svg";
 import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../assets/svg/mdi--account-star-outline.svg";
 import examIcon from "../assets/svg/mdi--book-clock-outline.svg";
+import homeIcon from "../assets/svg/material-symbols--home-outline.svg";
 
 import { getAllReservations } from "../api/reservationsService";
 import { getUsers } from "../api/usersService";
@@ -40,18 +41,10 @@ import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
 import PreloadAppData from "../components/Utils/PreloadAppData";
 import Footer from "../components/Footer";
 
-// Calendar locale config
-const locales = { "ro-RO": ro };
-const localizer = dateFnsLocalizer({
-   format,
-   parse,
-   startOfWeek,
-   getDay,
-   locales,
-});
 
 function MPanel() {
    const links = [
+      { link: "/manager", text: "Acasă", icon: homeIcon },
       { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
@@ -64,7 +57,6 @@ function MPanel() {
       },
       { link: "/manager/history", text: "Istoric", icon: clockIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
-
    ];
 
    const dispatch = useDispatch();
@@ -212,7 +204,6 @@ function MPanel() {
                <InstructorsGroupManager></InstructorsGroupManager>
             </section>
             <Footer />
-
          </main>
       </>
    );

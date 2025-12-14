@@ -96,11 +96,13 @@ const messagesRO = {
 };
 
 function SPExam() {
-   const links = [
+    const links = [
+      // 👇 nou: Acasă pentru student, ca să fie root /student
       { link: "/student", text: "Acasă", icon: homeIcon },
       { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student/test", text: "Testare", icon: testIcon },
+      { link: "/student/exam", text: "Examen", icon: examIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];
 

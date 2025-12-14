@@ -283,6 +283,12 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    const idxRef = useRef(idx);
    const penaltyCooldownRef = useRef(0);
 
+  useEffect(() => {
+    const on = view === "test" || view === "result";
+    document.body.classList.toggle("is-exam-mode", on);
+    return () => document.body.classList.remove("is-exam-mode");
+  }, [view]);
+
    // limba selectată (persistată) + limba UI înghețată pe durata testului
    const [lang, setLang] = useState(() => {
       const saved =
@@ -1327,15 +1333,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                }}
             >
                <div className="practice__toolbar">
-                  <button
-                     className="practice__back"
-                     onClick={() => {
-                        goToResult(); // 🔄 tranziție
-                     }}
-                  >
-                     {t("finish")}
-                  </button>
-
                   <div className="practice__toolbar-center">
                      <div className="practice__question-index">
                         {t("question")} {Math.min(idx + 1, total)}/{total}

@@ -1,5 +1,5 @@
 // src/components/Popups/AddInstr.jsx
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { ReactSVG } from "react-svg";
 
@@ -83,20 +83,6 @@ const oreDisponibile = [
 ];
 
 const pad2 = (n) => String(n).padStart(2, "0");
-
-function todayAt00() {
-   const t = new Date();
-   t.setHours(0, 0, 0, 0);
-   return t;
-}
-
-/** yyyy-MM-dd pentru input[type="date"] */
-function toDateInputValue(d) {
-   const y = d.getFullYear();
-   const m = pad2(d.getMonth() + 1);
-   const day = pad2(d.getDate());
-   return `${y}-${m}-${day}`;
-}
 
 /** Construiește ISO UTC “raw” (zi locală + HH:mm) */
 function toIsoUtcRaw(localDateObj, timeStrHHMM) {
@@ -207,12 +193,13 @@ function AddInstr() {
    const [saving, setSaving] = useState(false);
 
    const [pillMessages, setPillMessages] = useState([]);
-   const pushPill = (text, type = "error") =>
+   const pushPill = useCallback((text, type = "error") => {
       setPillMessages((prev) => [
          ...prev,
          { id: Date.now() + Math.random(), text, type },
       ]);
-   const setPills = (arr) =>
+   }, []);
+   const setPills = useCallback((arr) => {
       setPillMessages(
          (arr || []).map((text) => ({
             id: Date.now() + Math.random(),
@@ -220,8 +207,12 @@ function AddInstr() {
             type: "error",
          }))
       );
-   const clearPills = () => setPillMessages([]);
-   const popPill = () => setPillMessages((prev) => prev.slice(0, -1));
+   }, []);
+   const clearPills = useCallback(() => setPillMessages([]), []);
+   const popPill = useCallback(
+      () => setPillMessages((prev) => prev.slice(0, -1)),
+      []
+   );
 
    // creare instructor
    const [newInstr, setNewInstr] = useState({
@@ -251,19 +242,27 @@ function AddInstr() {
    });
 
    const [editPills, setEditPills] = useState([]);
-   const pushEditPill = (text, type = "error") =>
+   const pushEditPill = useCallback((text, type = "error") => {
       setEditPills((prev) => [
          ...prev,
          { id: Date.now() + Math.random(), text, type },
       ]);
-   const popEditPill = () => setEditPills((prev) => prev.slice(0, -1));
+   }, []);
+   const popEditPill = useCallback(
+      () => setEditPills((prev) => prev.slice(0, -1)),
+      []
+   );
 
    const getUserByIdFromStore = (id) =>
       users.find((u) => String(u.id) === String(id)) || null;
-   const mergedEmail = (inst) => {
-      const u = inst?.userId ? getUserByIdFromStore(inst.userId) : null;
-      return u?.email || inst.email || "";
-   };
+
+   const mergedEmail = useCallback(
+      (inst) => {
+         const u = inst?.userId ? getUserByIdFromStore(inst.userId) : null;
+         return u?.email || inst.email || "";
+      },
+      [users]
+   );
 
    useEffect(() => {
       if (status === "idle") {
@@ -273,24 +272,28 @@ function AddInstr() {
       dispatch(fetchUsers());
    }, [status, dispatch]);
 
-   const filteredInstructors = instructors.filter((inst) => {
-      const q = (search || "").toLowerCase();
-      const fullName = `${inst.firstName || ""} ${inst.lastName || ""}`
-         .trim()
-         .toLowerCase();
-      const email = mergedEmail(inst).toLowerCase();
-      const phone = String(inst.phone || "").toLowerCase();
-      const sector = String(inst.sector || "").toLowerCase();
-      const car = cars.find((c) => String(c.instructorId) === String(inst.id));
-      const plate = String(car?.plateNumber || "").toLowerCase();
-      return (
-         fullName.includes(q) ||
-         email.includes(q) ||
-         phone.includes(q) ||
-         sector.includes(q) ||
-         plate.includes(q)
-      );
-   });
+   const filteredInstructors = useMemo(() => {
+      return instructors.filter((inst) => {
+         const q = (search || "").toLowerCase();
+         const fullName = `${inst.firstName || ""} ${inst.lastName || ""}`
+            .trim()
+            .toLowerCase();
+         const email = mergedEmail(inst).toLowerCase();
+         const phone = String(inst.phone || "").toLowerCase();
+         const sector = String(inst.sector || "").toLowerCase();
+         const car = cars.find(
+            (c) => String(c.instructorId) === String(inst.id)
+         );
+         const plate = String(car?.plateNumber || "").toLowerCase();
+         return (
+            fullName.includes(q) ||
+            email.includes(q) ||
+            phone.includes(q) ||
+            sector.includes(q) ||
+            plate.includes(q)
+         );
+      });
+   }, [instructors, cars, search, mergedEmail]);
 
    // car helpers
    const upsertCarForInstructor = async ({ instructorId, plate, gearbox }) => {
@@ -345,6 +348,7 @@ function AddInstr() {
       }
       return errs;
    };
+
    const collectEditConflicts = (id, uid) => {
       const errs = [];
       const p = normPhone(editInstr.phone);
@@ -469,95 +473,41 @@ function AddInstr() {
       }
    };
 
-   /* === ORAR (BLACKOUTS – doar REPEAT săptămânal, în perioada selectată) === */
-   const [blkLoading, setBlkLoading] = useState(false);
-   const [blkExisting, setBlkExisting] = useState([]); // lista raw de la server
+   /* =======================================================================
+      ORAR (BLACKOUTS) — CERINȚA TA:
+      - Editorul este doar pentru CREARE (interval -> ore -> salvezi)
+      - NU recunoaștem / NU evidențiem blocările existente în grilă
+      - Ștergerea se face DOAR din listă (swap: listă <-> editor)
+   ======================================================================= */
 
-   // selecție pentru NOILE serii săptămânale
-   const [weeklyDay, setWeeklyDay] = useState(1); // 1 = Luni
+   const [blkLoading, setBlkLoading] = useState(false);
+   const [blkExisting, setBlkExisting] = useState([]); // doar pentru listă
+   const [blkRemoveIds, setBlkRemoveIds] = useState(() => new Set());
+
+   const [showBlackoutList, setShowBlackoutList] = useState(false); // listă ascunsă implicit
+
+   // CREARE
+   const [periodStart, setPeriodStart] = useState(""); // obligatoriu
+   const [periodEnd, setPeriodEnd] = useState(""); // obligatoriu
+   const [weeklyDay, setWeeklyDay] = useState(1); // 1 = Lun
    const [weeklySelection, setWeeklySelection] = useState(() =>
       initWeeklySelection()
    );
 
-   // perioada selectată (inputurile pentru perioadă)
-   const [periodStart, setPeriodStart] = useState(() => {
-      const t = todayAt00();
-      return toDateInputValue(t);
-   });
-   const [periodEnd, setPeriodEnd] = useState(() => {
-      const t = todayAt00();
-      const e = new Date(t);
-      e.setMonth(e.getMonth() + 1);
-      return toDateInputValue(e);
-   });
-
-   // id-uri de blackout marcate pentru ștergere
-   const [blkRemoveIds, setBlkRemoveIds] = useState(() => new Set());
-
-   // afișare/ascundere listă cu toate blocările
-   const [showBlackoutList, setShowBlackoutList] = useState(false);
-
-   /** Harta seriilor REPEAT săptămânale existente: dow -> (hhmm -> Set(ids)) */
-   const weeklyActiveMap = useMemo(() => {
-      const m = new Map();
-      for (const d of [0, 1, 2, 3, 4, 5, 6]) m.set(d, new Map());
-
-      for (const b of blkExisting || []) {
-         if (String(b?.type || "").toUpperCase() !== "REPEAT") continue;
-         if (Number(b.repeatEveryDays) !== 7) continue;
-
-         const baseIso = getBlackoutDT(b);
-         if (!baseIso) continue;
-
-         const dow = dowFromIsoUTC(baseIso); // 0..6
-         const hhmm = hhmmFromIso(baseIso);
-
-         const mapForDay = m.get(dow) || new Map();
-         if (!mapForDay.has(hhmm)) mapForDay.set(hhmm, new Set());
-         mapForDay.get(hhmm).add(b.id);
-         m.set(dow, mapForDay);
-      }
-
-      return m;
-   }, [blkExisting]);
-
-   /** există serie activă (ne-marcata pentru ștergere) pe DOW + HH:mm ? */
-   const hasWeeklyRepeatActiveAt = (dow, hhmm) => {
-      const mapForDay = weeklyActiveMap.get(dow) || new Map();
-      const ids = mapForDay.get(hhmm) || new Set();
-      for (const id of ids) if (!blkRemoveIds.has(id)) return true;
-      return false;
-   };
-
-   /** toggle pe un slot de oră într-o anumită zi a săptămânii */
-   const toggleWeeklySlot = (dow, hhmm) => {
-      const mapForDay = weeklyActiveMap.get(dow) || new Map();
-      const activeIds = new Set(mapForDay.get(hhmm) || []);
-
-      if (activeIds.size > 0) {
-         // există serii → marchează / demarchează pentru ștergere
-         setBlkRemoveIds((prev) => {
-            const next = new Set(prev);
-            const allAlreadyMarked = [...activeIds].every((id) => next.has(id));
-            if (allAlreadyMarked) {
-               activeIds.forEach((id) => next.delete(id));
-            } else {
-               activeIds.forEach((id) => next.add(id));
-            }
-            return next;
-         });
-      } else {
-         // nu există serie → toggle pentru CREARE (în intervalul selectat)
-         setWeeklySelection((prev) => {
-            const next = new Map(prev);
-            const setForDay = new Set(next.get(dow) || []);
-            if (setForDay.has(hhmm)) setForDay.delete(hhmm);
-            else setForDay.add(hhmm);
-            next.set(dow, setForDay);
-            return next;
-         });
-      }
-   };
+   const periodState = useMemo(() => {
+      if (!periodStart || !periodEnd)
+         return { ok: false, reason: "Alege perioada (Start și End)." };
+      const s = new Date(`${periodStart}T00:00:00`);
+      const e = new Date(`${periodEnd}T00:00:00`);
+      if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()))
+         return { ok: false, reason: "Perioadă invalidă." };
+      if (e < s)
+         return {
+            ok: false,
+            reason: "Data de final este mai mică decât start.",
+         };
+      return { ok: true, reason: "" };
+   }, [periodStart, periodEnd]);
 
    const hasWeeklySelection = useMemo(() => {
       for (const setForDay of weeklySelection.values()) {
@@ -566,47 +516,110 @@ function AddInstr() {
       return false;
    }, [weeklySelection]);
 
-   // încărcăm blackouts pentru instructor când intrăm în modul "schedule"
+   // fetch listă blocări pentru instructor (pentru ștergere)
    useEffect(() => {
       if (!editingId || editingMode !== "schedule") return;
+
       (async () => {
          setBlkLoading(true);
          try {
             const list = await getInstructorBlackouts(editingId);
             setBlkExisting(Array.isArray(list) ? list : []);
          } catch (e) {
-            pushEditPill(e?.message || "Nu am putut încărca orele blocate.");
+            pushEditPill(e?.message || "Nu am putut încărca blocările.");
             setBlkExisting([]);
          } finally {
             setBlkLoading(false);
          }
       })();
-   }, [editingId, editingMode]); // eslint-disable-line
+   }, [editingId, editingMode, pushEditPill]);
 
-   /** construiește payload-ul pentru serii noi (REPEAT weekly, în perioada selectată) */
-   const buildWeeklyBlackoutsItems = () => {
+   const resetBlackoutsUI = useCallback(() => {
+      setBlkExisting([]);
+      setBlkRemoveIds(new Set());
+      setShowBlackoutList(false);
+
+      setPeriodStart("");
+      setPeriodEnd("");
+      setWeeklyDay(1);
+      setWeeklySelection(initWeeklySelection());
+
+      setEditPills([]);
+   }, []);
+
+   // LISTĂ: toggle id pentru ștergere
+   const toggleDeleteId = (id) => {
+      setBlkRemoveIds((prev) => {
+         const next = new Set(prev);
+         if (next.has(id)) next.delete(id);
+         else next.add(id);
+         return next;
+      });
+   };
+
+   const handleApplyDeletes = async () => {
+      const ids = Array.from(blkRemoveIds || []);
+      if (!ids.length) return;
+
+      setSaving(true);
+      setEditPills([]);
+
+      try {
+         await Promise.all(
+            ids.map((id) =>
+               deleteInstructorBlackout(id).catch((e) => {
+                  const msg =
+                     e?.message || e?.toString?.() || JSON.stringify(e || {});
+                  if (/not\s*found/i.test(msg)) return null; // ignorăm 404
+                  throw e;
+               })
+            )
+         );
+
+         await dispatch(fetchInstructors());
+
+         // refresh listă
+         if (editingId) {
+            const list = await getInstructorBlackouts(editingId);
+            setBlkExisting(Array.isArray(list) ? list : []);
+         }
+         setBlkRemoveIds(new Set());
+      } catch (e) {
+         const msgs = extractServerErrors(e);
+         setEditPills(
+            (msgs.length ? msgs : ["Eroare la ștergerea blocărilor."]).map(
+               (t) => ({
+                  id: Date.now() + Math.random(),
+                  text: t,
+                  type: "error",
+               })
+            )
+         );
+      } finally {
+         setSaving(false);
+      }
+   };
+
+   // EDITOR: toggle ore (doar creare)
+   const toggleWeeklySlotCreateOnly = (dow, hhmm) => {
+      if (!periodState.ok) return;
+
+      setWeeklySelection((prev) => {
+         const next = new Map(prev);
+         const setForDay = new Set(next.get(dow) || []);
+         if (setForDay.has(hhmm)) setForDay.delete(hhmm);
+         else setForDay.add(hhmm);
+         next.set(dow, setForDay);
+         return next;
+      });
+   };
+
+   const buildWeeklyCreateItems = () => {
       if (!editingId) return [];
-      const items = [];
-      const seen = new Set();
+      if (!periodState.ok) return [];
 
-      // dacă nu setezi manual perioada, default azi + 1 lună
-      let start0;
-      let end0;
-
-      if (periodStart) {
-         start0 = new Date(`${periodStart}T00:00:00`);
-      } else {
-         start0 = todayAt00();
-      }
-
-      if (periodEnd) {
-         end0 = new Date(`${periodEnd}T00:00:00`);
-      } else {
-         end0 = new Date(start0);
-         end0.setMonth(end0.getMonth() + 1);
-      }
-
-      // dacă cineva a pus end < start, le inversăm ca să nu crape
+      let start0 = new Date(`${periodStart}T00:00:00`);
+      let end0 = new Date(`${periodEnd}T00:00:00`);
       if (end0 < start0) {
          const tmp = start0;
          start0 = end0;
@@ -616,7 +629,7 @@ function AddInstr() {
       const firstDowOnOrAfter = (startDate, targetDow) => {
          const d = new Date(startDate);
          d.setHours(0, 0, 0, 0);
-         const curDow = serverDowFromLocalDate(d); // 0..6
+         const curDow = serverDowFromLocalDate(d);
          const diff = (targetDow - curDow + 7) % 7;
          d.setDate(d.getDate() + diff);
          return d;
@@ -631,12 +644,12 @@ function AddInstr() {
          return d;
       };
 
+      const items = [];
+      const seen = new Set();
+
       for (const dow of [0, 1, 2, 3, 4, 5, 6]) {
          const setForDay = weeklySelection.get(dow) || new Set();
          for (const hhmm of setForDay) {
-            // dacă există deja serie activă (ne-marcata delete), nu mai creăm
-            if (hasWeeklyRepeatActiveAt(dow, hhmm)) continue;
-
             const first = firstDowOnOrAfter(start0, dow);
             const last = lastDowOnOrBefore(end0, dow);
             if (first > last) continue;
@@ -644,9 +657,9 @@ function AddInstr() {
             const firstRaw = toIsoUtcRaw(first, hhmm);
             const lastRaw = toIsoUtcRaw(last, hhmm);
 
-            const dkey = `${dow}|${hhmm}|${firstRaw}`;
-            if (seen.has(dkey)) continue;
-            seen.add(dkey);
+            const key = `${dow}|${hhmm}|${firstRaw}|${lastRaw}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
 
             items.push({
                instructorId: Number(editingId),
@@ -662,61 +675,60 @@ function AddInstr() {
       return items;
    };
 
-   const handleSaveSchedule = async () => {
+   const handleSaveCreates = async () => {
       setSaving(true);
       setEditPills([]);
 
       try {
-         const blackoutItems = buildWeeklyBlackoutsItems();
-         const idsToDelete = Array.from(blkRemoveIds || []);
-
-         if (idsToDelete.length === 0 && blackoutItems.length === 0) {
-            setEditPills([
-               {
-                  id: Date.now(),
-                  text: "Nu ai selectat nimic de salvat.",
-                  type: "error",
-               },
-            ]);
+         if (!periodState.ok) {
+            pushEditPill(periodState.reason || "Alege perioada.");
             setSaving(false);
             return;
          }
 
-         // ștergeri (ignorăm 404)
-         if (idsToDelete.length > 0) {
-            await Promise.all(
-               idsToDelete.map((id) =>
-                  deleteInstructorBlackout(id).catch((e) => {
-                     const msg =
-                        e?.message ||
-                        e?.toString?.() ||
-                        JSON.stringify(e || {});
-                     if (/not\s*found/i.test(msg)) return null;
-                     throw e;
-                  })
-               )
+         const items = buildWeeklyCreateItems();
+         if (!items.length) {
+            pushEditPill("Nu ai selectat ore pentru creare.");
+            setSaving(false);
+            return;
+         }
+
+         // Best-effort: per item, ca să nu pice tot batch-ul la conflict
+         const results = await Promise.allSettled(
+            items.map((it) => addInstructorBlackouts([it]))
+         );
+
+         const rejected = results.filter((r) => r.status === "rejected");
+         if (rejected.length) {
+            const msgs = rejected.flatMap((r) => extractServerErrors(r.reason));
+            setEditPills(
+               (msgs.length
+                  ? msgs
+                  : ["Unele blocări nu au putut fi salvate."]
+               ).map((t) => ({
+                  id: Date.now() + Math.random(),
+                  text: t,
+                  type: "error",
+               }))
             );
          }
 
-         // serii noi
-         if (blackoutItems.length > 0) {
-            await addInstructorBlackouts(blackoutItems);
-         }
-
-         // refresh store + lista locală
          await dispatch(fetchInstructors());
+
+         // refresh listă (ca să le vezi în listă după)
          if (editingId) {
             const list = await getInstructorBlackouts(editingId);
             setBlkExisting(Array.isArray(list) ? list : []);
          }
 
-         // reset selecții
+         // RESET după salvare (cum ai cerut)
+         setPeriodStart("");
+         setPeriodEnd("");
          setWeeklySelection(initWeeklySelection());
-         setBlkRemoveIds(new Set());
       } catch (e) {
          const msgs = extractServerErrors(e);
          setEditPills(
-            (msgs.length ? msgs : ["Eroare la salvarea orarului."]).map(
+            (msgs.length ? msgs : ["Eroare la salvarea blocărilor."]).map(
                (t) => ({
                   id: Date.now() + Math.random(),
                   text: t,
@@ -724,13 +736,12 @@ function AddInstr() {
                })
             )
          );
+      } finally {
          setSaving(false);
-         return;
       }
-
-      setSaving(false);
    };
 
+   /* === DETAILS SAVE/DELETE === */
    const handleSaveDetails = async () => {
       setSaving(true);
       setEditPills([]);
@@ -811,21 +822,6 @@ function AddInstr() {
       setEditingUserId(null);
    };
 
-   const resetBlackoutsUI = () => {
-      setBlkExisting([]);
-      setBlkRemoveIds(new Set());
-      setWeeklySelection(initWeeklySelection());
-      setWeeklyDay(1);
-      setEditPills([]);
-      setShowBlackoutList(false);
-
-      const t = todayAt00();
-      const e = new Date(t);
-      e.setMonth(e.getMonth() + 1);
-      setPeriodStart(toDateInputValue(t));
-      setPeriodEnd(toDateInputValue(e));
-   };
-
    /* === UI === */
    return (
       <>
@@ -867,9 +863,6 @@ function AddInstr() {
                   <div className="instructors-popup__list-wrapper">
                      <ul className="instructors-popup__list-items">
                         {filteredInstructors.map((inst) => {
-                           const car = cars.find(
-                              (c) => String(c.instructorId) === String(inst.id)
-                           );
                            const email = mergedEmail(inst);
                            const isActiveItem = editingId === inst.id;
 
@@ -884,7 +877,7 @@ function AddInstr() {
                                     <>
                                        {editingMode === "details" && (
                                           <div className="instructors-popup__form">
-                                             {/* rând 1: Prenume + Nume */}
+                                             {/* rând 1 */}
                                              <div className="instructors-popup__form-row">
                                                 <input
                                                    type="text"
@@ -921,7 +914,7 @@ function AddInstr() {
                                                 />
                                              </div>
 
-                                             {/* rând 2: Telefon + Nr. mașină */}
+                                             {/* rând 2 */}
                                              <div className="instructors-popup__form-row">
                                                 <input
                                                    type="tel"
@@ -954,7 +947,7 @@ function AddInstr() {
                                                 />
                                              </div>
 
-                                             {/* rând 3: Email */}
+                                             {/* rând 3 */}
                                              <input
                                                 type="email"
                                                 className="instructors-popup__input"
@@ -969,7 +962,7 @@ function AddInstr() {
                                                 autoComplete="email"
                                              />
 
-                                             {/* rând 4: Sector + Cutie */}
+                                             {/* rând 4 */}
                                              <div className="instructors-popup__form-row">
                                                 <div
                                                    className={`instructors-popup__radio-wrapper grow ${
@@ -1126,7 +1119,7 @@ function AddInstr() {
                                                 onDismiss={popEditPill}
                                              />
 
-                                             {/* BAR SUS: descriere + buton listă blocări */}
+                                             {/* BAR SUS */}
                                              <div className="blackouts__modebar">
                                                 <span className="blackouts__modebar-text">
                                                    Blocare
@@ -1140,165 +1133,174 @@ function AddInstr() {
                                                          (v) => !v
                                                       )
                                                    }
+                                                   disabled={
+                                                      saving || blkLoading
+                                                   }
                                                 >
                                                    {showBlackoutList
-                                                      ? "Ascunde lista blocări"
+                                                      ? "Înapoi la creare"
                                                       : "Listă blocări"}
                                                 </button>
                                              </div>
 
-                                             {/* LISTĂ BLOCĂRI EXISTENTE */}
-                                             {showBlackoutList && (
-                                                <div className="blackouts__list">
-                                                   {blkLoading ? (
-                                                      <p>
-                                                         Se încarcă blocările...
-                                                      </p>
-                                                   ) : blkExisting.length ===
-                                                     0 ? (
-                                                      <p>
-                                                         Nu există blocări
-                                                         salvate pentru acest
-                                                         instructor.
-                                                      </p>
-                                                   ) : (
-                                                      <ul className="blackouts__list-items">
-                                                         {blkExisting.map(
-                                                            (b) => {
-                                                               const baseIso =
-                                                                  getBlackoutDT(
-                                                                     b
-                                                                  );
-                                                               const dow =
-                                                                  baseIso !=
-                                                                  null
-                                                                     ? dowFromIsoUTC(
-                                                                          baseIso
-                                                                       )
-                                                                     : null;
-                                                               const hhmm =
-                                                                  baseIso !=
-                                                                  null
-                                                                     ? hhmmFromIso(
-                                                                          baseIso
-                                                                       )
-                                                                     : null;
+                                             {/* ===== LISTĂ (doar ștergere) ===== */}
+                                             {showBlackoutList ? (
+                                                <>
+                                                   <div className="blackouts__list">
+                                                      {blkLoading ? (
+                                                         <p>
+                                                            Se încarcă
+                                                            blocările...
+                                                         </p>
+                                                      ) : blkExisting.length ===
+                                                        0 ? (
+                                                         <p>
+                                                            Nu există blocări
+                                                            salvate pentru acest
+                                                            instructor.
+                                                         </p>
+                                                      ) : (
+                                                         <ul className="blackouts__list-items">
+                                                            {blkExisting.map(
+                                                               (b) => {
+                                                                  const baseIso =
+                                                                     getBlackoutDT(
+                                                                        b
+                                                                     );
+                                                                  const dow =
+                                                                     baseIso
+                                                                        ? dowFromIsoUTC(
+                                                                             baseIso
+                                                                          )
+                                                                        : null;
+                                                                  const hhmm =
+                                                                     baseIso
+                                                                        ? hhmmFromIso(
+                                                                             baseIso
+                                                                          )
+                                                                        : null;
 
-                                                               const startLbl =
-                                                                  formatLocalDate(
-                                                                     b.startDateTime ||
-                                                                        b.dateTime
-                                                                  );
-                                                               const endLbl =
-                                                                  formatLocalDate(
-                                                                     b.endDateTime
-                                                                  );
+                                                                  const startLbl =
+                                                                     formatLocalDate(
+                                                                        b.startDateTime ||
+                                                                           b.dateTime
+                                                                     );
+                                                                  const endLbl =
+                                                                     formatLocalDate(
+                                                                        b.endDateTime
+                                                                     );
 
-                                                               const isWeekly =
-                                                                  String(
-                                                                     b?.type ||
-                                                                        ""
-                                                                  ).toUpperCase() ===
-                                                                     "REPEAT" &&
-                                                                  Number(
-                                                                     b.repeatEveryDays
-                                                                  ) === 7;
+                                                                  const isMarked =
+                                                                     blkRemoveIds.has(
+                                                                        b.id
+                                                                     );
 
-                                                               const isMarked =
-                                                                  blkRemoveIds.has(
-                                                                     b.id
-                                                                  );
-
-                                                               return (
-                                                                  <li
-                                                                     key={b.id}
-                                                                     className={
-                                                                        "blackouts__list-item" +
-                                                                        (isMarked
-                                                                           ? " blackouts__list-item--marked"
-                                                                           : "")
-                                                                     }
-                                                                  >
-                                                                     <div className="blackouts__list-topline">
-                                                                        <span className="blackouts__list-label">
-                                                                           {dow !=
-                                                                              null &&
-                                                                           hhmm
-                                                                              ? `${weekdayShortLabel(
-                                                                                   dow
-                                                                                )} · ${hhmm} · ${
-                                                                                   isWeekly
-                                                                                      ? "Săptămânal"
-                                                                                      : b.type
-                                                                                }`
-                                                                              : String(
-                                                                                   b.type ||
-                                                                                      ""
-                                                                                ).toUpperCase()}
-                                                                        </span>
-                                                                     </div>
-                                                                     <div className="blackouts__list-range">
-                                                                        <span>
-                                                                           {
-                                                                              startLbl
-                                                                           }
-                                                                        </span>
-                                                                        <span>
-                                                                           {" "}
-                                                                           →{" "}
-                                                                        </span>
-                                                                        <span>
-                                                                           {
-                                                                              endLbl
-                                                                           }
-                                                                        </span>
-                                                                     </div>
-                                                                     <button
-                                                                        type="button"
-                                                                        className="instructors-popup__form-button instructors-popup__form-button--delete blackouts__list-delete-btn"
-                                                                        onClick={() =>
-                                                                           setBlkRemoveIds(
-                                                                              (
-                                                                                 prev
-                                                                              ) => {
-                                                                                 const next =
-                                                                                    new Set(
-                                                                                       prev
-                                                                                    );
-                                                                                 if (
-                                                                                    next.has(
-                                                                                       b.id
-                                                                                    )
-                                                                                 )
-                                                                                    next.delete(
-                                                                                       b.id
-                                                                                    );
-                                                                                 else
-                                                                                    next.add(
-                                                                                       b.id
-                                                                                    );
-                                                                                 return next;
-                                                                              }
-                                                                           )
+                                                                  return (
+                                                                     <li
+                                                                        key={
+                                                                           b.id
+                                                                        }
+                                                                        className={
+                                                                           "blackouts__list-item" +
+                                                                           (isMarked
+                                                                              ? " blackouts__list-item--marked"
+                                                                              : "")
                                                                         }
                                                                      >
-                                                                        {isMarked
-                                                                           ? "Anulează"
-                                                                           : "Ștergere"}
-                                                                     </button>
-                                                                  </li>
-                                                               );
-                                                            }
-                                                         )}
-                                                      </ul>
-                                                   )}
-                                                </div>
-                                             )}
+                                                                        <div className="blackouts__list-topline">
+                                                                           <span className="blackouts__list-label">
+                                                                              {dow !=
+                                                                                 null &&
+                                                                              hhmm
+                                                                                 ? `${weekdayShortLabel(
+                                                                                      dow
+                                                                                   )} · ${hhmm} `
+                                                                                 : String(
+                                                                                      b.type ||
+                                                                                         ""
+                                                                                   ).toUpperCase()}
+                                                                           </span>
+                                                                        </div>
 
-                                             {/* INPUT-URI PERIOADĂ + TAB-URI + ORE – doar când lista NU e deschisă */}
-                                             {!showBlackoutList && (
+                                                                        <div className="blackouts__list-range">
+                                                                           <span>
+                                                                              {
+                                                                                 startLbl
+                                                                              }
+                                                                           </span>
+                                                                           <span>
+                                                                              {" "}
+                                                                              →{" "}
+                                                                           </span>
+                                                                           <span>
+                                                                              {
+                                                                                 endLbl
+                                                                              }
+                                                                           </span>
+                                                                        </div>
+
+                                                                        <button
+                                                                           type="button"
+                                                                           className="instructors-popup__form-button instructors-popup__form-button--delete blackouts__list-delete-btn"
+                                                                           onClick={() =>
+                                                                              toggleDeleteId(
+                                                                                 b.id
+                                                                              )
+                                                                           }
+                                                                           disabled={
+                                                                              saving ||
+                                                                              blkLoading
+                                                                           }
+                                                                        >
+                                                                           {isMarked
+                                                                              ? "Anulează"
+                                                                              : "Ștergere"}
+                                                                        </button>
+                                                                     </li>
+                                                                  );
+                                                               }
+                                                            )}
+                                                         </ul>
+                                                      )}
+                                                   </div>
+
+                                                   <div className="instructors-popup__btns">
+                                                      <button
+                                                         className="instructors-popup__form-button instructors-popup__form-button--save"
+                                                         onClick={
+                                                            handleApplyDeletes
+                                                         }
+                                                         disabled={
+                                                            saving ||
+                                                            blkLoading ||
+                                                            blkRemoveIds.size ===
+                                                               0
+                                                         }
+                                                      >
+                                                         {saving
+                                                            ? "Se aplică..."
+                                                            : "Aplică ștergerile"}
+                                                      </button>
+
+                                                      <button
+                                                         className="instructors-popup__form-button instructors-popup__form-button--cancel"
+                                                         onClick={() =>
+                                                            setShowBlackoutList(
+                                                               false
+                                                            )
+                                                         }
+                                                         disabled={
+                                                            saving || blkLoading
+                                                         }
+                                                      >
+                                                         Închide lista
+                                                      </button>
+                                                   </div>
+                                                </>
+                                             ) : (
+                                                /* ===== EDITOR (doar creare) ===== */
                                                 <>
-                                                   {/* PERIOADĂ (cu clase compatibile stilului vechi) */}
+                                                   {/* INTERVAL (obligatoriu) */}
                                                    <div className="instructors-popup__form-row blackouts__period-row">
                                                       <div className="blackouts__period-col">
                                                          <input
@@ -1309,6 +1311,10 @@ function AddInstr() {
                                                                setPeriodStart(
                                                                   e.target.value
                                                                )
+                                                            }
+                                                            disabled={
+                                                               saving ||
+                                                               blkLoading
                                                             }
                                                          />
                                                       </div>
@@ -1325,11 +1331,14 @@ function AddInstr() {
                                                                   e.target.value
                                                                )
                                                             }
+                                                            disabled={
+                                                               saving ||
+                                                               blkLoading
+                                                            }
                                                          />
                                                       </div>
                                                    </div>
 
-                                                   {/* TAB-URI ZILE SĂPTĂMÂNĂ */}
                                                    <div className="blackouts__weekday-tabs">
                                                       {[
                                                          {
@@ -1375,56 +1384,28 @@ function AddInstr() {
                                                                   d.key
                                                                )
                                                             }
-                                                            title={`Editează ${d.label.toLowerCase()}`}
+                                                            disabled={
+                                                               saving ||
+                                                               blkLoading
+                                                            }
                                                          >
                                                             {d.label}
                                                          </button>
                                                       ))}
                                                    </div>
 
-                                                   {/* GRILĂ ORE PENTRU ZIUA SELECTATĂ */}
+                                                   {/* GRILĂ ORE (doar creare; nu arătăm active) */}
                                                    {(() => {
                                                       const setForCreate =
                                                          weeklySelection.get(
                                                             weeklyDay
                                                          ) || new Set();
-                                                      const mapForDay =
-                                                         weeklyActiveMap.get(
-                                                            weeklyDay
-                                                         ) || new Map();
 
                                                       return (
                                                          <div className="blackouts__times repeat">
                                                             {oreDisponibile.map(
                                                                (ora) => {
-                                                                  const activeIds =
-                                                                     new Set(
-                                                                        mapForDay.get(
-                                                                           ora.oraStart
-                                                                        ) || []
-                                                                     );
-
-                                                                  const hasActive =
-                                                                     [
-                                                                        ...activeIds,
-                                                                     ].some(
-                                                                        (id) =>
-                                                                           !blkRemoveIds.has(
-                                                                              id
-                                                                           )
-                                                                     );
-                                                                  const allMarked =
-                                                                     activeIds.size >
-                                                                        0 &&
-                                                                     [
-                                                                        ...activeIds,
-                                                                     ].every(
-                                                                        (id) =>
-                                                                           blkRemoveIds.has(
-                                                                              id
-                                                                           )
-                                                                     );
-                                                                  const selectedForCreate =
+                                                                  const selected =
                                                                      setForCreate.has(
                                                                         ora.oraStart
                                                                      );
@@ -1432,16 +1413,7 @@ function AddInstr() {
                                                                   const className =
                                                                      [
                                                                         "saddprogramari__time-btn",
-                                                                        hasActive &&
-                                                                        !allMarked
-                                                                           ? "saddprogramari__time-btn--selected"
-                                                                           : "",
-                                                                        hasActive &&
-                                                                        allMarked
-                                                                           ? "saddprogramari__time-btn--to-delete"
-                                                                           : "",
-                                                                        !hasActive &&
-                                                                        selectedForCreate
+                                                                        selected
                                                                            ? "saddprogramari__time-btn--selected"
                                                                            : "",
                                                                      ]
@@ -1451,11 +1423,6 @@ function AddInstr() {
                                                                         .join(
                                                                            " "
                                                                         );
-
-                                                                  const title =
-                                                                     hasActive
-                                                                        ? "Marcază/demarchează seria săptămânală pentru ștergere"
-                                                                        : "Selectează pentru blocare repetitivă în perioada aleasă";
 
                                                                   return (
                                                                      <button
@@ -1467,17 +1434,20 @@ function AddInstr() {
                                                                            className
                                                                         }
                                                                         disabled={
+                                                                           saving ||
                                                                            blkLoading ||
-                                                                           saving
+                                                                           !periodState.ok
                                                                         }
                                                                         onClick={() =>
-                                                                           toggleWeeklySlot(
+                                                                           toggleWeeklySlotCreateOnly(
                                                                               weeklyDay,
                                                                               ora.oraStart
                                                                            )
                                                                         }
                                                                         title={
-                                                                           title
+                                                                           !periodState.ok
+                                                                              ? "Alege intervalul ca să poți selecta ore"
+                                                                              : ""
                                                                         }
                                                                      >
                                                                         {
@@ -1490,36 +1460,43 @@ function AddInstr() {
                                                          </div>
                                                       );
                                                    })()}
+
+                                                   <div className="instructors-popup__btns">
+                                                      <button
+                                                         className="instructors-popup__form-button instructors-popup__form-button--save"
+                                                         onClick={
+                                                            handleSaveCreates
+                                                         }
+                                                         disabled={
+                                                            saving ||
+                                                            blkLoading ||
+                                                            !periodState.ok ||
+                                                            !hasWeeklySelection
+                                                         }
+                                                      >
+                                                         {saving
+                                                            ? "Se salvează..."
+                                                            : "Salvează"}
+                                                      </button>
+
+                                                      <button
+                                                         className="instructors-popup__form-button instructors-popup__form-button--cancel"
+                                                         onClick={() => {
+                                                            setEditingId(null);
+                                                            setEditingMode(
+                                                               null
+                                                            );
+                                                            setEditingUserId(
+                                                               null
+                                                            );
+                                                         }}
+                                                         disabled={saving}
+                                                      >
+                                                         Închide
+                                                      </button>
+                                                   </div>
                                                 </>
                                              )}
-
-                                             <div className="instructors-popup__btns">
-                                                <button
-                                                   className="instructors-popup__form-button instructors-popup__form-button--save"
-                                                   onClick={handleSaveSchedule}
-                                                   disabled={
-                                                      saving || blkLoading
-                                                   }
-                                                >
-                                                   {saving
-                                                      ? "Se salvează..."
-                                                      : blkRemoveIds.size > 0 ||
-                                                        hasWeeklySelection
-                                                      ? "Aplică"
-                                                      : "Salvează"}
-                                                </button>
-                                                <button
-                                                   className="instructors-popup__form-button instructors-popup__form-button--cancel"
-                                                   onClick={() => {
-                                                      setEditingId(null);
-                                                      setEditingMode(null);
-                                                      setEditingUserId(null);
-                                                   }}
-                                                   disabled={saving}
-                                                >
-                                                   Închide
-                                                </button>
-                                             </div>
                                           </div>
                                        )}
                                     </>
@@ -1592,11 +1569,13 @@ function AddInstr() {
                                                 setEditingUserId(
                                                    inst.userId || null
                                                 );
+
                                                 const car = cars.find(
                                                    (c) =>
                                                       String(c.instructorId) ===
                                                       String(inst.id)
                                                 );
+
                                                 setEditInstr({
                                                    firstName:
                                                       inst.firstName || "",
@@ -1613,6 +1592,7 @@ function AddInstr() {
                                                       car?.gearbox || "manual"
                                                    ),
                                                 });
+
                                                 resetBlackoutsUI();
                                              }}
                                              src={editIcon}
@@ -1645,7 +1625,6 @@ function AddInstr() {
                   <div className="instructors-popup__add">
                      <AlertPills messages={pillMessages} onDismiss={popPill} />
 
-                     {/* rând 1: Prenume + Nume */}
                      <div className="instructors-popup__form-row">
                         <input
                            type="text"
@@ -1675,7 +1654,6 @@ function AddInstr() {
                         />
                      </div>
 
-                     {/* rând 2: Email + Telefon */}
                      <div className="instructors-popup__form-row">
                         <input
                            type="email"
@@ -1706,7 +1684,6 @@ function AddInstr() {
                         />
                      </div>
 
-                     {/* rând 3: Parolă + Nr. mașină */}
                      <div className="instructors-popup__form-row">
                         <input
                            type="password"
@@ -1735,7 +1712,6 @@ function AddInstr() {
                         />
                      </div>
 
-                     {/* rând 4: Sector + Cutie */}
                      <div className="instructors-popup__form-row">
                         <div
                            className={`instructors-popup__radio-wrapper grow ${

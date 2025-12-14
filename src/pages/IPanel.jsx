@@ -1,3 +1,4 @@
+// src/pages/IPanel.jsx
 import { useContext, useEffect, useMemo, useState } from "react";
 import { dateFnsLocalizer } from "react-big-calendar";
 import format from "date-fns/format";
@@ -28,6 +29,8 @@ import accIcon from "../assets/svg/acc.svg";
 import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
 import groupsIcon from "../assets/svg/material-symbols--group-outline.svg";
 import todayIcon from "../assets/svg/material-symbols--today-outline.svg";
+import homeIcon from "../assets/svg/material-symbols--home-outline.svg"; // 👈 nou
+
 import { openPopup } from "../components/Utils/popupStore";
 import InstrGroups from "../components/IPanel/InstrGroups";
 import TodayInfo from "../components/IPanel/TodayInfo";
@@ -99,6 +102,8 @@ const messagesRO = {
 
 function IPanel() {
    const links = [
+      // 👇 nou: link de Acasă pentru instructor, la fel ca la admin/manager
+      { link: "/instructor", text: "Acasă", icon: homeIcon },
       { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/instructor/today", text: "Azi", icon: todayIcon },
       { link: "/instructor/groups", text: "Grupe", icon: groupsIcon },
@@ -201,14 +206,14 @@ function IPanel() {
             // instructor (cum venea din API)
             instructor: item.instructor,
 
-            // ⚠️ prefer telefonul studentului; dacă nu există, las null (popup are fallback-urile lui)
+            // prefer telefonul studentului; dacă nu există, las null
             phone: studentPhone,
 
             isConfirmed: item.isConfirmed,
             gearbox: item.gearbox,
             sector: item.sector,
 
-            // 👇 date pentru popup (student)
+            // date pentru popup (student)
             student: studentObj || null,
             students: studentsArr,
             studentsCount:
@@ -272,15 +277,11 @@ function IPanel() {
 
    const handleEventClick = (event) => {
       openPopup("instrEventInfo", { event });
-      //console.log("CLICK PE EVENIMENT:", event);
    };
 
    const MIN_TIME = new Date(1970, 0, 1, 7, 0, 0);
    const MAX_TIME = new Date(1970, 0, 1, 21, 0, 0);
 
-   const userForHeader = user
-      ? { ...user, firstName: displayFirstName, lastName: displayLastName }
-      : user;
 
    return (
       <>
@@ -322,7 +323,6 @@ function IPanel() {
                />
             </section>
             <Footer />
-
          </main>
       </>
    );

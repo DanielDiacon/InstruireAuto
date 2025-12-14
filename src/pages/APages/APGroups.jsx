@@ -11,6 +11,7 @@ import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../../assets/svg/mdi--account-star-outline.svg";
+import categoriiIcon from "../../assets/svg/mdi--category-plus-outline.svg";
 import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
 
 import GroupManager from "../../components/APanel/GroupManager";
@@ -30,6 +31,7 @@ function APGroups() {
          icon: instrGroupsIcon,
       },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
+      { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];
    return (

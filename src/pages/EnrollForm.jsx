@@ -292,8 +292,9 @@ export default function EnrollForm() {
                   </M3Link>
                </div>
 
-               <DarkModeToggle />
-
+              <ul className="header__settings settings ">
+                  <DarkModeToggle />
+               </ul>
                {/* dreapta */}
                <div className="sign__right">
                   <h1 className="sign__title">Înscriere la curs</h1>

@@ -1059,3 +1059,129 @@ export async function downloadExamPdf(examId, filename) {
 
    return true;
 }
+
+// POST /api/exams/practice/by-category?lang=ro|ru
+// body: { categoryId, questionCount }
+// POST /exams/practice/by-category?lang=ro|ru
+// body: { categoryId, questionCount }
+export async function startPracticeSessionByCategory({
+   categoryId,
+   questionCount = 20,
+   lang,
+} = {}) {
+   const cid = Number(categoryId);
+   if (!Number.isInteger(cid) || cid <= 0) {
+      throw new Error(
+         "startPracticeSessionByCategory: categoryId invalid (INT > 0)."
+      );
+   }
+
+   let qc = Number(questionCount);
+   if (!Number.isInteger(qc) || qc <= 0) qc = 20;
+
+   const qs = new URLSearchParams();
+   qs.set("lang", safeLang(lang)); // safeLang îl ai deja în fișier
+
+   // ✅ NU pune /api aici (apiClientService îl pune deja)
+   const url = `/exams/practice/by-category${
+      qs.toString() ? `?${qs.toString()}` : ""
+   }`;
+
+   const body = JSON.stringify({ categoryId: cid, questionCount: qc });
+
+   const res = await apiClientService.post(
+      url,
+      body,
+      "application/json; charset=UTF-8"
+   );
+
+   const text = await res.text().catch(() => "");
+   let data;
+   try {
+      data = text ? JSON.parse(text) : undefined;
+   } catch {
+      data = text;
+   }
+
+   if (!res.ok && res.status !== 201) {
+      if (res.status === 401) throw new Error("AUTH_401");
+      if (res.status === 403) throw new Error("AUTH_403");
+      throw new Error(`startPracticeSessionByCategory ${res.status}: ${text}`);
+   }
+
+   return data;
+}
+
+// GET /exams/practice/category/{categoryId}/history?page&limit&lang
+export async function getPracticeCategoryHistory(
+   categoryId,
+   { page = 1, limit = 20, lang } = {}
+) {
+   const cid = Number(categoryId);
+   if (!Number.isInteger(cid) || cid <= 0) {
+      throw new Error(
+         "getPracticeCategoryHistory: categoryId invalid (INT > 0)."
+      );
+   }
+
+   const p = Number(page);
+   const l = Number(limit);
+
+   const qs = new URLSearchParams();
+   qs.set("page", String(Number.isInteger(p) && p > 0 ? p : 1));
+   qs.set("limit", String(Number.isInteger(l) && l > 0 ? l : 20));
+   if (lang) qs.set("lang", String(lang));
+
+   // apiClientService are deja base /api => aici NU punem /api
+   const url = `/exams/practice/category/${cid}/history?${qs.toString()}`;
+
+   // IMPORTANT: în proiectul tău examService pare să întoarcă JSON direct.
+   // Dacă apiClientService.get întoarce Response, adaptează ca în questionCategoriesService.
+   return await apiClientService.get(url);
+}
+// GET /exams/practice/student/:studentId/detailed?practiceId=&lang=
+// (professor only) – detalii practice pentru student + răspunsuri
+export async function getPracticeDetailedForStudent(
+   studentId,
+   { practiceId, lang } = {}
+) {
+   const sid = Number(studentId);
+   if (!Number.isInteger(sid) || sid <= 0) {
+      throw new Error(
+         "getPracticeDetailedForStudent: studentId invalid (INT > 0)."
+      );
+   }
+
+   const pid = Number(practiceId);
+   if (!Number.isInteger(pid) || pid <= 0) {
+      throw new Error(
+         "getPracticeDetailedForStudent: practiceId invalid (INT > 0)."
+      );
+   }
+
+   const params = new URLSearchParams();
+   params.set("practiceId", String(pid));
+   if (lang) params.set("lang", safeLang(lang));
+
+   const res = await apiClientService.get(
+      `/exams/practice/student/${encodeURIComponent(
+         String(sid)
+      )}/detailed?${params.toString()}`
+   );
+
+   const text = await res.text().catch(() => "");
+   let data;
+   try {
+      data = text ? JSON.parse(text) : undefined;
+   } catch {
+      data = text;
+   }
+
+   if (!res.ok) {
+      if (res.status === 401) throw new Error("AUTH_401");
+      if (res.status === 403) throw new Error("AUTH_403");
+      throw new Error(`getPracticeDetailedForStudent ${res.status}: ${text}`);
+   }
+
+   return data;
+} // GET lista categorii practice (încearcă mai multe rute - ajustează dacă backend-ul tău are alta)

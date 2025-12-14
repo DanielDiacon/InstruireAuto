@@ -26,7 +26,7 @@ $fontSize: 14;
    --white-s: #dfdfdf;
    --white-t: #8a8a8a;
    --bd: #6b6b6b5c;
-   //--calendar: #d5d1613a;
+   --transparent: #30303051;
 
    // other colors pallet
    --green-l: #9cf680;
@@ -64,11 +64,12 @@ $fontSize: 14;
 
    --black-p: #f2f4ef;
    --black-s: #e6e9e3;
-   --black-t: #f0f1ec;
+   --black-t: #eaebe6;
    --white-p: hsl(0, 0%, 10%);
    --white-s: hsl(0, 0%, 8%);
    --white-t: hsl(0, 0%, 42%);
    --bd: rgba(125, 125, 125, 0.178) !important;
+   --transparent: #e0e0e086;
 
    // other colors pallet
    --green-l: #0d3700;
@@ -266,9 +267,9 @@ body {
 
 // footer
 .footer {
-   padding: 0 24px 24px 24px;
+   padding: 12px 24px 24px 24px;
    @media only screen and (max-width: $mobile) {
-      padding: 0 6px 6px 6px;
+      padding: 6px;
    }
    &__body {
       padding: 20px;
@@ -292,10 +293,20 @@ body {
       }
    }
 }
+/* ✅ Ascunde headerul aplicației în exam mode */
+body.is-exam-mode header {
+   display: none !important;
+}
+
+/* (opțional) dacă layout-ul lasă spațiu sus pentru header */
+body.is-exam-mode main {
+   padding: 0 !important;
+}
 
 // imports
 @import "./scss/_utils";
 @import "./scss/_popup";
+@import "./scss/_popupUI";
 @import "./scss/_sign";
 @import "./scss/_header";
 

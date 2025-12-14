@@ -17,13 +17,13 @@ import GroupManager from "../../components/APanel/GroupManager";
 import SubPopup from "../../components/Utils/SubPopup";
 
 function MPGroups() {
-   const links = [
+  const links = [
       { link: "/manager", text: "Acasă", icon: homeIcon },
       { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
+      { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
       { popup: "startExam", text: "Examen", icon: examIcon },
-      { popup: "addProg", text: "Programare", icon: addIcon },
-
+      { link: "/manager/groups", text: "Grupe", icon: groupsIcon },
       {
          link: "/manager/instr-groups",
          text: "Ins. Grupe",

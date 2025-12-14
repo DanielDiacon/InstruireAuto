@@ -6,6 +6,7 @@ import SubPopup from "../../components/Utils/SubPopup";
 import addIcon from "../../assets/svg/mdi--calendar-plus-outline.svg";
 import accIcon from "../../assets/svg/acc.svg";
 import clockIcon from "../../assets/svg/clock.svg";
+import categoriiIcon from "../../assets/svg/mdi--category-plus-outline.svg";
 import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
@@ -35,6 +36,7 @@ function APHistory() {
          icon: instrGroupsIcon,
       },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
+      { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];
    const dispatch = useDispatch();

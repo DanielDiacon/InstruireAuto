@@ -1,3 +1,4 @@
+// src/components/Utils/Popup.jsx
 import React, { useEffect, useState, useRef } from "react";
 import {
    subscribePopup,
@@ -19,6 +20,12 @@ import EventInfoPopup from "../Popups/EventInfo";
 import InstrEventInfoPopup from "../Popups/InstrEventInfo";
 import AddManager from "../Popups/AddManager";
 import StudentsMultiSelectPopup from "../Popups/StudentsMultiSelectPopup";
+
+// 🔹 noul popup pentru creare rezervare în pas unic
+import CreateRezervation from "../Popups/CreateRezervation";
+
+// ✅ NOU: popup pentru categorii întrebări
+import QuestionCategoriesPopup from "../Popups/QuestionCategories";
 
 export default function Popup() {
    const [popupState, setPopupState] = useState({
@@ -60,15 +67,12 @@ export default function Popup() {
 
    useEffect(() => {
       const onPopState = () => {
-         // dacă există un SubPopup deschis, îl lăsăm pe el să gestioneze back-ul
          if (getCurrentSubPopup()) return;
-         // dacă back-ul este pentru SubPopup, îl lăsăm pe SubPopup să-l gestioneze
          const st = typeof window !== "undefined" ? window.history.state : null;
          if (st && st.__subpopup_dummy) return;
          if (!isMobile()) return;
          if (!hasHistoryEntryRef.current) return;
 
-         // dacă popstate vine de la o sesiune veche, ignorăm (anti-race)
          if (historySessionRef.current !== sessionIdRef.current) {
             try {
                if (typeof window !== "undefined") window.history.forward();
@@ -76,7 +80,6 @@ export default function Popup() {
             return;
          }
 
-         // ok, aparține sesiunii active → închidem
          hasHistoryEntryRef.current = 0;
          closingByPopstateRef.current = true;
          closePopupStore();
@@ -94,18 +97,15 @@ export default function Popup() {
             sessionIdRef.current += 1;
             const sid = sessionIdRef.current;
 
-            // 🔄 forțează remount la fiecare deschidere
             setOpenKey(sid);
 
             setExiting(false);
             document.body.classList.add("popup-open");
-            // copiem props ca obiect nou
             setPopupState({
                type: detail.type,
                props: { ...(detail.props || {}) },
             });
 
-            // pune intrare în istorie DOAR pe mobil
             if (isMobile()) {
                window.history.pushState(
                   { __popup_dummy: true, sid },
@@ -117,14 +117,13 @@ export default function Popup() {
             }
          } else if (panelRef.current) {
             // ===== CLOSE =====
-            // dacă avem intrare pentru sesiunea activă și NU venim din popstate, consumă Back (mobil)
             if (
                isMobile() &&
                hasHistoryEntryRef.current === sessionIdRef.current &&
                !closingByPopstateRef.current
             ) {
                if (typeof window !== "undefined") window.history.back();
-               return; // popstate va continua închiderea
+               return;
             }
 
             setExiting(true);
@@ -132,7 +131,6 @@ export default function Popup() {
 
             const handleTransitionEnd = (e) => {
                if (e.target === panelRef.current && exiting) {
-                  // șterge complet conținutul ca să nu rămână state vechi
                   setPopupState({ type: null, props: {} });
                   panelRef.current.removeEventListener(
                      "transitionend",
@@ -195,6 +193,26 @@ export default function Popup() {
             return (
                <StudentsMultiSelectPopup key={openKey} {...popupState.props} />
             );
+
+         case "createRezervation":
+            return (
+               <CreateRezervation
+                  key={openKey}
+                  {...popupState.props}
+                  onClose={handleCloseClick}
+               />
+            );
+
+         // ✅ NOU: Question Categories
+         case "questionCategories":
+            return (
+               <QuestionCategoriesPopup
+                  key={openKey}
+                  {...popupState.props}
+                  onClose={handleCloseClick}
+               />
+            );
+
          default:
             return null;
       }

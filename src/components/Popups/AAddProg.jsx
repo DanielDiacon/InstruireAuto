@@ -1,5 +1,11 @@
 // src/components/Popups/AAddProg.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+   useEffect,
+   useMemo,
+   useRef,
+   useState,
+   useCallback,
+} from "react";
 import { useDispatch, useSelector } from "react-redux";
 import DatePicker, { registerLocale } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -13,13 +19,13 @@ import { createReservationsForUser } from "../../api/reservationsService";
 
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
-import { fetchReservationsDelta } from "../../store/reservationsSlice"; // ✅
+import { fetchReservationsDelta } from "../../store/reservationsSlice";
 import { triggerCalendarRefresh } from "../Utils/calendarBus";
+import { fetchCars } from "../../store/carsSlice";
 
 import apiClientService from "../../api/ApiClientService";
 import { getInstructorBlackouts } from "../../api/instructorsService";
 
-// Ajustează dacă la tine calea e alta
 registerLocale("ro", ro);
 
 /* ===== Constante / Config ===== */
@@ -27,6 +33,8 @@ const GROUP_TOKEN_FIXED = "ABCD1234";
 const EMAIL_DOMAIN = "instrauto.com";
 const SLOT_MINUTES = 90;
 const MOLDOVA_TZ = "Europe/Chisinau";
+
+const SECTOR_ORDER = ["Botanica", "Ciocana", "Buiucani"];
 
 /* ===== Helpers ===== */
 const slugify = (s) =>
@@ -55,6 +63,7 @@ const oreDisponibile = [
    { eticheta: "15:00", oraStart: "15:00" },
    { eticheta: "16:30", oraStart: "16:30" },
    { eticheta: "18:00", oraStart: "18:00" },
+   { eticheta: "19:30", oraStart: "19:30" },
 ];
 
 /* ========= TZ-safe utils ========= */
@@ -166,44 +175,7 @@ function getStartFromReservation(r) {
       null
    );
 }
-const formatDateRO = (iso) => {
-   const d = new Date(iso);
-   const fmt = new Intl.DateTimeFormat("ro-RO", {
-      timeZone: MOLDOVA_TZ,
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-   }).format(d);
-   return fmt.replace(/\b([a-zăîâșț])/u, (m) => m.toUpperCase());
-};
-function localDateStr(d) {
-   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
-      2,
-      "0"
-   )}-${String(d.getDate()).padStart(2, "0")}`;
-}
-function todayAt00() {
-   const t = new Date();
-   t.setHours(0, 0, 0, 0);
-   return t;
-}
-function localDateObjFromStr(s) {
-   const [y, m, d] = s.split("-").map(Number);
-   return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-}
-function nextNDays(n, fromDate = new Date()) {
-   const out = [];
-   const base = new Date(fromDate);
-   base.setHours(0, 0, 0, 0);
-   for (let i = 0; i < n; i++) {
-      const d = new Date(base);
-      d.setDate(base.getDate() + i);
-      out.push(localDateStr(d));
-   }
-   return out;
-}
 
-/* ===== Grilă simetrică: trecut + viitor (pentru afișare & disponibilități) ===== */
 function buildGridISOAround(
    anchorDate = new Date(),
    daysBack = 60,
@@ -250,115 +222,21 @@ function splitFullName(full = "") {
    if (parts.length === 1) return { firstName: parts[0], lastName: "" };
    return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
 }
-function isValidPhone373(value) {
-   const d = onlyDigits(value);
-   return d.startsWith("373") && d.length === 11;
-}
-
-/* ===== Telefon cu prefix fix +373 ===== */
-const PREFIX = "+373";
-const PREFIX_LEN = PREFIX.length;
-
-function PhoneInput373({ value, onChange, ...props }) {
-   const inputRef = useRef(null);
-   const normalize = (v) => {
-      const digits = onlyDigits(v);
-      const rest = digits.startsWith("373") ? digits.slice(3) : digits;
-      return PREFIX + rest.slice(0, 8);
-   };
-   const handleChange = (e) => {
-      const next = normalize(e.target.value);
-      onChange(next);
-      requestAnimationFrame(() => {
-         const el = inputRef.current;
-         if (!el) return;
-         if (el.selectionStart < PREFIX_LEN)
-            el.setSelectionRange(PREFIX_LEN, PREFIX_LEN);
-      });
-   };
-   const guardCaret = (e) => {
-      const el = e.target;
-      const start = el.selectionStart ?? 0;
-      if (
-         (e.key === "Backspace" && start <= PREFIX_LEN) ||
-         (e.key === "Delete" && start < PREFIX_LEN)
-      ) {
-         e.preventDefault();
-         el.setSelectionRange(PREFIX_LEN, PREFIX_LEN);
-         return;
-      }
-      if (start < PREFIX_LEN) {
-         e.preventDefault();
-         el.setSelectionRange(PREFIX_LEN, PREFIX_LEN);
-      }
-   };
-   const keepCaretAfterPrefix = (e) => {
-      const el = e.target;
-      const pos = el.selectionStart ?? 0;
-      if (pos < PREFIX_LEN) el.setSelectionRange(PREFIX_LEN, PREFIX_LEN);
-   };
-   const handlePaste = (e) => {
-      e.preventDefault();
-      const text = (e.clipboardData.getData("text") || "").toString();
-      const next = normalize(text);
-      onChange(next);
-      requestAnimationFrame(() => {
-         const el = inputRef.current;
-         if (!el) return;
-         el.setSelectionRange(el.value.length, el.value.length);
-      });
-   };
-
-   return (
-      <input
-         ref={inputRef}
-         className="instructors-popup__input"
-         inputMode="tel"
-         placeholder="+373XXXXXXXX"
-         value={value}
-         onChange={handleChange}
-         onKeyDown={guardCaret}
-         onClick={keepCaretAfterPrefix}
-         onFocus={keepCaretAfterPrefix}
-         onPaste={handlePaste}
-         {...props}
-      />
-   );
-}
 
 /* ===== Component ===== */
-export default function AAddProg({
-   initialStartTime,
-   initialDate,
-   initialTime,
-   initialStudentId,
-   initialInstructorId,
-   initialSector = "Botanica",
-   initialGearbox = "Manual",
-
-   // fallback vechi
-   start,
-   end,
-   instructorId: instructorIdFromPayload,
-   sector: sectorFromPayload,
-   gearbox: gearboxFromPayload,
-
-   onClose,
-}) {
+export default function AAddProg({ onClose }) {
    const dispatch = useDispatch();
 
-   // store
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
    const allReservations = useSelector((s) => s.reservations?.list || []);
+   const cars = useSelector((s) => s.cars?.list || []);
 
-   // 🔁 ref mereu la zi pentru studentsAll (folosit în polling)
    const studentsAllRef = useRef(studentsAll);
    useEffect(() => {
       studentsAllRef.current = studentsAll;
    }, [studentsAll]);
 
-   // doar elevi cu rol USER
    const students = useMemo(() => {
       const hasUserRole = (u) => {
          const role = String(
@@ -385,61 +263,29 @@ export default function AAddProg({
    // Stages
    const [stage, setStage] = useState("select"); // select | pick
 
-   // derive inițiale
-   const effectiveStartISO =
-      (initialStartTime ?? (start ? new Date(start).toISOString() : null)) ||
-      null;
-   const effectiveInstructorId = String(
-      initialInstructorId ?? instructorIdFromPayload ?? ""
-   );
-   const effectiveSector = sectorFromPayload ?? initialSector ?? "Botanica";
-   const effectiveGearbox =
-      (gearboxFromPayload ?? initialGearbox ?? "Manual").toLowerCase() ===
-      "automat"
-         ? "Automat"
-         : "Manual";
+   // Stare simplă – fără props inițiale
+   const [sector, setSector] = useState("Botanica");
+   const [gearbox, setGearbox] = useState(""); // vine din mașină
+   const [studentId, setStudentId] = useState("");
+   const [instructorId, setInstructorId] = useState("");
 
-   // Select state
-   const [sector, setSector] = useState(effectiveSector);
-   const [gearbox, setGearbox] = useState(effectiveGearbox);
-   const [studentId, setStudentId] = useState(
-      initialStudentId != null ? String(initialStudentId) : ""
-   );
-   const [instructorId, setInstructorId] = useState(effectiveInstructorId);
+   const [privateMessage, setPrivateMessage] = useState("");
 
-   // existent / nou
-   const [mode, setMode] = useState("existing"); // existing | new
+   // Formular elev nou
    const [newFullName, setNewFullName] = useState("");
-   const [phoneFull, setPhoneFull] = useState(PREFIX);
+   const [phoneFull, setPhoneFull] = useState("");
+   const [highlightedStudentId, setHighlightedStudentId] = useState(null);
 
-   // anti dublu-click
    const [continuing, setContinuing] = useState(false);
 
    // Pick state
    const [selectedDate, setSelectedDate] = useState(() => {
-      if (effectiveStartISO) return new Date(effectiveStartISO);
-      if (initialDate) return new Date(initialDate);
       const t = new Date();
       t.setHours(0, 0, 0, 0);
       return t;
    });
 
-   const [selectedTime, setSelectedTime] = useState(() => {
-      const hhmm = effectiveStartISO
-         ? hhmmInTZ(new Date(effectiveStartISO), MOLDOVA_TZ)
-         : initialTime || "";
-      const match = oreDisponibile.find((o) => o.oraStart === hhmm);
-      return match || null;
-   });
-
-   const preferredIso = useMemo(() => {
-      if (!effectiveStartISO) return null;
-      const s = new Date(effectiveStartISO);
-      const localMidnight = new Date(s);
-      localMidnight.setHours(0, 0, 0, 0);
-      const hhmm = hhmmInTZ(s, MOLDOVA_TZ);
-      return toUtcIsoFromLocal(localMidnight, hhmm);
-   }, [effectiveStartISO]);
+   const [selectedTime, setSelectedTime] = useState(null);
 
    // ecrane search
    const [view, setView] = useState("formSelect"); // formSelect | searchStudent | searchInstructor | formPick
@@ -454,7 +300,8 @@ export default function AAddProg({
    useEffect(() => {
       if (!studentsAll?.length) dispatch(fetchStudents());
       if (!instructors?.length) dispatch(fetchInstructors());
-      dispatch(fetchReservationsDelta()); // ✅
+      if (!cars?.length) dispatch(fetchCars());
+      dispatch(fetchReservationsDelta());
    }, [dispatch]); // eslint-disable-line
 
    const selectedStudent = useMemo(
@@ -472,16 +319,78 @@ export default function AAddProg({
       [instructors, instructorId]
    );
 
+   /* 🔹 Când se schimbă instructorul, preluăm sector + cutie DIN MAȘINI */
+   useEffect(() => {
+      if (!selectedInstructor) {
+         setSector(SECTOR_ORDER[0]);
+         setGearbox("");
+         return;
+      }
+
+      // găsim mașina pentru acest instructor (prin instructorId)
+      const carForInstructor = (cars || []).find(
+         (c) =>
+            String(c.instructorId) === String(selectedInstructor.id) ||
+            String(c.instructor?.id) === String(selectedInstructor.id)
+      );
+
+      // Sector: prioritar din instructor (sau din instructorul din car)
+      const rawSector =
+         carForInstructor?.instructor?.sector ??
+         selectedInstructor.defaultSector ??
+         selectedInstructor.sector ??
+         selectedInstructor.sectorName ??
+         selectedInstructor.sector_name ??
+         "";
+
+      if (rawSector) {
+         const raw = String(rawSector).trim();
+         const normalized =
+            SECTOR_ORDER.find((s) => s.toLowerCase() === raw.toLowerCase()) ||
+            raw;
+
+         setSector(normalized);
+      } else {
+         setSector(SECTOR_ORDER[0]);
+      }
+
+      // Gearbox – EXCLUSIV din car.gearbox, dacă există
+      const rawGearbox = carForInstructor?.gearbox || "";
+
+      if (rawGearbox) {
+         const g = String(rawGearbox).toLowerCase();
+         if (g.includes("automat") || g.includes("automatic") || g === "auto") {
+            setGearbox("Automat");
+         } else {
+            setGearbox("Manual");
+         }
+      } else {
+         // dacă nu avem mașină, lăsăm gol sau fallback Manual
+         setGearbox("");
+      }
+   }, [selectedInstructor, cars]);
+
+   // FILTRARE STUDENȚI
    const filteredStudents = useMemo(() => {
-      const q = (qStudent || "").trim().toLowerCase();
       const base = students;
-      if (!q) return base;
+      const q = (qStudent || "").trim().toLowerCase();
+      const typedDigits = onlyDigits(phoneFull);
+
+      if (!q && !typedDigits) return base;
+
       return (base || []).filter((s) => {
          const full = `${s.firstName || ""} ${s.lastName || ""}`.toLowerCase();
          const phone = (s.phone || "").toLowerCase();
-         return full.includes(q) || phone.includes(q);
+         const phoneDigits = onlyDigits(s.phone || "");
+
+         const matchName = q && full.includes(q);
+         const matchPhoneText = q && phone.includes(q);
+         const matchPhoneDigits =
+            typedDigits && phoneDigits.includes(typedDigits);
+
+         return matchName || matchPhoneText || matchPhoneDigits;
       });
-   }, [students, qStudent]);
+   }, [students, qStudent, phoneFull]);
 
    const filteredInstructors = useMemo(() => {
       const q = (qInstructor || "").trim().toLowerCase();
@@ -493,27 +402,60 @@ export default function AAddProg({
       });
    }, [instructors, qInstructor]);
 
+   const studentsForSearchList = useMemo(() => {
+      if (!highlightedStudentId) return filteredStudents;
+      const idStr = String(highlightedStudentId);
+      const idx = filteredStudents.findIndex((s) => String(s.id) === idStr);
+      if (idx === -1) return filteredStudents;
+      const arr = [...filteredStudents];
+      const [match] = arr.splice(idx, 1);
+      return [match, ...arr];
+   }, [filteredStudents, highlightedStudentId]);
+
    const studentDisplay = selectedStudent
       ? `${selectedStudent.firstName || ""} ${
            selectedStudent.lastName || ""
         }`.trim()
       : "ne ales";
+
    const instructorDisplay = selectedInstructor
       ? `${selectedInstructor.firstName || ""} ${
            selectedInstructor.lastName || ""
         }`.trim()
       : "ne ales";
 
-   const phoneMatches = useMemo(() => {
-      if (mode !== "new") return [];
-      const typedDigits = onlyDigits(phoneFull);
-      if (typedDigits.length <= 4) return [];
-      return (students || [])
-         .filter((s) => onlyDigits(s.phone || "").includes(typedDigits))
-         .slice(0, 8);
-   }, [mode, phoneFull, students]);
+   const studentPhone =
+      selectedStudent?.phone ||
+      selectedStudent?.phoneNumber ||
+      selectedStudent?.mobile ||
+      selectedStudent?.telefon ||
+      "";
+   const instructorPhone = selectedInstructor?.phone || "";
 
-   /* === așteaptă apariția elevului în listă, apoi auto-selectează === */
+   /** helper: dacă lista are UN elev → auto select */
+   const autoSelectSingleStudent = (
+      list,
+      msg = "Elev selectat după căutare."
+   ) => {
+      if (!list || list.length !== 1) return false;
+      const s = list[0];
+      if (!s?.id) return false;
+
+      const idStr = String(s.id);
+      setStudentId(idStr);
+      setNewFullName("");
+      setPhoneFull("");
+      setQStudent("");
+      setHighlightedStudentId(null);
+      setView("formSelect");
+
+      if (msg) {
+         pushPill(msg, "info");
+      }
+
+      return true;
+   };
+
    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    async function waitUntilStudentInListByPhone(
       phoneDigits,
@@ -534,19 +476,40 @@ export default function AAddProg({
       return "";
    }
 
-   /* ====== Creare elev (pas separat) ====== */
+   /* ====== Creare elev ====== */
    const ensureStudentCreated = async () => {
       const { firstName, lastName } = splitFullName(newFullName);
       if (!firstName || !lastName) {
          pushPill("Scrie numele complet (ex.: Ion Popescu).");
          return false;
       }
-      if (!isValidPhone373(phoneFull)) {
-         pushPill("Telefon invalid. Format: +373 urmat de 8 cifre.");
+
+      const digits = onlyDigits(phoneFull);
+      if (!digits) {
+         pushPill("Introdu un număr de telefon (doar cifre).");
          return false;
       }
 
-      const digits = onlyDigits(phoneFull);
+      setHighlightedStudentId(null);
+
+      const existingSamePhone = (studentsAllRef.current || []).find(
+         (s) => onlyDigits(s.phone || "") === digits
+      );
+      if (existingSamePhone) {
+         const idStr = String(existingSamePhone.id);
+         setStudentId(idStr);
+         setNewFullName("");
+         setPhoneFull("");
+         setQStudent("");
+         setHighlightedStudentId(idStr);
+         setView("formSelect");
+         pushPill(
+            "Există deja un elev cu acest număr. A fost selectat automat.",
+            "info"
+         );
+         return true;
+      }
+
       const password = randId(16);
 
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -562,7 +525,7 @@ export default function AAddProg({
                JSON.stringify({
                   firstName,
                   lastName,
-                  phone: phoneFull,
+                  phone: digits,
                   email,
                   password,
                   role: "USER",
@@ -596,8 +559,16 @@ export default function AAddProg({
                   return false;
                }
 
+               try {
+                  await dispatch(fetchStudents());
+               } catch {}
+
                setStudentId(newId);
-               setMode("existing");
+               setNewFullName("");
+               setPhoneFull("");
+               setQStudent("");
+               setHighlightedStudentId(newId);
+               setView("formSelect");
                pushPill("Elev nou adăugat.", "success");
                return true;
             } else {
@@ -619,7 +590,6 @@ export default function AAddProg({
                   );
                   break;
                }
-               // reîncearcă cu alt sufix de email
             }
          } catch (e) {
             pushPill(
@@ -630,11 +600,18 @@ export default function AAddProg({
          }
       }
 
-      // fallback: ultim polling
       const fallbackId = await waitUntilStudentInListByPhone(digits);
       if (fallbackId) {
+         try {
+            await dispatch(fetchStudents());
+         } catch {}
+
          setStudentId(fallbackId);
-         setMode("existing");
+         setNewFullName("");
+         setPhoneFull("");
+         setQStudent("");
+         setHighlightedStudentId(fallbackId);
+         setView("formSelect");
          pushPill("Elev existent selectat automat după telefon.", "success");
          return true;
       }
@@ -682,25 +659,23 @@ export default function AAddProg({
       return out;
    }
 
-   /* ====== Fereastră trecut + viitor pentru căutarea sloturilor ====== */
    const WINDOW_BACK_DAYS = 120;
    const WINDOW_FWD_DAYS = 120;
 
    /* ====== Disponibilitate ====== */
    const computeAvailability = async () => {
-      if (!instructorId) return pushPill("Selectează instructorul.", "error");
-      if (mode === "new" && !studentId) {
-         return pushPill(
-            "Creează elevul și așteaptă să fie selectat automat, apoi continuă.",
-            "error"
-         );
-      }
-      if (!studentId) return pushPill("Selectează elevul.", "error");
       if (continuing) return;
+      if (!instructorId) {
+         pushPill("Selectează instructorul.", "error");
+         return;
+      }
+      if (!studentId) {
+         pushPill("Selectează elevul.", "error");
+         return;
+      }
 
       setContinuing(true);
       try {
-         // 🔄 Construim grilă în jurul zilei selectate (sau azi dacă nu e)
          const fullGrid = buildGridISOAround(
             selectedDate || new Date(),
             WINDOW_BACK_DAYS,
@@ -744,7 +719,6 @@ export default function AAddProg({
             );
          }
 
-         // ❗ NU mai excludem orele din trecut → putem crea back-fill
          const free = fullGrid.filter((iso) => {
             const key = localKeyForIso(iso);
             return !busyStudent.has(key) && !busyInstructor.has(key);
@@ -759,23 +733,12 @@ export default function AAddProg({
          setFreeSlots(free);
          setStage("pick");
          setView("formPick");
-
-         // ❌ nu mai reseta la azi dacă e în trecut
-         if (preferredIso && free.includes(preferredIso)) {
-            const d = new Date(preferredIso);
-            setSelectedDate(localDateObjFromStr(ymdStrInTZ(d, MOLDOVA_TZ)));
-            const hh = hhmmInTZ(d, MOLDOVA_TZ);
-            const m = oreDisponibile.find((o) => o.oraStart === hh);
-            setSelectedTime(m || null);
-         } else {
-            setSelectedTime(null);
-         }
+         setSelectedTime(null);
       } finally {
          setContinuing(false);
       }
    };
 
-   // grupare sloturi libere pe zile
    const freeByDay = useMemo(() => {
       const map = new Map();
       for (const iso of freeSlots) {
@@ -796,7 +759,6 @@ export default function AAddProg({
 
       const iso = toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
 
-      // verificăm doar combo elev + instructor pe slotul respectiv
       if (!freeSet.has(iso)) {
          return pushPill(
             "Slot indisponibil pentru elevul și instructorul selectați."
@@ -821,21 +783,19 @@ export default function AAddProg({
       setSaving(true);
       try {
          const payload = {
-            // 👇 aici e mapping-ul corect
             userId: studentIdNum,
             instructorId: instructorIdNum,
-
             reservations: [
                {
                   startTime: startTimeToSend,
                   sector: sector || "Botanica",
+                  // cutia vine din mașină → doar normalizăm la Automat/Manual
                   gearbox:
                      (gearbox || "Manual").toLowerCase() === "automat"
                         ? "Automat"
                         : "Manual",
-                  privateMessage: "",
+                  privateMessage: privateMessage || "",
                   color: "--black-t",
-                  // extra-siguranță: punem instructorId și pe rezervare
                   instructorId: instructorIdNum,
                },
             ],
@@ -870,278 +830,230 @@ export default function AAddProg({
       }
    };
 
-   /* ====== UI: buton primar — „Creează elev” -> „Continuă” ====== */
-   const canCreateStudent = mode === "new" && !studentId;
+   /* ====== NEW STUDENT helpers ====== */
    const validNewName = newFullName.trim().split(/\s+/).length >= 2;
-   const validNewPhone = isValidPhone373(phoneFull);
-
-   const primaryBtnMode = canCreateStudent ? "create" : "continue";
-   const primaryBtnLabel = continuing
-      ? primaryBtnMode === "create"
-         ? "Se creează elevul…"
-         : "Se verifică disponibilitatea…"
-      : primaryBtnMode === "create"
-      ? "Creează elev"
-      : "Continuă";
-
-   const primaryDisabled = continuing
-      ? true
-      : primaryBtnMode === "create"
-      ? !(validNewName && validNewPhone)
-      : !instructorId ||
-        (mode === "existing" && !studentId) ||
-        (mode === "new" && !studentId);
+   const validNewPhone = onlyDigits(phoneFull).length > 0;
 
    const handleCreateStudentClick = async () => {
       if (continuing) return;
       setContinuing(true);
       try {
-         await ensureStudentCreated(); // așteaptă până se creează și e selectat
+         await ensureStudentCreated();
       } finally {
          setContinuing(false);
       }
    };
 
-   const handlePrimaryClick = () => {
-      if (primaryBtnMode === "create") return handleCreateStudentClick();
-      return computeAvailability();
+   useEffect(() => {
+      const digits = onlyDigits(phoneFull);
+      if (!digits) {
+         setHighlightedStudentId(null);
+         return;
+      }
+
+      setQStudent(digits);
+
+      const exact = (students || []).find(
+         (s) => onlyDigits(s.phone || "") === digits
+      );
+      if (exact) {
+         const idStr = String(exact.id);
+         setStudentId(idStr);
+         setHighlightedStudentId(idStr);
+      } else {
+         setHighlightedStudentId(null);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [phoneFull, students]);
+
+   const handlePhoneKeyDown = (e) => {
+      if (e.key === "Enter") {
+         e.preventDefault();
+         if (continuing) return;
+
+         const autoDone = autoSelectSingleStudent(
+            studentsForSearchList,
+            "Elev selectat (rezultat unic după căutare)."
+         );
+         if (autoDone) return;
+
+         const digits = onlyDigits(phoneFull);
+         if (!digits) return;
+
+         const exact = (studentsAllRef.current || []).find(
+            (s) => onlyDigits(s.phone || "") === digits
+         );
+
+         if (exact) {
+            const idStr = String(exact.id);
+            setStudentId(idStr);
+            setNewFullName("");
+            setPhoneFull("");
+            setQStudent("");
+            setHighlightedStudentId(null);
+            setView("formSelect");
+            pushPill("Elev existent selectat automat după telefon.", "info");
+         } else {
+            handleCreateStudentClick();
+         }
+      }
    };
 
-   /* ============ RENDER ============ */
+   const handleStudentSearchKeyDown = (e) => {
+      if (e.key === "Enter") {
+         e.preventDefault();
+         if (continuing) return;
+
+         autoSelectSingleStudent(
+            studentsForSearchList,
+            "Elev selectat după căutare."
+         );
+      }
+   };
+
+   const primaryLabel = continuing
+      ? "Se verifică disponibilitatea…"
+      : "Continuă";
+   const primaryDisabled = continuing || !instructorId || !studentId;
+
+   const handleSectorToggle = useCallback(() => {
+      setSector((prev) => {
+         const current = String(prev || "").trim();
+         const idx = SECTOR_ORDER.indexOf(current);
+         if (idx === -1) return SECTOR_ORDER[0];
+         return SECTOR_ORDER[(idx + 1) % SECTOR_ORDER.length];
+      });
+   }, []);
+
+   const studentLabel =
+      studentDisplay !== "ne ales" ? studentDisplay : "Alege elev";
+   const instructorLabel =
+      instructorDisplay !== "ne ales" ? instructorDisplay : "Alege instructor";
+
    return (
-      <>
+      <div className="popupui popupui--a-add-prog">
          <AlertPills messages={messages} onDismiss={popPill} />
 
          <div className="popup-panel__header">
             <h3 className="popup-panel__title">Adaugă programare</h3>
          </div>
 
-         <div className="aAddProg instructors-popup__content">
-            {/* Toggle existent / nou */}
-            <div className="saddprogramari__toggle">
-               <button
-                  type="button"
-                  className={`saddprogramari__toggle-btn ${
-                     mode === "existing" ? "is-active" : ""
-                  }`}
-                  onClick={() => setMode("existing")}
-                  disabled={continuing}
-               >
-                  Student existent
-               </button>
-               <button
-                  type="button"
-                  className={`saddprogramari__toggle-btn ${
-                     mode === "new" ? "is-active" : ""
-                  }`}
-                  onClick={() => setMode("new")}
-                  disabled={continuing}
-               >
-                  Student nou
-               </button>
-            </div>
-
+         <div className="popupui__content">
             {/* Etapa 1: SELECT */}
             {stage === "select" && view === "formSelect" && (
                <>
-                  <div className="instructors-popup__form-row">
-                     {mode === "existing" ? (
-                        <label
-                           className="instructors-popup__field"
-                           style={{ flex: 1 }}
-                        >
-                           <span className="instructors-popup__label">
-                              Elev
+                  <div className="popupui__form-row popupui__form-row--spaced">
+                     {/* Elev */}
+                     <div
+                        className="popupui__field popupui__field--clickable popupui__field--grow-1"
+                        onClick={() => {
+                           if (continuing) return;
+                           setView("searchStudent");
+                           setHighlightedStudentId(null);
+                        }}
+                     >
+                        <span className="popupui__field-label">Elev</span>
+
+                        <div className="popupui__field-line">
+                           <span className="popupui__field-text">
+                              {studentLabel}
                            </span>
-                           <div className="picker__row">
-                              <input
-                                 className="instructors-popup__input"
-                                 type="text"
-                                 readOnly
-                                 value={studentDisplay}
-                                 placeholder="Alege elev"
-                              />
-                              <button
-                                 type="button"
-                                 className="instructors-popup__form-button"
-                                 onClick={() => setView("searchStudent")}
-                                 disabled={continuing}
-                              >
-                                 Caută elev
-                              </button>
-                           </div>
-                        </label>
-                     ) : (
-                        <div
-                           className="saddprogramari__new-student"
-                           style={{ flex: 1 }}
-                        >
-                           <span className="instructors-popup__label">
-                              Elev nou
-                           </span>
-                           <div className="saddprogramari__new-grid">
-                              <input
-                                 className="instructors-popup__input"
-                                 placeholder="Nume Prenume"
-                                 value={newFullName}
-                                 onChange={(e) =>
-                                    setNewFullName(e.target.value)
-                                 }
-                                 disabled={continuing}
-                              />
-                              <PhoneInput373
-                                 value={phoneFull}
-                                 onChange={setPhoneFull}
-                                 disabled={continuing}
-                              />
-                           </div>
                         </div>
-                     )}
+                        <div className="popupui__field-line">
+                           <span className="popupui__field-text">
+                              {studentPhone || "Telefon elev"}
+                           </span>
+                        </div>
+                     </div>
 
                      {/* Instructor */}
-                     <label
-                        className="instructors-popup__field"
-                        style={{ flex: 1 }}
+                     <div
+                        className="popupui__field popupui__field--clickable popupui__field--grow-1"
+                        onClick={() => {
+                           if (continuing) return;
+                           setView("searchInstructor");
+                        }}
                      >
-                        <span className="instructors-popup__label">
-                           Instructor
-                        </span>
-                        <div className="picker__row">
-                           <input
-                              className="instructors-popup__input"
-                              type="text"
-                              readOnly
-                              value={instructorDisplay}
-                              placeholder="Alege instructor"
-                           />
-                           <button
-                              type="button"
-                              className="instructors-popup__form-button"
-                              onClick={() => setView("searchInstructor")}
-                              disabled={continuing}
-                           >
-                              Caută instructor
-                           </button>
+                        <span className="popupui__field-label">Instructor</span>
+                        <div className="popupui__field-line">
+                           <span className="popupui__field-text">
+                              {instructorLabel}
+                           </span>
                         </div>
-                     </label>
-                  </div>
-
-                  {phoneMatches.length > 0 && !continuing && mode === "new" && (
-                     <ul className="phone-suggestions">
-                        {phoneMatches.map((s) => {
-                           const label = `${s.firstName || ""} ${
-                              s.lastName || ""
-                           }`.trim();
-                           return (
-                              <li
-                                 key={s.id}
-                                 className="phone-suggestions__item"
-                                 onClick={() => {
-                                    setMode("existing");
-                                    setStudentId(String(s.id));
-                                    setNewFullName("");
-                                    setPhoneFull(PREFIX);
-                                    pushPill(
-                                       "Elev existent selectat din sugestii.",
-                                       "info"
-                                    );
-                                 }}
-                              >
-                                 <span className="sug-name">{label}</span>
-                                 {s.phone ? (
-                                    <span className="sug-phone">{s.phone}</span>
-                                 ) : null}
-                              </li>
-                           );
-                        })}
-                     </ul>
-                  )}
-
-                  {/* Sector + Cutie */}
-                  <div className="instructors-popup__form-row">
-                     <div
-                        className={`instructors-popup__radio-wrapper addprog ${
-                           sector === "Botanica"
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        }`}
-                        style={{ flex: 1 }}
-                     >
-                        <label>
-                           <input
-                              type="radio"
-                              name="sector"
-                              value="Botanica"
-                              checked={sector === "Botanica"}
-                              onChange={(e) => setSector(e.target.value)}
-                              disabled={continuing}
-                           />
-                           Botanica
-                        </label>
-                        <label>
-                           <input
-                              type="radio"
-                              name="sector"
-                              value="Ciocana"
-                              checked={sector === "Ciocana"}
-                              onChange={(e) => setSector(e.target.value)}
-                              disabled={continuing}
-                           />
-                           Ciocana
-                        </label>
-                     </div>
-
-                     <div
-                        className={`instructors-popup__radio-wrapper addprog ${
-                           gearbox === "Manual"
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        }`}
-                        style={{ flex: 1 }}
-                     >
-                        <label>
-                           <input
-                              type="radio"
-                              name="gearbox"
-                              value="Manual"
-                              checked={gearbox === "Manual"}
-                              onChange={(e) => setGearbox(e.target.value)}
-                              disabled={continuing}
-                           />
-                           Manual
-                        </label>
-                        <label>
-                           <input
-                              type="radio"
-                              name="gearbox"
-                              value="Automat"
-                              checked={gearbox === "Automat"}
-                              onChange={(e) => setGearbox(e.target.value)}
-                              disabled={continuing}
-                           />
-                           Automat
-                        </label>
+                        <div className="popupui__field-line">
+                           <span className="popupui__field-text">
+                              {instructorPhone || "Telefon instructor"}
+                           </span>
+                        </div>
                      </div>
                   </div>
 
-                  <div className="saddprogramari__add-btns">
+                  {/* Sector + Cutie (din mașină) */}
+                  <div className="popupui__form-row popupui__form-row--compact">
+                     <div
+                        className="popupui__field popupui__field--clickable popupui__field--grow-1"
+                        onClick={() => {
+                           if (continuing) return;
+                           handleSectorToggle();
+                        }}
+                     >
+                        <span className="popupui__field-label">Sector</span>
+                        <div className="popupui__field-line">
+                           <span className="popupui__field-text">
+                              {sector || "Alege sector"}
+                           </span>
+                        </div>
+                     </div>
+
+                     {/* Cutie – doar afișare, din mașină */}
+                     <div className="popupui__field popupui__field--grow-1">
+                        <span className="popupui__field-label">
+                           Cutie (din mașină)
+                        </span>
+                        <div className="popupui__field-line">
+                           <span className="popupui__field-text">
+                              {gearbox
+                                 ? gearbox.toLowerCase() === "automat"
+                                    ? "Automat"
+                                    : "Manual"
+                                 : "—"}
+                           </span>
+                        </div>
+                     </div>
+                  </div>
+
+                  {/* Notiță personală */}
+                  <div className="popupui__field">
+                     <span className="popupui__field-label">
+                        Notiță personală
+                     </span>
+                     <textarea
+                        className="popupui__textarea"
+                        rows={2}
+                        placeholder="Notiță pentru această rezervare (opțional)..."
+                        value={privateMessage}
+                        onChange={(e) => setPrivateMessage(e.target.value)}
+                     />
+                  </div>
+
+                  <div className="popupui__actions-row">
                      <button
-                        onClick={handlePrimaryClick}
-                        className="saddprogramari__add-btn arrow"
+                        onClick={computeAvailability}
+                        className="popupui__primary-btn popupui__primary-btn--arrow"
                         type="button"
                         disabled={primaryDisabled}
                         title={
-                           primaryBtnMode === "create"
-                              ? "Creează elevul"
-                              : !instructorId
+                           !instructorId
                               ? "Selectează instructorul"
+                              : !studentId
+                              ? "Selectează elevul"
                               : ""
                         }
                      >
-                        <span>{primaryBtnLabel}</span>
+                        <span>{primaryLabel}</span>
                         <ReactSVG
                            src={arrowIcon}
-                           className="saddprogramari__add-btn-icon"
+                           className="popupui__primary-btn-icon"
                         />
                      </button>
                   </div>
@@ -1151,42 +1063,105 @@ export default function AAddProg({
             {/* Căutare elev */}
             {view === "searchStudent" && (
                <>
-                  <div className="instructors-popup__search-wrapper">
+                  <div className="popupui__search-header">
                      <input
                         type="text"
-                        className="instructors-popup__search"
+                        className="popupui__search-input"
                         placeholder="Caută elev după nume sau telefon…"
                         value={qStudent}
                         onChange={(e) => setQStudent(e.target.value)}
+                        onKeyDown={handleStudentSearchKeyDown}
                         disabled={continuing}
                      />
-                     <button
-                        className="instructors-popup__form-button instructors-popup__form-button--cancel"
-                        onClick={() => setView("formSelect")}
-                        disabled={continuing}
-                     >
-                        Înapoi
-                     </button>
+                     <div className="popupui__search-header-actions">
+                        <button
+                           type="button"
+                           className="popupui__btn popupui__btn--normal"
+                           onClick={() => {
+                              setView("formSelect");
+                              setQStudent("");
+                              setHighlightedStudentId(null);
+                           }}
+                           disabled={continuing}
+                        >
+                           Înapoi
+                        </button>
+                     </div>
                   </div>
-                  <div className="instructors-popup__list-wrapper">
-                     <ul className="instructors-popup__list-items">
-                        {filteredStudents.map((s) => {
+
+                  {/* Elev nou */}
+                  <div className="popupui__field">
+                     <span className="popupui__field-label">Elev nou</span>
+                     <div className="popupui__new-student">
+                        <div className="popupui__new-student-grid">
+                           <div className="popupui__form-row">
+                              <input
+                                 className="popupui__input"
+                                 placeholder="Nume Prenume"
+                                 value={newFullName}
+                                 onChange={(e) =>
+                                    setNewFullName(e.target.value)
+                                 }
+                                 disabled={continuing}
+                              />
+                              <input
+                                 className="popupui__input"
+                                 placeholder="Telefon (număr)"
+                                 type="tel"
+                                 inputMode="numeric"
+                                 value={phoneFull}
+                                 onChange={(e) =>
+                                    setPhoneFull(
+                                       e.target.value.replace(/\D/g, "")
+                                    )
+                                 }
+                                 onKeyDown={handlePhoneKeyDown}
+                                 disabled={continuing}
+                              />
+                           </div>
+
+                           <button
+                              type="button"
+                              className="popupui__btn popupui__btn--save"
+                              onClick={handleCreateStudentClick}
+                              disabled={
+                                 continuing || !validNewName || !validNewPhone
+                              }
+                           >
+                              {continuing
+                                 ? "Se creează elevul…"
+                                 : "Salvează elev"}
+                           </button>
+                        </div>
+                     </div>
+                  </div>
+
+                  <div className="popupui__search-list-wrapper">
+                     <ul className="popupui__search-list">
+                        {studentsForSearchList.map((s) => {
                            const full = `${s.firstName || ""} ${
                               s.lastName || ""
                            }`.trim();
                            const phone = s.phone || "";
+                           const isHighlighted =
+                              highlightedStudentId &&
+                              String(s.id) === String(highlightedStudentId);
                            return (
                               <li
                                  key={s.id}
-                                 className="instructors-popup__item"
+                                 className={`popupui__search-item${
+                                    isHighlighted
+                                       ? " popupui__search-item--highlighted"
+                                       : ""
+                                 }`}
                                  onClick={() => {
                                     if (continuing) return;
                                     setStudentId(String(s.id));
-                                    setMode("existing");
                                     setView("formSelect");
+                                    setHighlightedStudentId(null);
                                  }}
                               >
-                                 <div className="instructors-popup__item-left">
+                                 <div className="popupui__search-item-left">
                                     <h3>{highlightText(full, qStudent)}</h3>
                                     {phone && (
                                        <p>{highlightText(phone, qStudent)}</p>
@@ -1203,25 +1178,28 @@ export default function AAddProg({
             {/* Căutare instructor */}
             {view === "searchInstructor" && (
                <>
-                  <div className="instructors-popup__search-wrapper">
+                  <div className="popupui__search-header">
                      <input
                         type="text"
-                        className="instructors-popup__search"
+                        className="popupui__search-input"
                         placeholder="Caută instructor după nume sau telefon..."
                         value={qInstructor}
                         onChange={(e) => setQInstructor(e.target.value)}
                         disabled={continuing}
                      />
-                     <button
-                        className="instructors-popup__form-button instructors-popup__form-button--cancel"
-                        onClick={() => setView("formSelect")}
-                        disabled={continuing}
-                     >
-                        Înapoi
-                     </button>
+                     <div className="popupui__search-header-actions">
+                        <button
+                           className="popupui__btn popupui__btn--normal"
+                           type="button"
+                           onClick={() => setView("formSelect")}
+                           disabled={continuing}
+                        >
+                           Înapoi
+                        </button>
+                     </div>
                   </div>
-                  <div className="instructors-popup__list-wrapper">
-                     <ul className="instructors-popup__list-items">
+                  <div className="popupui__search-list-wrapper">
+                     <ul className="popupui__search-list">
                         {filteredInstructors.map((i) => {
                            const full = `${i.firstName || ""} ${
                               i.lastName || ""
@@ -1230,14 +1208,14 @@ export default function AAddProg({
                            return (
                               <li
                                  key={i.id}
-                                 className="instructors-popup__item"
+                                 className="popupui__search-item"
                                  onClick={() => {
                                     if (continuing) return;
                                     setInstructorId(String(i.id));
                                     setView("formSelect");
                                  }}
                               >
-                                 <div className="instructors-popup__item-left">
+                                 <div className="popupui__search-item-left">
                                     <h3>{highlightText(full, qInstructor)}</h3>
                                     {phone && (
                                        <p>
@@ -1256,11 +1234,12 @@ export default function AAddProg({
             {/* Etapa 2: PICK */}
             {stage === "pick" && view === "formPick" && (
                <>
-                  <div className="saddprogramari__selector">
-                     <div className="saddprogramari__calendar">
-                        <h3 className="saddprogramari__title">
-                           Selectează data și ora:
-                        </h3>
+                  <div className="popupui__selector">
+                     {/* Calendar */}
+                     <div className="popupui__field popupui__field--calendar">
+                        <span className="popupui__field-label">
+                           Selectează data:
+                        </span>
                         <DatePicker
                            selected={selectedDate}
                            onChange={(d) => {
@@ -1274,33 +1253,37 @@ export default function AAddProg({
                                  .substring(0, 2)
                                  .replace(/^./, (c) => c.toUpperCase())
                            }
-                           // ❌ fără minDate – permitem și trecutul
                            dayClassName={(date) => {
                               const day = ymdStrInTZ(date, MOLDOVA_TZ);
                               return freeByDay.has(day)
                                  ? ""
-                                 : "saddprogramari__day--inactive";
+                                 : "popupui__day--inactive";
                            }}
-                           calendarClassName="aAddProg__datepicker"
+                           calendarClassName="popupui__datepicker"
                         />
                      </div>
 
-                     <div className="saddprogramari__times">
-                        <h3 className="saddprogramari__title">Selectează:</h3>
-                        <div className="saddprogramari__times-list">
+                     {/* Ore */}
+                     <div className="popupui__field popupui__field--times">
+                        <span className="popupui__field-label">
+                           Selectează ora:
+                        </span>
+
+                        <div className="popupui__times-list">
                            {!selectedDate && (
-                              <div className="saddprogramari__disclaimer">
+                              <div className="popupui__disclaimer">
                                  Te rog să selectezi mai întâi o zi!
                               </div>
                            )}
+
                            {oreDisponibile.map((ora) => {
                               const iso = selectedDate
                                  ? toUtcIsoFromLocal(selectedDate, ora.oraStart)
                                  : null;
+
                               const isSelected =
                                  selectedTime?.oraStart === ora.oraStart;
 
-                              // ✅ Permitem trecutul: butonul e activ dacă slotul e liber
                               const disabled =
                                  !selectedDate || !freeSet.has(iso);
 
@@ -1309,15 +1292,20 @@ export default function AAddProg({
                                     key={ora.eticheta}
                                     onClick={() => setSelectedTime(ora)}
                                     disabled={disabled}
-                                    className={`saddprogramari__time-btn ${
+                                    className={[
+                                       "popupui__time-btn",
                                        isSelected
-                                          ? "saddprogramari__time-btn--selected"
-                                          : ""
-                                    } ${
+                                          ? "popupui__time-btn--selected"
+                                          : "",
                                        disabled
-                                          ? "saddprogramari__time-btn--disabled"
-                                          : ""
-                                    }`}
+                                          ? "popupui__time-btn--disabled"
+                                          : "",
+                                       ora.eticheta === "19:30"
+                                          ? "popupui__time-btn--wide"
+                                          : "",
+                                    ]
+                                       .filter(Boolean)
+                                       .join(" ")}
                                     title={
                                        !selectedDate
                                           ? "Alege o zi"
@@ -1334,38 +1322,20 @@ export default function AAddProg({
                      </div>
                   </div>
 
-                  {selectedDate && selectedTime && (
-                     <div
-                        className="saddprogramari__info"
-                        style={{ marginTop: 8 }}
-                     >
-                        Ai selectat:{" "}
-                        <b>
-                           {formatDateRO(
-                              toUtcIsoFromLocal(
-                                 selectedDate,
-                                 selectedTime.oraStart
-                              )
-                           )}
-                        </b>{" "}
-                        la <b>{selectedTime.eticheta}</b>
-                     </div>
-                  )}
-
-                  <div className="saddprogramari__add-btns">
+                  <div className="popupui__actions-row">
                      <button
                         onClick={() => {
                            setStage("select");
                            setView("formSelect");
                            setSelectedTime(null);
                         }}
-                        className="saddprogramari__add-btn arrow0"
+                        className="popupui__secondary-btn popupui__secondary-btn--arrow-back"
                         type="button"
                         disabled={saving}
                      >
                         <ReactSVG
                            src={arrowIcon}
-                           className="saddprogramari__add-btn-icon"
+                           className="popupui__primary-btn-icon"
                         />
                         <span>Înapoi</span>
                      </button>
@@ -1373,19 +1343,19 @@ export default function AAddProg({
                      <button
                         onClick={onSave}
                         disabled={!selectedDate || !selectedTime || saving}
-                        className="saddprogramari__add-btn arrow"
+                        className="popupui__primary-btn popupui__primary-btn--arrow"
                         type="button"
                      >
                         <span>{saving ? "Se salvează..." : "Trimite"}</span>
                         <ReactSVG
                            src={arrowIcon}
-                           className="saddprogramari__add-btn-icon"
+                           className="popupui__primary-btn-icon"
                         />
                      </button>
                   </div>
                </>
             )}
          </div>
-      </>
+      </div>
    );
 }

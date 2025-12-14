@@ -10,558 +10,429 @@ import React, {
 import { useDispatch } from "react-redux";
 import { openPopup } from "../../Utils/popupStore";
 import { updateUser } from "../../../store/usersSlice";
-import { createNote } from "../../../api/notesService";
 
-const MOLDOVA_TZ = "Europe/Chisinau";
+import {
+   createNote,
+   fetchWaitNotesRange,
+   updateNote,
+} from "../../../api/notesService";
+import {
+   createReservationsForUser,
+   deleteReservation,
+   getReservationHistory,
+   getInstructorReservationHistory,
+} from "../../../api/reservationsService";
+import {
+   fetchReservationsDelta,
+   removeReservationLocal,
+} from "../../../store/reservationsSlice";
+import { triggerCalendarRefresh } from "../../Utils/calendarBus";
+import { ReactSVG } from "react-svg";
+
+import copyIcon from "../../../assets/svg/material-symbols--file-copy-outline.svg";
+import pasteIcon from "../../../assets/svg/streamline-sharp--insert-row-remix.svg";
+import cutIcon from "../../../assets/svg/material-symbols--content-cut.svg";
+import hystoryIcon from "../../../assets/svg/clock.svg";
+import arrowIcon from "../../../assets/svg/arrow-s.svg";
+import closeIcon from "../../../assets/svg/add-s.svg";
+
+import {
+   retainGlobals,
+   setGlobalSelection,
+   getSelectedEvent,
+   getSelectedSlot,
+   getCopyBuffer,
+   setCopyBuffer,
+   setPasteFn,
+   setDeleteFn,
+   hideReservationGlobally,
+   hasHiddenIds,
+   isHidden,
+   getHiddenVersion,
+} from "./globals";
+
+import {
+   digits,
+   norm,
+   formatHHMM,
+   getNoteForDate,
+   upsertNoteForDate,
+   MOLDOVA_TZ,
+   DEFAULT_TIME_MARKS,
+   ymdStrInTZ,
+   hhmmInTZ,
+   localKeyFromTs,
+   buildStartTimeForSlot,
+   buildWaitNoteDateIsoForSlot,
+   normalizeWaitNotesInput,
+   localDateObjFromStr,
+   isAutoInstructor,
+   isBuiucaniInstructor,
+   getInstructorSector,
+   isEventCanceled,
+   getStudentPhoneFromEv,
+   getStudentPrivateMessageFromEv,
+   buildBlockedMapFromBlackoutsList,
+   WAIT_NOTE_TIME_MARKS,
+   WAIT_SLOTS_PER_COLUMN,
+   CANCEL_SLOTS_PER_COLUMN,
+   LATERAL_TIME_MARKS,
+   LATERAL_SLOTS_PER_COLUMN,
+   LATERAL_PAD_ID,
+   WAIT_NOTES_CACHE,
+   WAIT_PLACEHOLDER_TEXT,
+} from "./utils";
+
+import {
+   drawAll,
+   computeWorldHeight,
+   getColorRoot,
+   clearColorCache,
+   buildEventsSignatureForDay,
+   buildSlotsSignature,
+   buildBlockedSignature,
+   buildWaitNotesSignature,
+   DEFAULT_EVENT_COLOR_TOKEN,
+   NO_COLOR_TOKEN,
+} from "./render";
+
+const BUSY_KEYS_MODE = "local-match";
 const DPR_LIMIT = 2;
-const ENABLE_STUDENT_HITS = false;
-const WAIT_PLACEHOLDER_TEXT = "Scrie aici";
-const DEFAULT_EVENT_COLOR_TOKEN = "--event-default";
-const NO_COLOR_TOKEN = "--black-t";
 
-function normalizeEventColorToken(raw) {
-   if (!raw || typeof raw !== "string") {
-      return DEFAULT_EVENT_COLOR_TOKEN;
-   }
+const LONG_PRESS_MS = 200;
+const LONG_PRESS_MOVE_PX = 14;
 
-   const trimmed = raw.trim();
+const RANGE_MINUTES = 90; // ✅ 90 min window
 
-   if (!trimmed || trimmed.toUpperCase() === "DEFAULT") {
-      return DEFAULT_EVENT_COLOR_TOKEN;
-   }
+/* ================== HISTORY (Reservation) - helpers ================== */
 
-   if (/^#[0-9a-fA-F]{3,8}$/.test(trimmed)) {
-      return DEFAULT_EVENT_COLOR_TOKEN;
-   }
-
-   return trimmed;
-}
-
-const DEFAULT_TIME_MARKS = [
-   "07:00",
-   "08:30",
-   "10:00",
-   "11:30",
-   "13:30",
-   "15:00",
-   "16:30",
-   "18:00",
-   "19:30",
-];
-
-const HHMM_FMT = new Intl.DateTimeFormat("ro-RO", {
-   timeZone: MOLDOVA_TZ,
-   hour: "2-digit",
-   minute: "2-digit",
-   hour12: false,
-});
-
-const TZ_PARTS_FMT_CANVAS = new Intl.DateTimeFormat("en-GB", {
-   timeZone: MOLDOVA_TZ,
-   hour12: false,
-   year: "numeric",
-   month: "2-digit",
-   day: "2-digit",
-   hour: "2-digit",
-   minute: "2-digit",
-   second: "2-digit",
-});
-
-function formatHHMM(val) {
-   const d = val instanceof Date ? val : new Date(val);
-   if (Number.isNaN(d.getTime())) return "";
-   return HHMM_FMT.format(d);
-}
-
-function drawRoundRect(ctx, x, y, w, h, r) {
-   const radius =
-      typeof r === "number"
-         ? { tl: r, tr: r, br: r, bl: r }
-         : { tl: 0, tr: 0, br: 0, bl: 0, ...r };
-
-   ctx.beginPath();
-   ctx.moveTo(x + radius.tl, y);
-   ctx.lineTo(x + w - radius.tr, y);
-   ctx.quadraticCurveTo(x + w, y, x + w, y + radius.tr);
-   ctx.lineTo(x + w, y + h - radius.br);
-   ctx.quadraticCurveTo(x + w, y + h, x + w - radius.br, y + h);
-   ctx.lineTo(x + radius.bl, y + h);
-   ctx.quadraticCurveTo(x, y + h, x, y + h - radius.bl);
-   ctx.lineTo(x, y + radius.tl);
-   ctx.quadraticCurveTo(x, y, x + radius.tl, y);
-   ctx.closePath();
-}
-
-// ctx PRIMUL parametru
-function wrapText(ctx, text, maxWidth, maxLines = Infinity) {
-   const raw = String(text || "");
-   const words = raw.split(/\s+/).filter(Boolean);
-
-   const lines = [];
-   let current = "";
-   let truncated = false; // ✅ adevărat doar dacă nu încape TOT textul
-
-   const pushLine = (line) => {
-      if (!line) return;
-      lines.push(line);
-   };
-
-   outer: for (const word of words) {
-      const test = current ? current + " " + word : word;
-
-      // 1) încă încape în linia curentă
-      if (ctx.measureText(test).width <= maxWidth) {
-         current = test;
-         continue;
-      }
-
-      // 2) nu mai încape, împingem linia curentă
-      if (current) {
-         pushLine(current);
-         current = "";
-         if (lines.length >= maxLines) {
-            // am ajuns la limita de linii și încă mai avem cuvinte → text tăiat
-            truncated = true;
-            break outer;
-         }
-      }
-
-      // 3) încercăm să punem cuvântul singur pe linie
-      if (ctx.measureText(word).width <= maxWidth) {
-         current = word;
-      } else {
-         // 4) cuvântul e prea lung -> tăiem pe litere
-         let part = "";
-         for (const ch of word) {
-            const testPart = part + ch;
-            if (ctx.measureText(testPart).width <= maxWidth) {
-               part = testPart;
-            } else {
-               pushLine(part);
-               part = ch;
-               if (lines.length >= maxLines) {
-                  truncated = true;
-                  break;
-               }
-            }
-         }
-         current = part;
-         if (truncated) break outer;
-      }
-   }
-
-   // 5) mai avem ceva în buffer și NU am tăiat din cauza maxLines
-   if (!truncated && current) {
-      pushLine(current);
-   }
-
-   // 6) safety: dacă totuși avem mai multe linii decât maxLines
-   if (lines.length > maxLines) {
-      lines.length = maxLines;
-      truncated = true;
-   }
-
-   // 7) adăugăm "…" doar dacă TEXTUL A FOST TRUNCAT
-   if (truncated && isFinite(maxLines) && maxLines > 0 && lines.length) {
-      const lastIndex = lines.length - 1;
-      let last = lines[lastIndex];
-      const ellipsis = "…";
-
-      if (!last.endsWith(ellipsis)) {
-         if (ctx.measureText(last + ellipsis).width <= maxWidth) {
-            lines[lastIndex] = last + ellipsis;
-         } else {
-            let trimmed = last;
-            while (
-               trimmed.length &&
-               ctx.measureText(trimmed + ellipsis).width > maxWidth
-            ) {
-               trimmed = trimmed.slice(0, -1);
-            }
-            lines[lastIndex] = trimmed ? trimmed + ellipsis : last;
-         }
-      }
-   }
-
-   return lines;
-}
-
-/* ================== PALETĂ & DARK MODE ================== */
-
-let COLOR_ROOT = null;
-let COLOR_CACHE = new Map();
-
-function getColorRoot() {
-   if (typeof document === "undefined") return null;
-
-   if (COLOR_ROOT && document.contains(COLOR_ROOT)) return COLOR_ROOT;
-
-   COLOR_ROOT =
-      document.querySelector(".darkmode") ||
-      document.getElementById("root") ||
-      document.body ||
-      document.documentElement;
-
-   return COLOR_ROOT;
-}
-
-export function clearColorCache() {
-   COLOR_CACHE.clear();
-}
-
-function resolveColor(color) {
-   if (!color) return "#616161";
-
-   if (typeof window === "undefined" || typeof document === "undefined") {
-      return color;
-   }
-
-   const cached = COLOR_CACHE.get(color);
-   if (cached) return cached;
-
-   const root = getColorRoot();
-   if (!root) {
-      COLOR_CACHE.set(color, color);
-      return color;
-   }
-
-   let result = color;
-
-   if (color.startsWith("var(")) {
-      const name = color.slice(4, -1).trim();
-      const val = getComputedStyle(root).getPropertyValue(name).trim();
-      result = val || "#616161";
-   } else if (color.startsWith("--")) {
-      const val = getComputedStyle(root).getPropertyValue(color).trim();
-      result = val || "#616161";
-   }
-
-   COLOR_CACHE.set(color, result);
-   return result;
-}
-
-const EVENT_COLOR_MAP = {
-   DEFAULT: DEFAULT_EVENT_COLOR_TOKEN,
-   RED: "--event-red",
-   ORANGE: "--event-orange",
-   YELLOW: "--event-yellow",
-   GREEN: "--event-green",
-   BLUE: "--event-blue",
-   INDIGO: "--event-indigo",
-   PURPLE: "--event-purple",
-   PINK: "--event-pink",
-   BLACK: NO_COLOR_TOKEN,
-   "BLACK-S": NO_COLOR_TOKEN,
-   "BLACK-T": NO_COLOR_TOKEN,
+const HISTORY_FIELD_LABEL = {
+   startTime: "Data & ora",
+   sector: "Sector",
+   gearbox: "Cutie",
+   color: "Culoare",
+   userId: "Elev",
+   instructorId: "Instructor",
+   privateMessage: "Notiță",
+   isConfirmed: "Confirmare",
+   carId: "Mașină",
+   instructorsGroupId: "Grup instructori",
+   isFavorite: "Favorit",
+   isImportant: "Important",
+   isCancelled: "Anulat",
 };
 
-function normalizeEventColor(dbColor) {
-   if (!dbColor) return DEFAULT_EVENT_COLOR_TOKEN;
-
-   let v = String(dbColor).trim();
-
-   if (/^#[0-9a-fA-F]{3,8}$/.test(v)) {
-      return DEFAULT_EVENT_COLOR_TOKEN;
-   }
-
-   if (v.toLowerCase() === "black" || v.toLowerCase() === "black-t") {
-      return NO_COLOR_TOKEN;
-   }
-
-   if (v.toLowerCase() === "transparent") {
-      return NO_COLOR_TOKEN;
-   }
-
-   if (/^(rgb\(|hsl\()/i.test(v)) {
-      return v;
-   }
-
-   if (v.startsWith("var(")) {
-      return v;
-   }
-
-   if (v.startsWith("--")) {
-      const short = v.slice(2).toLowerCase();
-
-      if (!short || short === "default") {
-         return DEFAULT_EVENT_COLOR_TOKEN;
-      }
-
-      if (short === "black-s" || short === "black" || short === "black-t") {
-         return NO_COLOR_TOKEN;
-      }
-
-      if (short.startsWith("event-")) {
-         return `--${short}`;
-      }
-
-      return `--event-${short}`;
-   }
-
-   if (/^event-/i.test(v)) {
-      const rest = v.slice("event-".length).toLowerCase();
-
-      if (!rest || rest === "default") {
-         return DEFAULT_EVENT_COLOR_TOKEN;
-      }
-
-      if (rest === "black-s" || rest === "black" || rest === "black-t") {
-         return NO_COLOR_TOKEN;
-      }
-
-      return `--event-${rest}`;
-   }
-
-   const key = v.toUpperCase();
-   const cssVar = EVENT_COLOR_MAP[key];
-   if (cssVar) {
-      return cssVar;
-   }
-
-   return DEFAULT_EVENT_COLOR_TOKEN;
+function fmtHistoryHeaderRO(isoLike, tz = MOLDOVA_TZ) {
+   const d = isoLike ? new Date(isoLike) : null;
+   if (!d || Number.isNaN(d.getTime())) return "";
+   return new Intl.DateTimeFormat("ro-RO", {
+      timeZone: tz,
+      day: "2-digit",
+      month: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+   }).format(d);
 }
 
-/* ================== HELPERE PENTRU POPUP-URI ================== */
-
-function getStudentPrivateMessageFromEv(ev) {
-   const v =
-      ev?.student?.privateMessage ??
-      ev?.raw?.student?.privateMessage ??
-      ev?.raw?.user?.privateMessage ??
-      ev?.raw?.privateMessage ??
-      "";
-   return typeof v === "string" ? v : String(v ?? "");
+function safeStr(v) {
+   if (v == null) return "";
+   if (typeof v === "string") return v;
+   return String(v);
 }
 
-function openReservationPopup(ev) {
-   if (!ev) return;
-   const reservationId = ev.raw?.id ?? ev.id;
-   if (!reservationId) return;
-   openPopup("reservationEdit", { reservationId });
-}
+function buildNameMaps({ users = [], instructorsFull = [] } = {}) {
+   const userById = new Map();
+   const instrById = new Map();
 
-function openStudentPopup(ev) {
-   if (!ev) return;
-   const raw = ev.raw || {};
-
-   const fallbackName =
-      raw?.clientName ||
-      raw?.customerName ||
-      raw?.name ||
-      ev.title ||
-      "Programare";
-
-   const phoneVal =
-      ev.studentPhone ||
-      raw?.clientPhone ||
-      raw?.phoneNumber ||
-      raw?.phone ||
-      "";
-
-   const noteFromEvent = (
-      ev.privateMessage ||
-      raw?.note ||
-      raw?.comment ||
-      raw?.privateMessage ||
-      raw?.privateMessaje ||
-      ""
-   )
-      .toString()
-      .trim();
-
-   const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
-      .toString()
-      .trim();
-
-   const reservationId = raw?.id ?? ev.id;
-
-   const userIdRaw =
-      raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
-
-   const emailRaw = raw?.user?.email ?? raw?.email ?? ev?.studentEmail ?? "";
-
-   const firstNameSeed =
-      (ev.studentFirst || "").trim() || fallbackName.split(" ")[0] || "";
-   const lastNameSeed = (ev.studentLast || "").trim();
-
-   if (ev.studentId || userIdRaw) {
-      openPopup("studentDetails", {
-         student: {
-            id: ev.studentId ?? null,
-            userId: userIdRaw ?? null,
-            firstName: firstNameSeed,
-            lastName: lastNameSeed,
-            phone: phoneVal || "",
-            email: emailRaw || "",
-            privateMessage: noteFromProfile,
-            isConfirmed: !!ev.isConfirmed,
-         },
-         noteFromEvent,
-         studentPrivateMessage: noteFromProfile,
-         fromReservationId: reservationId,
-         fromReservationStartISO:
-            raw?.startTime || raw?.start || ev.start || null,
-      });
-   } else {
-      openReservationPopup(ev);
-   }
-}
-
-function slotOverlapsEvents(slotStartMs, slotEndMs, eventsForInst = []) {
-   if (!eventsForInst.length) return false;
-   for (const ev of eventsForInst) {
-      const s = ev.start.getTime();
-      const e = ev.end.getTime();
-      if (s < slotEndMs && e > slotStartMs) return true;
-   }
-   return false;
-}
-
-function isEventCanceled(ev) {
-   if (!ev) return false;
-   const raw = ev.raw || {};
-   const status = String(ev.status || raw.status || "").toLowerCase();
-
-   return (
-      ev.isCanceled === true ||
-      ev.isCancelled === true ||
-      raw.isCanceled === true ||
-      raw.isCancelled === true ||
-      status === "canceled" ||
-      status === "cancelled"
-   );
-}
-
-/* ================== HELPERE NOTIȚE & SECTOR ================== */
-
-const digits = (s = "") => String(s).replace(/\D+/g, "");
-const norm = (s = "") =>
-   s
-      .toString()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .trim();
-
-const ymd = (d) => {
-   const dt = d instanceof Date ? d : new Date(d);
-   const Y = dt.getFullYear();
-   const M = String(dt.getMonth() + 1).padStart(2, "0");
-   const D = String(dt.getDate()).padStart(2, "0");
-   return `${Y}-${M}-${D}`;
-};
-
-function extractCanonLines(pm = "") {
-   const lines = String(pm || "").split(/\r?\n/);
-   const out = [];
-   for (const raw of lines) {
-      const s = raw.trim();
-      if (!s) continue;
-      const m = /^\[(\d{4})-(\d{2})-(\d{2})]\s*(.*)$/.exec(s);
-      if (m) {
-         out.push({
-            dateStr: `${m[1]}-${m[2]}-${m[3]}`,
-            text: m[4] || "",
-            raw,
-         });
-      }
-   }
-   return out;
-}
-
-function getNoteForDate(pm, dateObj) {
-   const target = ymd(dateObj);
-   const all = extractCanonLines(pm);
-   const hit = all.find((x) => x.dateStr === target);
-   return hit ? hit.text : "";
-}
-
-function upsertNoteForDate(pm, dateObj, newText) {
-   const target = ymd(dateObj);
-   const lines = String(pm || "").split(/\r?\n/);
-   const kept = lines.filter((raw) => {
-      const s = raw.trim();
-      if (!s) return false;
-      const m = /^\[(\d{4})-(\d{2})-(\d{2})]/.exec(s);
-      if (m) {
-         const k = `${m[1]}-${m[2]}-${m[3]}`;
-         return k !== target;
-      }
-      return true;
+   (users || []).forEach((u) => {
+      const id = u?.id;
+      if (id == null) return;
+      const full = `${u?.firstName || ""} ${u?.lastName || ""}`.trim();
+      if (full) userById.set(String(id), full);
    });
-   const base = kept.join("\n").trim();
-   if (!newText || !newText.trim()) return base;
-   const canon = `[${target}] ${newText.trim()}`;
-   return (base ? base + "\n" : "") + canon;
+
+   (instructorsFull || []).forEach((i) => {
+      const id = i?.id;
+      if (id == null) return;
+      const full = `${i?.firstName || ""} ${i?.lastName || ""}`.trim();
+      if (full) instrById.set(String(id), full);
+   });
+
+   return { userById, instrById };
 }
 
-/* ================== UTILS TZ ================== */
+function fmtHistoryValue(field, value, maps) {
+   if (value == null || value === "") return "";
 
-function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
-   const d = new Date(dateLike);
-
-   if (timeZone && timeZone !== MOLDOVA_TZ) {
-      const p = new Intl.DateTimeFormat("en-GB", {
-         timeZone,
-         hour12: false,
-         year: "numeric",
-         month: "2-digit",
-         day: "2-digit",
-         hour: "2-digit",
-         minute: "2-digit",
-         second: "2-digit",
-      }).formatToParts(d);
-      const get = (t) => +p.find((x) => x.type === t).value;
-      return {
-         y: get("year"),
-         m: get("month"),
-         d: get("day"),
-         H: get("hour"),
-         M: get("minute"),
-         S: get("second"),
-      };
+   if (field === "startTime") {
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return safeStr(value);
+      return d.toLocaleString("ro-RO", {
+         dateStyle: "medium",
+         timeStyle: "short",
+      });
    }
 
-   const p = TZ_PARTS_FMT_CANVAS.formatToParts(d);
-   const get = (t) => +p.find((x) => x.type === t).value;
+   if (field === "gearbox") {
+      const v = safeStr(value).toLowerCase();
+      return v === "automat" ? "Automat" : "Manual";
+   }
+
+   if (field === "color") return safeStr(value);
+
+   if (field === "userId") {
+      const k = String(value);
+      return maps?.userById?.get(k) || k;
+   }
+
+   if (field === "instructorId") {
+      const k = String(value);
+      return maps?.instrById?.get(k) || k;
+   }
+
+   if (typeof value === "boolean") return value ? "Da" : "Nu";
+
+   return safeStr(value);
+}
+
+function buildChangesFromHistoryItemTrack(h, maps) {
+   const action = safeStr(h?.action).toUpperCase();
+   if (action === "CREATE" || action === "CREATED") return [];
+
+   if (h && h.changedFields && typeof h.changedFields === "object") {
+      return Object.entries(h.changedFields)
+         .map(([field, diff]) => {
+            if (!diff || typeof diff !== "object") return null;
+            if (!("from" in diff) && !("to" in diff)) return null;
+
+            const from = fmtHistoryValue(field, diff.from, maps);
+            const to = fmtHistoryValue(field, diff.to, maps);
+            if (from === to) return null;
+
+            return {
+               field,
+               label: HISTORY_FIELD_LABEL[field] || field,
+               from,
+               to,
+            };
+         })
+         .filter(Boolean);
+   }
+
+   if (Array.isArray(h?.changes)) {
+      return h.changes
+         .map((c) => {
+            const field = c?.field || c?.path || "(câmp)";
+            const from = fmtHistoryValue(field, c?.from, maps);
+            const to = fmtHistoryValue(field, c?.to ?? c?.value, maps);
+            if (from === to) return null;
+
+            return {
+               field,
+               label: HISTORY_FIELD_LABEL[field] || field,
+               from,
+               to,
+            };
+         })
+         .filter(Boolean);
+   }
+
+   return [];
+}
+
+function whoFromHistory(h) {
+   const u = h?.changedByUser || h?.user || h?.author || null;
+   const full = u ? `${u.firstName || ""} ${u.lastName || ""}`.trim() : "";
+   return full || safeStr(h?.changedByName) || safeStr(h?.by) || "";
+}
+
+function whenFromHistory(h) {
+   return h?.createdAt || h?.timestamp || h?.date || h?.updatedAt || null;
+}
+
+function changesToLines(changes) {
+   return (changes || []).map((c) => {
+      const from = safeStr(c.from);
+      const to = safeStr(c.to);
+      const label = safeStr(c.label);
+
+      if (!from && to) return `S-a adăugat: ${label} „${to}”`;
+      if (from && !to) return `S-a șters: ${label} „${from}”`;
+      if (from && to) return `S-a modificat: ${label} „${from}” → „${to}”`;
+      return `Modificare: ${label}`;
+   });
+}
+
+/* ================== RANGE RESERVATIONS from INSTRUCTOR HISTORY (client-side) ================== */
+
+function addMinutes(date, minutes) {
+   const d = date instanceof Date ? date : new Date(date);
+   if (Number.isNaN(d.getTime())) return null;
+   return new Date(d.getTime() + minutes * 60 * 1000);
+}
+
+function fmtTimeShortRO(d, tz = MOLDOVA_TZ) {
+   if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "";
+   return new Intl.DateTimeFormat("ro-RO", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+   }).format(d);
+}
+
+function pickFromChanges(h, field) {
+   const cf = h?.changedFields?.[field];
+   if (cf && typeof cf === "object") {
+      if ("to" in cf) return cf.to;
+      if ("value" in cf) return cf.value;
+   }
+   const ch = Array.isArray(h?.changes)
+      ? h.changes.find((c) => c?.field === field || c?.path === field)
+      : null;
+   if (!ch) return null;
+   if ("to" in ch) return ch.to;
+   if ("value" in ch) return ch.value;
+   return null;
+}
+
+function extractReservationSnapshotFromAny(item, maps, fallbackInstructorId) {
+   if (!item) return null;
+
+   const r =
+      item.reservation ||
+      item.reservationData ||
+      item.reservationSnapshot ||
+      item.data?.reservation ||
+      null;
+
+   const src = r || item;
+
+   const idExplicit =
+      src.reservationId ??
+      src.reservation_id ??
+      item.reservationId ??
+      item.reservation_id ??
+      src.id ??
+      src._id ??
+      null;
+
+   const rid = idExplicit ?? item.entityId ?? null;
+   if (rid == null) return null;
+
+   const startLike =
+      src.startTime ??
+      src.start_time ??
+      src.start ??
+      src.date ??
+      pickFromChanges(item, "startTime") ??
+      pickFromChanges(item, "start_time") ??
+      pickFromChanges(item, "start") ??
+      null;
+
+   const start = startLike ? new Date(startLike) : null;
+   if (!start || Number.isNaN(start.getTime())) return null;
+
+   const instructorId =
+      src.instructorId ??
+      src.instructor_id ??
+      item.instructorId ??
+      item.instructor_id ??
+      (fallbackInstructorId != null ? String(fallbackInstructorId) : null);
+
+   const userId =
+      src.userId ??
+      src.user_id ??
+      src.user?.id ??
+      item.userId ??
+      item.user_id ??
+      null;
+
+   const userName =
+      (src.user
+         ? `${src.user.firstName || ""} ${src.user.lastName || ""}`.trim()
+         : "") ||
+      (userId != null ? maps?.userById?.get(String(userId)) : "") ||
+      "";
+
+   const instructorName =
+      instructorId != null ? maps?.instrById?.get(String(instructorId)) : "";
+
+   const sector = src.sector ?? pickFromChanges(item, "sector") ?? "";
+   const gearbox = src.gearbox ?? pickFromChanges(item, "gearbox") ?? "";
+
+   const isCancelled = !!(
+      src.isCancelled ??
+      src.is_cancelled ??
+      pickFromChanges(item, "isCancelled") ??
+      pickFromChanges(item, "is_cancelled")
+   );
+
+   const isConfirmed = !!(
+      src.isConfirmed ??
+      src.is_confirmed ??
+      pickFromChanges(item, "isConfirmed") ??
+      pickFromChanges(item, "is_confirmed")
+   );
+
+   const action = safeStr(item?.action).toUpperCase();
+   const looksDeleted =
+      action === "DELETE" ||
+      action === "DELETED" ||
+      action === "REMOVE" ||
+      action === "REMOVED";
+   if (looksDeleted) return null;
+
    return {
-      y: get("year"),
-      m: get("month"),
-      d: get("day"),
-      H: get("hour"),
-      M: get("minute"),
-      S: get("second"),
+      id: String(rid),
+      start,
+      startISO: start.toISOString(),
+      end: addMinutes(start, RANGE_MINUTES),
+      userId: userId != null ? String(userId) : null,
+      userName,
+      instructorId: instructorId != null ? String(instructorId) : null,
+      instructorName: instructorName || "",
+      sector: sector || "",
+      gearbox: gearbox || "",
+      isCancelled,
+      isConfirmed,
+      _t: new Date(whenFromHistory(item) || 0).getTime(),
    };
 }
 
-function ymdStrInTZ(dateLike, timeZone = MOLDOVA_TZ) {
-   const { y, m, d } = partsInTZ(dateLike, timeZone);
-   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-}
+function normalizeRangeReservationsFromInstructorHistory(
+   raw,
+   maps,
+   fromMs,
+   toMs,
+   fallbackInstructorId
+) {
+   const list = Array.isArray(raw)
+      ? raw
+      : Array.isArray(raw?.items)
+      ? raw.items
+      : [];
 
-function hhmmInTZ(dateLike, timeZone = MOLDOVA_TZ) {
-   const { H, M } = partsInTZ(dateLike, timeZone);
-   return `${String(H).padStart(2, "0")}:${String(M).padStart(2, "0")}`;
-}
+   const byId = new Map();
 
-function localKeyFromTs(dateLike, timeZone = MOLDOVA_TZ) {
-   return `${ymdStrInTZ(dateLike, timeZone)}|${hhmmInTZ(dateLike, timeZone)}`;
-}
+   for (const it of list) {
+      const snap = extractReservationSnapshotFromAny(
+         it,
+         maps,
+         fallbackInstructorId
+      );
+      if (!snap) continue;
 
-/* ================== GEOMETRIE SLOTURI ================== */
+      const t = snap.start.getTime();
+      if (!Number.isFinite(t)) continue;
+      if (t < fromMs || t >= toMs) continue;
 
-const CONTENT_PAD_TOP = 0;
-const CONTENT_PAD_BOTTOM = 4;
-const WAIT_SLOTS_PER_COLUMN = 3;
+      const prev = byId.get(snap.id);
+      if (!prev || (snap._t || 0) >= (prev._t || 0)) byId.set(snap.id, snap);
+   }
 
-function computeWorldHeight(slotsCount, slotHeight, slotGap) {
-   if (!slotsCount) return 0;
-   return (
-      CONTENT_PAD_TOP +
-      slotsCount * slotHeight +
-      Math.max(0, slotsCount - 1) * slotGap +
-      CONTENT_PAD_BOTTOM
-   );
+   const out = Array.from(byId.values());
+   out.sort((a, b) => a.start.getTime() - b.start.getTime());
+   return out;
 }
 
 /* ================== HEADER DOM PESTE CANVAS ================== */
@@ -625,18 +496,7 @@ const CanvasInstructorHeader = memo(
       const carForInst = useMemo(() => {
          const iid = String(inst?.id ?? "");
          if (!iid) return null;
-         return (
-            cars.find(
-               (c) =>
-                  String(
-                     c.instructorId ??
-                        c.instructor_id ??
-                        c.instructor ??
-                        c.instructorIdFk ??
-                        ""
-                  ) === iid
-            ) || null
-         );
+         return cars.find((c) => String(c.instructorId ?? "") === iid) || null;
       }, [cars, inst]);
 
       const displayName = useMemo(() => {
@@ -650,26 +510,12 @@ const CanvasInstructorHeader = memo(
 
       const displayPlate = useMemo(() => {
          if (!carForInst) return "";
-         return (
-            carForInst.plateNumber ??
-            carForInst.plate ??
-            carForInst.number ??
-            ""
-         )
-            .toString()
-            .trim();
+         return (carForInst.plateNumber ?? "").toString().trim();
       }, [carForInst]);
 
       const displayInstPhone = useMemo(() => {
-         return (
-            instrFull?.phone ??
-            instrFull?.phoneNumber ??
-            instructorUser?.phone ??
-            ""
-         )
-            .toString()
-            .trim();
-      }, [instrFull, instructorUser]);
+         return (instructorUser?.phone ?? "").toString().trim();
+      }, [instructorUser]);
 
       const privateMsg = (instructorUser?.privateMessage ?? "").toString();
       const todaysText = useMemo(
@@ -878,755 +724,75 @@ const CanvasInstructorHeader = memo(
    }
 );
 
-/* ================== DESENARE CANVAS ================== */
-
-function buildEventsSignatureForDay(events) {
-   if (!Array.isArray(events) || !events.length) return "0";
-
-   const simplified = events.map((ev) => {
-      const id = ev?.id ?? ev?.raw?.id ?? "";
-      const s =
-         ev.start instanceof Date ? ev.start.getTime() : +new Date(ev.start);
-      const e = ev.end instanceof Date ? ev.end.getTime() : +new Date(ev.end);
-      const instId = ev.instructorId ?? ev.raw?.instructorId ?? "";
-      const color = ev.color || "";
-      return {
-         id: String(id),
-         s,
-         e,
-         instId: String(instId),
-         color: String(color),
-      };
-   });
-
-   simplified.sort((a, b) => {
-      if (a.instId !== b.instId) return a.instId < b.instId ? -1 : 1;
-      if (a.s !== b.s) return a.s - b.s;
-      if (a.id !== b.id) return a.id < b.id ? -1 : 1;
-      return 0;
-   });
-
-   let out = "";
-   for (const ev of simplified) {
-      out += `${ev.instId}:${ev.id}:${ev.s}-${ev.e}:${ev.color};`;
-   }
-   return out;
-}
-
-function buildSlotsSignature(slotGeoms) {
-   if (!Array.isArray(slotGeoms) || !slotGeoms.length) return "0";
-   let out = "";
-   for (const sg of slotGeoms) {
-      out += `${sg.index}:${sg.startMs}-${sg.endMs};`;
-   }
-   return out;
-}
-
-function buildBlockedSignature(blockedKeyMap, instructors) {
-   if (!blockedKeyMap || !Array.isArray(instructors) || !instructors.length)
-      return "0";
-
-   const ids = instructors
-      .map((inst) => (inst && inst.id != null ? String(inst.id) : ""))
-      .filter(Boolean)
-      .sort();
-
-   const parts = [];
-
-   for (const id of ids) {
-      let set = null;
-
-      if (blockedKeyMap instanceof Map) {
-         set = blockedKeyMap.get(id);
-      } else if (typeof blockedKeyMap === "object") {
-         set = blockedKeyMap[id];
-      }
-
-      if (!set) continue;
-
-      let arr =
-         set instanceof Set
-            ? Array.from(set)
-            : Array.isArray(set)
-            ? set.slice()
-            : [];
-
-      arr = arr.map(String).sort();
-      if (!arr.length) continue;
-
-      parts.push(`${id}:${arr.join(",")}`);
-   }
-
-   return parts.join("|") || "0";
-}
-
-function buildWaitNotesSignature(waitNotes) {
-   if (!waitNotes || typeof waitNotes !== "object") return "0";
-   const keys = Object.keys(waitNotes);
-   if (!keys.length) return "0";
-   keys.sort();
-   let out = "";
-   for (const k of keys) {
-      const v = (waitNotes[k] || "").toString();
-      out += `${k}:${v};`;
-   }
-   return out;
-}
-
-function drawAll({
-   ctx,
-   width,
-   height,
-   hoursColWidth,
-   headerHeight,
-   colWidth,
-   colGap,
-   colsCount,
-   colsPerRow,
-   rowsCount,
-   rowGap,
-   rowHeights,
-   instructors,
-   events,
-   slotGeoms,
-   slotHeight,
-   slotGap,
-   hitMap,
-   blockedKeyMap,
-   highlightEventId,
-   zoom = 1,
-   preGrid = null,
-   preGridWidth = 0,
-   waitNotesMap = null,
-   editingWait = null,
-}) {
-   if (!ctx || !width || !height) return;
-
-   const slotsCount = slotGeoms.length || 0;
-   const worldHeight = computeWorldHeight(slotsCount, slotHeight, slotGap);
-
-   const effectiveRowHeights =
-      rowHeights && rowHeights.length
-         ? rowHeights
-         : new Array(rowsCount).fill(worldHeight);
-
-   const maxWorldHeight = effectiveRowHeights.reduce(
-      (max, h) => (h > max ? h : max),
-      worldHeight
-   );
-
-   const eventsByInst = {};
-   (events || []).forEach((ev) => {
-      const iid = String(ev.instructorId);
-      if (!eventsByInst[iid]) eventsByInst[iid] = [];
-      eventsByInst[iid].push(ev);
-   });
-
-   const slotIndexByLabel = new Map();
-   slotGeoms.forEach((sg, idx) => {
-      if (sg.label) slotIndexByLabel.set(sg.label, idx);
-   });
-
-   const baseBg = resolveColor("--black-p");
-
-   const emptySlotBgPads = resolveColor(NO_COLOR_TOKEN);
-   const emptySlotBgDefault = resolveColor(DEFAULT_EVENT_COLOR_TOKEN);
-
-   const emptySlotTextColor = resolveColor("--white-s");
-   const blackoutFillColor = resolveColor("--event-red");
-   const blackoutBorderColor = baseBg;
-   const eventTextColor = resolveColor("--white-p");
-   const activeBorderColor = resolveColor("--event-yellow");
-
-   const z = zoom || 1;
-   const fontScale = Math.max(0.6, Math.min(1.6, z));
-   const fontMetaPx = 11 * fontScale;
-   const fontNotesPx = 10 * fontScale;
-   const padX = 8 * fontScale;
-   const padY = 6 * fontScale;
-   const lineHeight = 13 * fontScale;
-
-   const BASE_EVENT_RADIUS = 18;
-   const BASE_COL_DELTA = 4;
-   const BASE_BORDER_DELTA = -1;
-
-   const eventRadius = BASE_EVENT_RADIUS * fontScale;
-   const columnRadius = eventRadius + BASE_COL_DELTA * fontScale;
-   const slotRadius = eventRadius;
-   const eventBorderRadius = Math.max(
-      0,
-      eventRadius + BASE_BORDER_DELTA * fontScale
-   );
-
-   const hasPreGrid =
-      preGrid && preGrid.columns > 0 && preGrid.rows > 0 && colWidth > 0;
-   const preCols = hasPreGrid ? preGrid.columns : 0;
-   const preRows = hasPreGrid ? preGrid.rows : 0;
-
-   const waitPadIndexByInstId = new Map();
-   let waitPadCounter = 0;
-
-   ctx.save();
-   ctx.clearRect(0, 0, width, height);
-
-   if (hasPreGrid && preCols > 0 && preRows > 0) {
-      const rowTop = 0;
-      const colHeight = headerHeight + maxWorldHeight;
-      const slotAreaTopGlobal = rowTop + headerHeight + CONTENT_PAD_TOP;
-
-      for (let pgCol = 0; pgCol < preCols; pgCol++) {
-         const colX = hoursColWidth + pgCol * (colWidth + colGap);
-         const w = colWidth;
-
-         ctx.save();
-         const grad = ctx.createLinearGradient(
-            0,
-            rowTop,
-            0,
-            rowTop + colHeight
-         );
-         grad.addColorStop(0, baseBg);
-         grad.addColorStop(0.1, baseBg);
-         grad.addColorStop(1, baseBg);
-         ctx.fillStyle = grad;
-         drawRoundRect(ctx, colX, rowTop, w, colHeight, columnRadius);
-         ctx.fill();
-         ctx.restore();
-
-         for (let pgRow = 0; pgRow < preRows; pgRow++) {
-            let cellY;
-            let cellH = slotHeight;
-
-            if (slotGeoms.length >= preRows) {
-               const sg = slotGeoms[pgRow];
-               const idx = sg.index;
-               cellY = slotAreaTopGlobal + idx * (slotHeight + slotGap);
-            } else {
-               const usableH =
-                  maxWorldHeight - CONTENT_PAD_TOP - CONTENT_PAD_BOTTOM;
-               const totalGaps = Math.max(0, preRows - 1) * slotGap;
-               const hPer = preRows > 0 ? (usableH - totalGaps) / preRows : 0;
-               cellY = slotAreaTopGlobal + pgRow * (hPer + slotGap);
-               cellH = hPer || slotHeight;
-            }
-
-            if (cellY > height || cellY + cellH < 0) continue;
-
-            ctx.save();
-            ctx.fillStyle = emptySlotBgDefault;
-            drawRoundRect(ctx, colX + 4, cellY, w - 8, cellH, slotRadius);
-            ctx.fill();
-            ctx.restore();
-         }
-      }
-   }
-
-   const highlightEventIdForRender = highlightEventId;
-
-   let currentRowTop = 0;
-
-   for (let row = 0; row < rowsCount; row++) {
-      const rowHeight = effectiveRowHeights[row] ?? worldHeight;
-      const rowTop = currentRowTop;
-      const rowContentTop = rowTop + headerHeight;
-
-      const rowStartIdx = row * colsPerRow;
-      const colsInThisRow = Math.min(
-         colsPerRow,
-         Math.max(0, colsCount - rowStartIdx)
-      );
-
-      const slotAreaTop = rowContentTop + CONTENT_PAD_TOP;
-
-      for (let c = 0; c < colsInThisRow; c++) {
-         const instIdx = rowStartIdx + c;
-         const inst = instructors[instIdx];
-         if (!inst) continue;
-
-         const colX = hoursColWidth + preGridWidth + c * (colWidth + colGap);
-         const w = colWidth;
-
-         const instId = String(inst.id ?? "");
-         const instEvents = eventsByInst[instId] || [];
-         const instBlockedSet = blockedKeyMap
-            ? blockedKeyMap.get
-               ? blockedKeyMap.get(instId) || null
-               : blockedKeyMap[instId] || null
-            : null;
-
-         const isPadCol = instId.startsWith("__pad_");
-         const instNameLower = String(inst.name || "").toLowerCase();
-         const isCancelPad =
-            isPadCol &&
-            (instId === "__pad_1" || instNameLower.includes("anular"));
-         const isWaitPad = isPadCol && !isCancelPad;
-
-         let waitPadIndex = null;
-         if (isWaitPad) {
-            if (!waitPadIndexByInstId.has(instId)) {
-               waitPadIndexByInstId.set(instId, waitPadCounter++);
-            }
-            waitPadIndex = waitPadIndexByInstId.get(instId);
-         }
-
-         const maxSlotsForThisColumn = isPadCol
-            ? Math.min(WAIT_SLOTS_PER_COLUMN, slotGeoms.length)
-            : slotGeoms.length;
-
-         const worldHeightForColumn = isPadCol
-            ? computeWorldHeight(maxSlotsForThisColumn, slotHeight, slotGap)
-            : worldHeight;
-
-         ctx.save();
-
-         const sectorSlug = (
-            inst.sectorSlug ||
-            inst.sector ||
-            inst.metaSector ||
-            inst.sector_norm ||
-            ""
-         )
-            .toString()
-            .toLowerCase();
-
-         let colTopColor = baseBg;
-         let colBottomColor = baseBg;
-
-         if (sectorSlug.includes("botanica")) {
-            colBottomColor = resolveColor("--event-blue");
-         } else if (sectorSlug.includes("ciocana")) {
-            colBottomColor = resolveColor("--event-pink");
-         } else if (sectorSlug.includes("buiucani")) {
-            colBottomColor = resolveColor("--event-green");
-         }
-
-         const colHeight = headerHeight + worldHeightForColumn;
-
-         const grad = ctx.createLinearGradient(
-            0,
-            rowTop,
-            0,
-            rowTop + colHeight
-         );
-         grad.addColorStop(0, colBottomColor);
-         grad.addColorStop(0.1, colTopColor);
-         grad.addColorStop(1, colTopColor);
-
-         ctx.fillStyle = grad;
-         drawRoundRect(ctx, colX, rowTop, w, colHeight, columnRadius);
-         ctx.fill();
-         ctx.restore();
-
-         // =================== SLOTURI GOALE / ASTEPTARI / ANULARI ===================
-         for (let si = 0; si < maxSlotsForThisColumn; si++) {
-            const sg = slotGeoms[si];
-            if (!sg) break;
-
-            const idx = sg.index;
-            const slotY = slotAreaTop + idx * (slotHeight + slotGap);
-            const slotH = slotHeight;
-            const slotX = colX + 4;
-            const slotW = w - 8;
-
-            if (slotY > height || slotY + slotH < 0) continue;
-
-            if (
-               sg.startMs &&
-               sg.endMs &&
-               slotOverlapsEvents(sg.startMs, sg.endMs, instEvents)
-            ) {
-               continue;
-            }
-
-            const slotKey =
-               sg.slot && sg.slot.start ? localKeyFromTs(sg.slot.start) : null;
-
-            // slot de 19:30 ?
-            const isSlot19_30 = sg.label === "19:30";
-
-            let isBlocked =
-               !!instBlockedSet && slotKey && instBlockedSet.has
-                  ? instBlockedSet.has(slotKey)
-                  : !!(
-                       instBlockedSet &&
-                       Array.isArray(instBlockedSet) &&
-                       instBlockedSet.includes(slotKey)
-                    );
-
-            // ✅ pentru sloturile de 19:30 fără eveniment, ignorăm blocajele
-            if (isSlot19_30) {
-               isBlocked = false;
-            }
-
-            ctx.save();
-
-            const slotBaseBg =
-               isCancelPad || isWaitPad ? emptySlotBgPads : emptySlotBgDefault;
-
-            let fillColor = slotBaseBg;
-
-            if (isBlocked) {
-               fillColor = blackoutFillColor;
-            } else if (isSlot19_30) {
-               // ✅ 19:30 fără event: roșu, fără border
-               fillColor = blackoutFillColor;
-            }
-
-            ctx.fillStyle = fillColor;
-            drawRoundRect(ctx, slotX, slotY, slotW, slotH, slotRadius);
-            ctx.fill();
-
-            if (isBlocked) {
-               ctx.lineWidth = 1.5;
-               ctx.strokeStyle = blackoutBorderColor;
-               drawRoundRect(
-                  ctx,
-                  slotX + 1.5,
-                  slotY + 1.5,
-                  slotW - 3,
-                  slotH - 3,
-                  Math.max(0, slotRadius - 1.5 * fontScale)
-               );
-               ctx.stroke();
-            }
-
-            ctx.fillStyle = emptySlotTextColor;
-            ctx.font = `${fontMetaPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-            ctx.textBaseline = "top";
-
-            let slotLabelText = sg.label || "";
-            let shouldDrawText = true;
-            let waitSlotGlobalIndex = null;
-
-            if (isWaitPad) {
-               const localIdx = si;
-               waitSlotGlobalIndex =
-                  waitPadIndex != null
-                     ? waitPadIndex * WAIT_SLOTS_PER_COLUMN + localIdx
-                     : localIdx;
-
-               const key1 = String(waitSlotGlobalIndex);
-               const fromMap =
-                  waitNotesMap && typeof waitNotesMap === "object"
-                     ? waitNotesMap[key1] || waitNotesMap[waitSlotGlobalIndex]
-                     : "";
-
-               slotLabelText = fromMap || WAIT_PLACEHOLDER_TEXT;
-
-               if (
-                  editingWait &&
-                  String(editingWait.instId) === instId &&
-                  Number(editingWait.slotIndex) === waitSlotGlobalIndex
-               ) {
-                  shouldDrawText = false;
-               }
-            }
-
-            if (shouldDrawText && slotLabelText) {
-               const maxTextWidth = Math.max(0, slotW - padX * 2);
-               const lines = wrapText(ctx, slotLabelText, maxTextWidth, 3);
-               for (let li = 0; li < lines.length; li++) {
-                  ctx.fillText(
-                     lines[li],
-                     slotX + padX,
-                     slotY + padY + li * lineHeight
-                  );
-               }
-            }
-
-            ctx.restore();
-
-            if (hitMap && sg.slot?.start && sg.slot?.end) {
-               if (!isPadCol) {
-                  hitMap.push({
-                     x: slotX,
-                     y: slotY,
-                     w: slotW,
-                     h: slotH,
-                     kind: "empty-slot",
-                     instructorId: instId,
-                     slotStart: sg.slot.start.toISOString(),
-                     slotEnd: sg.slot.end.toISOString(),
-                  });
-               } else if (isWaitPad) {
-                  const localIdx = si;
-                  const globalIdx =
-                     waitPadIndex != null
-                        ? waitPadIndex * WAIT_SLOTS_PER_COLUMN + localIdx
-                        : idx;
-                  hitMap.push({
-                     x: slotX,
-                     y: slotY,
-                     w: slotW,
-                     h: slotH,
-                     kind: "wait-slot",
-                     instructorId: instId,
-                     slotIndex: globalIdx,
-                     slotStart: sg.slot.start.toISOString(),
-                     slotEnd: sg.slot.end.toISOString(),
-                  });
-               }
-            }
-         }
-
-         // =================== EVENIMENTE ===================
-         for (const ev of instEvents) {
-            const displayStart = ev.start;
-            const displayEnd = ev.end;
-
-            let slotIdx;
-
-            if (typeof ev._padSlotIndex === "number") {
-               slotIdx = ev._padSlotIndex;
-            } else {
-               const labelForIndex = formatHHMM(ev.start);
-               slotIdx = slotIndexByLabel.get(labelForIndex);
-
-               if (slotIdx == null) {
-                  let bestIdx = 0;
-                  let bestDiff = Infinity;
-                  const evMs = ev.start.getTime();
-                  slotGeoms.forEach((sg, idx2) => {
-                     const diff = Math.abs(evMs - sg.startMs);
-                     if (diff < bestDiff) {
-                        bestDiff = diff;
-                        bestIdx = idx2;
-                     }
-                  });
-                  slotIdx = bestIdx;
-               }
-            }
-
-            const cardX = colX + 4;
-            const cardY = slotAreaTop + slotIdx * (slotHeight + slotGap);
-            const cardW = w - 8;
-            const cardH = slotHeight;
-
-            if (
-               cardX + cardW < hoursColWidth ||
-               cardX > width ||
-               cardY > height ||
-               cardY + cardH < 0
-            ) {
-               continue;
-            }
-
-            const color = resolveColor(normalizeEventColor(ev.color));
-            const raw = ev.raw || {};
-
-            const evLocalKey =
-               ev.localSlotKey || (ev.start ? localKeyFromTs(ev.start) : null);
-
-            let isBlockedEvent =
-               !!instBlockedSet && evLocalKey && instBlockedSet.has
-                  ? instBlockedSet.has(evLocalKey)
-                  : !!(
-                       instBlockedSet &&
-                       Array.isArray(instBlockedSet) &&
-                       instBlockedSet.includes(evLocalKey)
-                    );
-
-            // ✅ evenimente mutate în coloana „Anulari” NU mai primesc bordură de blackout
-            if (ev._movedToCancelPad) {
-               isBlockedEvent = false;
-            }
-
-            const isHighlighted =
-               highlightEventIdForRender &&
-               String(ev.id) === String(highlightEventIdForRender);
-
-            ctx.save();
-
-            ctx.fillStyle = color;
-            drawRoundRect(ctx, cardX, cardY, cardW, cardH, eventRadius);
-            ctx.fill();
-
-            const paddingX = padX;
-            const textX = cardX + paddingX;
-            let textY = cardY + padY;
-            const lineH = lineHeight;
-            const maxTextWidth = Math.max(0, cardW - paddingX * 2);
-
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(cardX, cardY, cardW, cardH);
-            ctx.clip();
-
-            ctx.fillStyle = eventTextColor;
-            ctx.textBaseline = "top";
-            ctx.font = `${fontMetaPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-
-            // ORA (start–end + cutie)
-            let timeText = formatHHMM(displayStart);
-
-            // ⭐ / ❗ din flag-urile rezervării
-            const isFavorite = raw.isFavorite === true;
-            const isImportant = raw.isImportant === true;
-
-            let statusEmoji = "";
-            if (isFavorite) statusEmoji += "⭐";
-            if (isImportant) statusEmoji += statusEmoji ? " · ❗" : "❗";
-
-            // construim linia meta (pill-ul de sus din card)
-            const metaParts = [];
-            if (timeText) metaParts.push(timeText);
-            if (ev.gearboxLabel) metaParts.push(ev.gearboxLabel);
-            if (statusEmoji) metaParts.push(statusEmoji);
-
-            const metaLine = metaParts.join(" · ");
-
-            if (metaLine) {
-               const metaLines = wrapText(ctx, metaLine, maxTextWidth, 1);
-               for (const line of metaLines) {
-                  ctx.fillText(line, textX, textY);
-                  textY += lineH;
-               }
-            }
-
-            const fallbackName =
-               raw?.clientName ||
-               raw?.customerName ||
-               raw?.name ||
-               ev.title ||
-               "Programare";
-
-            const person = (
-               `${ev.studentFirst || ""} ${ev.studentLast || ""}`.trim() ||
-               fallbackName
-            ).trim();
-
-            const phoneVal = raw?.phone || "";
-
-            const noteFromEvent = (ev.privateMessage || "").toString().trim();
-
-            const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
-               .toString()
-               .trim();
-
-            const bothNotes = [
-               noteFromEvent && `${noteFromEvent}`,
-               noteFromProfile && `${noteFromProfile}`,
-            ]
-               .filter(Boolean)
-               .join(" — ");
-
-            let nameY = null;
-            let nameLinesCount = 0;
-
-            if (person) {
-               const nameLines = wrapText(ctx, person, maxTextWidth, 2);
-               if (nameLines.length) {
-                  nameY = textY;
-                  nameLinesCount = nameLines.length;
-                  for (const line of nameLines) {
-                     ctx.fillText(line, textX, textY);
-                     textY += lineH;
-                  }
-               }
-            }
-
-            if (phoneVal) {
-               const phoneLines = wrapText(ctx, phoneVal, maxTextWidth, 1);
-               for (const line of phoneLines) {
-                  ctx.fillText(line, textX, textY);
-                  textY += lineH;
-               }
-            }
-
-            if (bothNotes) {
-               ctx.font = `${fontNotesPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-               const notesLines = wrapText(
-                  ctx,
-                  bothNotes.replace(/\s+/g, " ").trim(),
-                  maxTextWidth,
-                  2
-               );
-               for (const line of notesLines) {
-                  ctx.fillText(line, textX, textY);
-                  textY += lineH;
-               }
-            }
-
-            ctx.restore();
-
-            if (isBlockedEvent) {
-               ctx.lineWidth = 1.3;
-               ctx.strokeStyle = blackoutBorderColor;
-               drawRoundRect(
-                  ctx,
-                  cardX + 1,
-                  cardY + 1,
-                  cardW - 2,
-                  cardH - 2,
-                  eventBorderRadius
-               );
-               ctx.stroke();
-            }
-
-            if (isHighlighted) {
-               ctx.lineWidth = 2;
-               ctx.strokeStyle = activeBorderColor;
-               drawRoundRect(
-                  ctx,
-                  cardX + 1,
-                  cardY + 1,
-                  cardW - 2,
-                  cardH - 2,
-                  eventBorderRadius
-               );
-               ctx.stroke();
-            }
-
-            ctx.restore();
-
-            if (hitMap) {
-               const reservationId = raw?.id ?? ev.id;
-
-               hitMap.push({
-                  x: cardX,
-                  y: cardY,
-                  w: cardW,
-                  h: cardH,
-                  kind: "reservation",
-                  reservationId,
-                  ev,
-               });
-
-               if (
-                  ENABLE_STUDENT_HITS &&
-                  nameY !== null &&
-                  nameLinesCount > 0
-               ) {
-                  hitMap.push({
-                     x: cardX,
-                     y: nameY - 2,
-                     w: cardW,
-                     h: nameLinesCount * lineHeight + 4,
-                     kind: "student",
-                     reservationId,
-                     ev,
-                  });
-               }
-            }
-         }
-      }
-
-      currentRowTop += headerHeight + rowHeight + rowGap;
-   }
-
-   ctx.restore();
-}
-
 /* ================== COMPONENTA REACT ================== */
 
-function DayviewCanvasTrack({
+function openReservationPopup(ev) {
+   if (!ev) return;
+   const reservationId = ev.raw?.id ?? ev.id;
+   if (!reservationId) return;
+   openPopup("reservationEdit", { reservationId });
+}
+
+function openStudentPopup(ev) {
+   if (!ev) return;
+   const raw = ev.raw || {};
+
+   const fallbackName =
+      raw?.clientName ||
+      raw?.customerName ||
+      raw?.name ||
+      ev.title ||
+      "Programare";
+
+   const phoneVal = getStudentPhoneFromEv(ev);
+
+   const noteFromEvent = (ev.eventPrivateMessage || "").toString().trim();
+   const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
+      .toString()
+      .trim();
+
+   const reservationId = raw?.id ?? ev.id;
+
+   const userIdRaw =
+      raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
+
+   const emailRaw = raw?.user?.email ?? raw?.email ?? ev?.studentEmail ?? "";
+
+   const firstNameSeed =
+      (ev.studentFirst || "").trim() || fallbackName.split(" ")[0] || "";
+   const lastNameSeed = (ev.studentLast || "").trim();
+
+   if (ev.studentId || userIdRaw) {
+      openPopup("studentDetails", {
+         student: {
+            id: ev.studentId ?? null,
+            userId: userIdRaw ?? null,
+            firstName: firstNameSeed,
+            lastName: lastNameSeed,
+            phone: phoneVal || "",
+            email: emailRaw || "",
+            privateMessage: noteFromProfile,
+            isConfirmed: !!ev.isConfirmed,
+         },
+         noteFromEvent,
+         studentPrivateMessage: noteFromProfile,
+         fromReservationId: reservationId,
+         fromReservationStartISO:
+            raw?.startTime || raw?.start || ev.start || null,
+      });
+   } else {
+      openReservationPopup(ev);
+   }
+}
+
+export default function DayviewCanvasTrack({
    dayStart,
    dayEnd,
    instructors = [],
    events = [],
    slots = [],
    layout = {},
-   timeMarks = DEFAULT_TIME_MARKS, // eslint-disable-line no-unused-vars
+   timeMarks = DEFAULT_TIME_MARKS,
    onCreateSlot,
    blockedKeyMap,
    blackoutVer = 0,
@@ -1637,16 +803,17 @@ function DayviewCanvasTrack({
    users = [],
    zoom = 1,
    preGrid,
-   initialWaitNotes = null,
+   onManualSelection,
 }) {
    const canvasRef = useRef(null);
    const hitMapRef = useRef([]);
    const lastDrawSigRef = useRef(null);
 
-   // 🔹 pentru long-press / hold
+   const longPressStartRef = useRef(null);
    const longPressTimerRef = useRef(null);
    const longPressTargetRef = useRef(null);
    const ignoreClickUntilRef = useRef(0);
+   const lastPointerTypeRef = useRef("mouse");
 
    const preGridCols =
       !preGrid || preGrid.enabled === false
@@ -1654,28 +821,480 @@ function DayviewCanvasTrack({
          : typeof preGrid.columns === "number"
          ? preGrid.columns
          : 3;
+
    const preGridRows =
       !preGrid || preGrid.enabled === false
          ? 0
          : typeof preGrid.rows === "number"
          ? preGrid.rows
          : 3;
+
    const hasPreGrid = preGridCols > 0 && preGridRows > 0;
 
    const [themeTick, setThemeTick] = useState(0);
-   const [selectedEventId, setSelectedEventId] = useState(null);
 
-   const [waitNotes, setWaitNotes] = useState(() => initialWaitNotes || {});
+   const [selectedEventId, setSelectedEventId] = useState(
+      getSelectedEvent()?.id ?? null
+   );
 
-   useEffect(() => {
-      if (initialWaitNotes && typeof initialWaitNotes === "object") {
-         setWaitNotes(initialWaitNotes);
+   const [selectedSlot, setSelectedSlot] = useState(() => {
+      const s = getSelectedSlot();
+      return s
+         ? {
+              instructorId: s.instructorId,
+              slotStart: s.slotStart,
+              slotEnd: s.slotEnd,
+           }
+         : null;
+   });
+
+   const [touchToolbar, setTouchToolbar] = useState(null);
+
+   const [waitNotes, setWaitNotes] = useState({});
+   const waitNotesTextMap = useMemo(() => {
+      const res = {};
+      if (!waitNotes || typeof waitNotes !== "object") return res;
+      for (const [key, value] of Object.entries(waitNotes)) {
+         if (!value) continue;
+         if (typeof value === "string") res[key] = value;
+         else if (typeof value === "object" && value.text != null)
+            res[key] = String(value.text || "");
       }
-   }, [initialWaitNotes, dayStart]);
+      return res;
+   }, [waitNotes]);
+
+   const [hiddenVersion, setHiddenVersion] = useState(getHiddenVersion());
 
    const [waitEdit, setWaitEdit] = useState(null);
    const waitInputRef = useRef(null);
    const waitCommitRef = useRef(false);
+
+   const dispatch = useDispatch();
+
+   /* ================== HISTORY + RANGE PANEL (COMUN) ================== */
+
+   const [canvasPx, setCanvasPx] = useState({ w: 0, h: 0 });
+
+   // historyUI: panel ancorat pe un slot / rezervare (dar afiseaza ISTORIC COMUN pentru toate rezervarile din interval)
+   // { instructorId, baseStartISO, anchor:{x,y,w,h} }
+   const [historyUI, setHistoryUI] = useState(null);
+
+   const [historyIdx, setHistoryIdx] = useState(0);
+
+   const [rangeLoading, setRangeLoading] = useState(false);
+   const [rangeError, setRangeError] = useState("");
+   const [rangeItems, setRangeItems] = useState([]);
+   const [rangeMeta, setRangeMeta] = useState(null); // {from, to, label}
+
+   // map: reservationId -> history payload
+   const [rangeHistoryById, setRangeHistoryById] = useState({});
+   const [rangeHistLoading, setRangeHistLoading] = useState(false);
+   const [rangeHistError, setRangeHistError] = useState("");
+
+   const mapsForHistory = useMemo(
+      () => buildNameMaps({ users, instructorsFull }),
+      [users, instructorsFull]
+   );
+
+   const openRangePanelFromEvent = useCallback((ev, anchor) => {
+      const raw = ev?.raw || {};
+      const baseStartISO =
+         raw?.startTime || raw?.start || ev?.start || raw?.date || null;
+
+      const instructorId =
+         raw?.instructorId ?? raw?.instructor_id ?? ev?.instructorId ?? null;
+
+      if (!instructorId || !baseStartISO) return;
+
+      setHistoryUI({
+         instructorId: String(instructorId),
+         baseStartISO: baseStartISO || null,
+         anchor: anchor
+            ? {
+                 x: anchor.x || 0,
+                 y: anchor.y || 0,
+                 w: anchor.w || 0,
+                 h: anchor.h || 0,
+              }
+            : { x: 0, y: 0, w: 0, h: 0 },
+      });
+
+      setHistoryIdx(0);
+   }, []);
+
+   const openRangePanelFromSlot = useCallback((slot, anchor) => {
+      if (!slot?.slotStart || !slot?.instructorId) return;
+
+      setHistoryUI({
+         instructorId: String(slot.instructorId),
+         baseStartISO: slot.slotStart,
+         anchor: anchor
+            ? {
+                 x: anchor.x || 0,
+                 y: anchor.y || 0,
+                 w: anchor.w || 0,
+                 h: anchor.h || 0,
+              }
+            : { x: 0, y: 0, w: 0, h: 0 },
+      });
+
+      setHistoryIdx(0);
+   }, []);
+
+   const closeReservationHistory = useCallback(() => {
+      setHistoryUI(null);
+
+      setHistoryIdx(0);
+
+      setRangeItems([]);
+      setRangeError("");
+      setRangeLoading(false);
+      setRangeMeta(null);
+
+      setRangeHistoryById({});
+      setRangeHistError("");
+      setRangeHistLoading(false);
+   }, []);
+
+   // range fetch (NOW from instructor history) -> lista rezervari in interval
+   useEffect(() => {
+      if (!historyUI) return;
+
+      const instructorId = historyUI.instructorId;
+      const baseStartISO = historyUI.baseStartISO;
+
+      const baseDate = baseStartISO ? new Date(baseStartISO) : null;
+      if (!instructorId || !baseDate || Number.isNaN(baseDate.getTime())) {
+         setRangeItems([]);
+         setRangeError("");
+         setRangeLoading(false);
+         setRangeMeta(null);
+         return;
+      }
+
+      const from = baseDate;
+      const to = addMinutes(from, RANGE_MINUTES);
+      if (!to) return;
+
+      const fromISO = from.toISOString();
+      const label = `${fmtHistoryHeaderRO(
+         fromISO,
+         MOLDOVA_TZ
+      )} – ${fmtTimeShortRO(to, MOLDOVA_TZ)}`;
+
+      let alive = true;
+      setRangeLoading(true);
+      setRangeError("");
+      setRangeItems([]);
+      setRangeMeta({ from, to, label });
+
+      (async () => {
+         try {
+            const data = await getInstructorReservationHistory(
+               String(instructorId)
+            );
+
+            const normalized = normalizeRangeReservationsFromInstructorHistory(
+               data,
+               mapsForHistory,
+               from.getTime(),
+               to.getTime(),
+               String(instructorId)
+            );
+
+            if (!alive) return;
+            setRangeItems(normalized);
+         } catch (e) {
+            if (!alive) return;
+            setRangeError(
+               e?.message ||
+                  "Nu am putut încărca istoricul instructorului pentru acest interval."
+            );
+            setRangeItems([]);
+         } finally {
+            if (!alive) return;
+            setRangeLoading(false);
+         }
+      })();
+
+      return () => {
+         alive = false;
+      };
+   }, [historyUI?.instructorId, historyUI?.baseStartISO, mapsForHistory]);
+
+   // fetch history pentru fiecare rezervare gasita in interval (COMUN)
+   const rangeIdsKey = useMemo(() => {
+      const ids = (rangeItems || [])
+         .map((r) => String(r.id || ""))
+         .filter(Boolean);
+      ids.sort();
+      return ids.join("|");
+   }, [rangeItems]);
+
+   useEffect(() => {
+      if (!historyUI) return;
+
+      if (!rangeIdsKey) {
+         setRangeHistoryById({});
+         setRangeHistError("");
+         setRangeHistLoading(false);
+         return;
+      }
+
+      let alive = true;
+      setRangeHistLoading(true);
+      setRangeHistError("");
+      setRangeHistoryById({});
+
+      const ids = rangeIdsKey.split("|").filter(Boolean);
+
+      const runPool = async (tasks, limit = 4) => {
+         const results = new Array(tasks.length);
+         let i = 0;
+
+         const worker = async () => {
+            while (i < tasks.length) {
+               const idx = i++;
+               try {
+                  results[idx] = await tasks[idx]();
+               } catch (e) {
+                  results[idx] = { __error: e };
+               }
+            }
+         };
+
+         const workers = new Array(Math.max(1, limit))
+            .fill(0)
+            .map(() => worker());
+         await Promise.all(workers);
+         return results;
+      };
+
+      (async () => {
+         try {
+            const tasks = ids.map((rid) => async () => {
+               const data = await getReservationHistory(String(rid));
+               return { rid, data };
+            });
+
+            const results = await runPool(tasks, 4);
+
+            if (!alive) return;
+
+            const map = {};
+            let anyErr = false;
+
+            for (const res of results) {
+               if (!res) continue;
+               if (res.__error) {
+                  anyErr = true;
+                  continue;
+               }
+               map[String(res.rid)] = res.data || null;
+            }
+
+            setRangeHistoryById(map);
+
+            if (anyErr) {
+               setRangeHistError(
+                  "Unele istorice nu au putut fi încărcate (dar restul sunt afișate)."
+               );
+            }
+         } catch (e) {
+            if (!alive) return;
+            setRangeHistError(
+               e?.message ||
+                  "Nu am putut încărca istoricul rezervărilor din acest interval."
+            );
+            setRangeHistoryById({});
+         } finally {
+            if (!alive) return;
+            setRangeHistLoading(false);
+         }
+      })();
+
+      return () => {
+         alive = false;
+      };
+   }, [historyUI, rangeIdsKey]);
+
+   useEffect(() => {
+      if (!historyUI) return;
+      const onKey = (e) => {
+         if (e.key === "Escape") closeReservationHistory();
+      };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+   }, [historyUI, closeReservationHistory]);
+
+   // timeline comun paginabil (toate schimbarile din toate rezervarile gasite)
+   const combinedRangeTimeline = useMemo(() => {
+      if (!rangeItems || !rangeItems.length) return [];
+
+      const out = [];
+
+      for (const r of rangeItems) {
+         const rid = r?.id != null ? String(r.id) : null;
+         if (!rid) continue;
+
+         const histPayload = rangeHistoryById?.[rid];
+         const list = Array.isArray(histPayload)
+            ? histPayload
+            : Array.isArray(histPayload?.items)
+            ? histPayload.items
+            : Array.isArray(histPayload?.history)
+            ? histPayload.history
+            : [];
+
+         if (!list.length) continue;
+
+         const rTime = r?.start ? fmtTimeShortRO(r.start, MOLDOVA_TZ) : "";
+         const rEnd = r?.end ? fmtTimeShortRO(r.end, MOLDOVA_TZ) : "";
+         const ctxLine = `${rTime}${rEnd ? `–${rEnd}` : ""} • ${
+            r?.userName || "—"
+         }${r?.instructorName ? ` • ${r.instructorName}` : ""}${
+            r?.sector ? ` • ${String(r.sector)}` : ""
+         }${r?.gearbox ? ` • ${String(r.gearbox)}` : ""}${
+            typeof r?.isConfirmed === "boolean"
+               ? ` • ${r.isConfirmed ? "Confirmat" : "Neconfirmat"}`
+               : ""
+         }${r?.isCancelled ? " • Anulat" : ""}`;
+
+         list.forEach((h, idx) => {
+            const who = whoFromHistory(h);
+            const whenIso = whenFromHistory(h);
+            const whenTs = new Date(whenIso || 0).getTime();
+
+            const changes = buildChangesFromHistoryItemTrack(h, mapsForHistory);
+            const action = safeStr(h?.action).toUpperCase();
+
+            const lines =
+               action === "CREATE" || action === "CREATED"
+                  ? ["Rezervarea a fost creată."]
+                  : changes.length
+                  ? changesToLines(changes)
+                  : ["Modificare înregistrată (fără detalii)."];
+
+            const initial = (who || "?").trim().slice(0, 1).toUpperCase();
+
+            out.push({
+               key: `${rid}:${h?.id ?? idx}`,
+               reservationId: rid,
+               ctxLine,
+               who,
+               initial,
+               whenLabel: fmtHistoryHeaderRO(whenIso, MOLDOVA_TZ),
+               whenTs: Number.isFinite(whenTs) ? whenTs : 0,
+               lines,
+            });
+         });
+      }
+
+      out.sort((a, b) => (b.whenTs || 0) - (a.whenTs || 0));
+      return out;
+   }, [rangeItems, rangeHistoryById, mapsForHistory]);
+
+   const timelineCount = combinedRangeTimeline.length;
+   const currentTimeline =
+      timelineCount > 0 ? combinedRangeTimeline[historyIdx] : null;
+
+   useEffect(() => {
+      setHistoryIdx(0);
+   }, [historyUI?.instructorId, historyUI?.baseStartISO]);
+
+   useEffect(() => {
+      setHistoryIdx((i) =>
+         timelineCount ? Math.min(i, timelineCount - 1) : 0
+      );
+   }, [timelineCount]);
+
+   const historyPanelStyle = useMemo(() => {
+      if (!historyUI) return null;
+
+      const panelW = 380;
+      const pad = 10;
+
+      const a = historyUI.anchor || { x: 0, y: 0, w: 0, h: 0 };
+      const w = canvasPx.w || 0;
+      const h = canvasPx.h || 0;
+
+      let left = a.x + a.w / 2 - panelW / 2;
+      if (w > 0) left = Math.max(pad, Math.min(w - panelW - pad, left));
+      else left = Math.max(pad, left);
+
+      let top = a.y - 12;
+      if (top < pad) top = a.y + a.h + 10;
+      if (h > 0) top = Math.max(pad, Math.min(h - 120, top));
+
+      return { position: "absolute", width: panelW, left, top, zIndex: 60 };
+   }, [historyUI, canvasPx.w, canvasPx.h]);
+
+   const panelTitle = useMemo(() => {
+      if (!historyUI) return "";
+      return "Istoric";
+   }, [historyUI]);
+
+   const panelSubtitle = useMemo(() => {
+      if (!historyUI || !rangeMeta?.label) return "";
+      return rangeMeta.label;
+   }, [historyUI, rangeMeta]);
+
+   /* ================== globals lifetime ================== */
+
+   useEffect(() => {
+      const release = retainGlobals();
+      return release;
+   }, []);
+
+   /* ================== selection + hidden listeners ================== */
+
+   useEffect(() => {
+      if (typeof window === "undefined") return;
+
+      const handleSelChange = () => {
+         const ev = getSelectedEvent();
+         const slot = getSelectedSlot();
+         setSelectedEventId(ev?.id ?? null);
+         if (slot) {
+            setSelectedSlot({
+               instructorId: slot.instructorId,
+               slotStart: slot.slotStart,
+               slotEnd: slot.slotEnd,
+            });
+         } else {
+            setSelectedSlot(null);
+         }
+      };
+
+      window.addEventListener("dayview-selection-change", handleSelChange);
+      return () =>
+         window.removeEventListener(
+            "dayview-selection-change",
+            handleSelChange
+         );
+   }, []);
+
+   useEffect(() => {
+      if (typeof window === "undefined") return;
+
+      const handleHiddenChange = (e) => {
+         const v =
+            e?.detail && typeof e.detail.version === "number"
+               ? e.detail.version
+               : null;
+         if (v != null) setHiddenVersion(v);
+         else setHiddenVersion((prev) => prev + 1);
+      };
+
+      window.addEventListener("dayview-hidden-change", handleHiddenChange);
+      return () =>
+         window.removeEventListener(
+            "dayview-hidden-change",
+            handleHiddenChange
+         );
+   }, []);
+
+   /* ================== theme observer ================== */
 
    useEffect(() => {
       if (typeof MutationObserver === "undefined") return;
@@ -1731,10 +1350,133 @@ function DayviewCanvasTrack({
    }, []);
 
    useEffect(() => {
-      if (waitEdit && waitInputRef.current) {
-         waitInputRef.current.focus();
-      }
+      if (waitEdit && waitInputRef.current) waitInputRef.current.focus();
    }, [!!waitEdit]);
+
+   /* ================== wait notes load + cache ================== */
+
+   const reloadWaitNotes = useCallback(async () => {
+      if (!dayStart) {
+         setWaitNotes({});
+         return {};
+      }
+
+      const from = dayStart;
+      const to = dayEnd || dayStart;
+      const fromStr = ymdStrInTZ(from, MOLDOVA_TZ);
+      const toStr = ymdStrInTZ(to, MOLDOVA_TZ);
+      const cacheKey = `${fromStr}|${toStr}`;
+
+      try {
+         const raw = await fetchWaitNotesRange({ from, to, type: "wait-slot" });
+         const normalized = normalizeWaitNotesInput(raw, from);
+
+         const currentFromStr =
+            dayStart instanceof Date
+               ? ymdStrInTZ(dayStart, MOLDOVA_TZ)
+               : fromStr;
+
+         if (currentFromStr !== fromStr) return normalized;
+
+         const cacheEntry = WAIT_NOTES_CACHE.get(cacheKey) || {
+            data: null,
+            error: null,
+            promise: null,
+         };
+         cacheEntry.data = normalized;
+         cacheEntry.error = null;
+         cacheEntry.promise = null;
+         WAIT_NOTES_CACHE.set(cacheKey, cacheEntry);
+
+         setWaitNotes(normalized);
+         return normalized;
+      } catch (err) {
+         console.error("fetchWaitNotesRange (reload) error:", err);
+         setWaitNotes({});
+         return null;
+      }
+   }, [dayStart, dayEnd]);
+
+   useEffect(() => {
+      reloadWaitNotes();
+   }, [reloadWaitNotes]);
+
+   const dayStartMs = dayStart ? new Date(dayStart).getTime() : null;
+   const dayEndMs = dayEnd ? new Date(dayEnd).getTime() : null;
+
+   const waitRangeKey = useMemo(() => {
+      if (dayStartMs == null) return null;
+
+      const from = new Date(dayStartMs);
+      const to = dayEndMs != null ? new Date(dayEndMs) : new Date(dayStartMs);
+
+      const fromStr = ymdStrInTZ(from, MOLDOVA_TZ);
+      const toStr = ymdStrInTZ(to, MOLDOVA_TZ);
+
+      return `${fromStr}|${toStr}`;
+   }, [dayStartMs, dayEndMs]);
+
+   useEffect(() => {
+      if (!waitRangeKey) {
+         setWaitNotes({});
+         return;
+      }
+
+      let isActive = true;
+
+      const [fromStr, toStrRaw] = waitRangeKey.split("|");
+      const toStr = toStrRaw || fromStr;
+
+      const from = localDateObjFromStr(fromStr);
+      const to = localDateObjFromStr(toStr);
+
+      const cacheKey = waitRangeKey;
+      let entry = WAIT_NOTES_CACHE.get(cacheKey);
+
+      if (entry && entry.data) {
+         setWaitNotes(entry.data);
+      } else {
+         if (!entry) {
+            entry = { data: null, error: null, promise: null };
+            WAIT_NOTES_CACHE.set(cacheKey, entry);
+         }
+
+         if (!entry.promise) {
+            entry.promise = fetchWaitNotesRange({ from, to, type: "wait-slot" })
+               .then((raw) => {
+                  const normalized = normalizeWaitNotesInput(raw, from);
+                  entry.data = normalized;
+                  entry.error = null;
+                  return normalized;
+               })
+               .catch((err) => {
+                  entry.error = err;
+                  throw err;
+               });
+         }
+
+         entry.promise
+            .then((normalized) => {
+               if (!isActive) return;
+               setWaitNotes(normalized);
+            })
+            .catch((err) => {
+               if (!isActive) return;
+               console.error(
+                  "fetchWaitNotesRange error pentru ziua:",
+                  fromStr,
+                  err
+               );
+               setWaitNotes({});
+            });
+      }
+
+      return () => {
+         isActive = false;
+      };
+   }, [waitRangeKey]);
+
+   /* ================== layout metrics ================== */
 
    const z = zoom || 1;
 
@@ -1748,15 +1490,268 @@ function DayviewCanvasTrack({
          : Number(layout.headerHeight) || 0;
    const baseHeaderHeight = Math.max(baseHeaderHeightRaw || 0, 40);
 
-   const layoutColsPerRow = Number(layout.colsPerRow) || 3;
+   const layoutColsPerRow = Number(layout.colsPerRow) || 4;
    const layoutRowGap = layout.rowGap != null ? Number(layout.rowGap) || 0 : 24;
 
    const layoutSlotHeight =
       Number(layout.slotHeight) > 0 ? Number(layout.slotHeight) : 50;
    const layoutSlotGap = 4;
 
+   /* ================== aranjare instructori ================== */
+
+   const effectiveInstructors = useMemo(() => {
+      if (!Array.isArray(instructors) || !instructors.length) return [];
+
+      const base = instructors.slice();
+
+      const cancelPads = [];
+      const waitPads = [];
+      const lateralPads = [];
+      const real = [];
+
+      for (const inst of base) {
+         if (!inst) continue;
+         const id = String(inst.id ?? "");
+         const nameLower = String(inst.name ?? "").toLowerCase();
+         const isPad = id.startsWith("__pad_");
+
+         if (!isPad) {
+            real.push(inst);
+            continue;
+         }
+
+         let padType = inst._padType || null;
+         if (!padType) {
+            if (id === "__pad_1" || nameLower.includes("anular"))
+               padType = "cancel";
+            else if (id === LATERAL_PAD_ID || nameLower.includes("later"))
+               padType = "lateral";
+            else padType = "wait";
+         }
+
+         if (padType === "cancel")
+            cancelPads.push({ ...inst, _padType: "cancel" });
+         else if (padType === "lateral")
+            lateralPads.push({ ...inst, _padType: "lateral" });
+         else waitPads.push({ ...inst, _padType: "wait" });
+      }
+
+      const lateralTemplate =
+         lateralPads[0] || waitPads[0] || cancelPads[0] || null;
+
+      let showBuiucani = true;
+      if (dayStart instanceof Date) {
+         const wd = dayStart.getDay();
+         showBuiucani = wd === 2 || wd === 4;
+      }
+
+      const realFiltered = showBuiucani
+         ? real
+         : real.filter((inst) => !isBuiucaniInstructor(inst));
+
+      const buckets = {
+         botanica: { auto: [], manual: [] },
+         ciocana: { auto: [], manual: [] },
+         buiucani: { auto: [], manual: [] },
+         other: { auto: [], manual: [] },
+      };
+
+      for (const inst of realFiltered) {
+         const sector = getInstructorSector(inst);
+         const isAuto = isAutoInstructor(inst, cars);
+         const gear = isAuto ? "auto" : "manual";
+         buckets[sector][gear].push(inst);
+      }
+
+      const idx = {
+         botanica: { auto: 0, manual: 0 },
+         ciocana: { auto: 0, manual: 0 },
+         buiucani: { auto: 0, manual: 0 },
+         other: { auto: 0, manual: 0 },
+      };
+
+      const remainingCount = (sector) => {
+         const b = buckets[sector];
+         const i = idx[sector];
+         return b.auto.length - i.auto + (b.manual.length - i.manual);
+      };
+
+      const popFromSector = (sector, prefGear) => {
+         const b = buckets[sector];
+         const i = idx[sector];
+         if (!b) return null;
+
+         if (prefGear === "auto") {
+            if (i.auto < b.auto.length) return b.auto[i.auto++];
+            if (i.manual < b.manual.length) return b.manual[i.manual++];
+         } else {
+            if (i.manual < b.manual.length) return b.manual[i.manual++];
+            if (i.auto < b.auto.length) return b.auto[i.auto++];
+         }
+         return null;
+      };
+
+      const rows = [];
+
+      const makePad = (inst, padType, columnIndex) => {
+         if (!inst) return null;
+         return {
+            ...inst,
+            _padType: padType ?? inst._padType ?? null,
+            _padColumnIndex: columnIndex,
+         };
+      };
+
+      const cancel1Base =
+         cancelPads[0] ||
+         cancelPads[1] ||
+         lateralTemplate ||
+         waitPads[0] ||
+         null;
+      const cancel2Base = cancelPads[1] || cancelPads[0] || cancel1Base;
+
+      const wait1Base =
+         waitPads[0] || waitPads[1] || lateralTemplate || cancel1Base || null;
+      const wait2Base = waitPads[1] || waitPads[0] || wait1Base;
+
+      rows.push([
+         makePad(cancel1Base, "cancel", 0),
+         makePad(cancel2Base, "cancel", 1),
+         makePad(wait1Base, "wait", 0),
+         makePad(wait2Base, "wait", 1),
+      ]);
+
+      const jsDay = dayStart instanceof Date ? dayStart.getDay() : null;
+      const isTueOrWed = jsDay === 2 || jsDay === 4;
+
+      const addRealRow = (cols0to2) => {
+         const c0 = cols0to2[0] || null;
+         const c1 = cols0to2[1] || null;
+         const c2 = cols0to2[2] || null;
+
+         const lateralClone = lateralTemplate
+            ? { ...lateralTemplate, _padType: "lateral", _clone: true }
+            : null;
+
+         rows.push([c0, c1, c2, lateralClone]);
+      };
+
+      if (isTueOrWed && remainingCount("buiucani") > 0) {
+         const buCount = remainingCount("buiucani");
+         const row = [null, null, null];
+
+         if (buCount >= 3) {
+            row[0] = popFromSector("buiucani", "auto");
+            row[1] = popFromSector("buiucani", "manual");
+            row[2] = popFromSector("buiucani", "manual");
+         } else if (buCount === 2) {
+            row[0] = popFromSector("buiucani", "auto");
+            row[1] = popFromSector("buiucani", "manual");
+            row[2] = popFromSector("botanica", "manual");
+         } else {
+            row[0] = popFromSector("buiucani", "auto");
+            row[1] = popFromSector("botanica", "manual");
+            row[2] = popFromSector("botanica", "manual");
+         }
+
+         addRealRow(row);
+      }
+
+      let sectorForNextRow = "botanica";
+      const anyMainSectorLeft = () =>
+         remainingCount("botanica") > 0 || remainingCount("ciocana") > 0;
+
+      while (anyMainSectorLeft()) {
+         let sector = sectorForNextRow;
+         const other = sector === "botanica" ? "ciocana" : "botanica";
+
+         if (remainingCount(sector) === 0 && remainingCount(other) > 0)
+            sector = other;
+         if (remainingCount(sector) === 0) break;
+
+         const row = [null, null, null];
+         row[0] = popFromSector(sector, "auto");
+         row[1] = popFromSector(sector, "manual");
+         row[2] = popFromSector(sector, "manual");
+         addRealRow(row);
+
+         sectorForNextRow = sector === "botanica" ? "ciocana" : "botanica";
+      }
+
+      while (remainingCount("buiucani") > 0) {
+         const row = [null, null, null];
+         row[0] = popFromSector("buiucani", "auto");
+         row[1] = popFromSector("buiucani", "manual");
+         row[2] = popFromSector("buiucani", "manual");
+         addRealRow(row);
+      }
+
+      while (remainingCount("other") > 0) {
+         const row = [null, null, null];
+         row[0] = popFromSector("other", "auto");
+         row[1] = popFromSector("other", "manual");
+         row[2] = popFromSector("other", "manual");
+         addRealRow(row);
+      }
+
+      const flat = rows.flat();
+      const enriched = [];
+      let cancelIndex = 0;
+      let waitIndex = 0;
+      let lateralIndex = 0;
+
+      for (const inst of flat) {
+         if (!inst) {
+            enriched.push(null);
+            continue;
+         }
+
+         const id = String(inst.id ?? "");
+         const nameLower = String(inst.name ?? "").toLowerCase();
+         const isPad = id.startsWith("__pad_");
+
+         let padType = inst._padType || null;
+         if (isPad && !padType) {
+            if (id === "__pad_1" || nameLower.includes("anular"))
+               padType = "cancel";
+            else if (id === LATERAL_PAD_ID || nameLower.includes("later"))
+               padType = "lateral";
+            else padType = "wait";
+         }
+
+         if (!isPad || !padType) {
+            enriched.push(inst);
+            continue;
+         }
+
+         if (padType === "cancel") {
+            enriched.push({
+               ...inst,
+               _padType: "cancel",
+               _padColumnIndex: cancelIndex++,
+            });
+         } else if (padType === "wait") {
+            enriched.push({
+               ...inst,
+               _padType: "wait",
+               _padColumnIndex: waitIndex++,
+            });
+         } else if (padType === "lateral") {
+            enriched.push({
+               ...inst,
+               _padType: "lateral",
+               _padColumnIndex: lateralIndex++,
+            });
+         } else {
+            enriched.push(inst);
+         }
+      }
+
+      return enriched;
+   }, [instructors, cars, dayStart]);
+
    const headerMetrics = useMemo(() => {
-      const colsCount = Math.max(1, instructors.length || 1);
+      const colsCount = Math.max(1, effectiveInstructors.length || 1);
 
       const colWidth = layoutColWidth;
       const colGap = layoutColGap;
@@ -1783,7 +1778,7 @@ function DayviewCanvasTrack({
          const rowEnd = Math.min(colsCount, rowStart + colsPerRow);
          let allPad = true;
          for (let i = rowStart; i < rowEnd; i++) {
-            const inst = instructors[i];
+            const inst = effectiveInstructors[i];
             if (!inst || !String(inst.id || "").startsWith("__pad_")) {
                allPad = false;
                break;
@@ -1815,7 +1810,7 @@ function DayviewCanvasTrack({
          rowTops,
       };
    }, [
-      instructors,
+      effectiveInstructors,
       layoutColWidth,
       layoutColGap,
       layoutColsPerRow,
@@ -1827,6 +1822,8 @@ function DayviewCanvasTrack({
       z,
    ]);
 
+   /* ================== slot geoms ================== */
+
    const slotGeoms = useMemo(() => {
       return (slots || [])
          .map((slot, index) => {
@@ -1835,9 +1832,8 @@ function DayviewCanvasTrack({
             const e = slot.end instanceof Date ? slot.end : new Date(slot.end);
             const startMs = s.getTime();
             const endMs = e.getTime();
-            if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+            if (!Number.isFinite(startMs) || !Number.isFinite(endMs))
                return null;
-            }
             return {
                slot: { ...slot, start: s, end: e },
                index,
@@ -1849,37 +1845,119 @@ function DayviewCanvasTrack({
          .filter(Boolean);
    }, [slots]);
 
-   const padCancelColumn = useMemo(
+   const padCancelColumns = useMemo(
       () =>
-         instructors.find((inst) => {
-            const id = String(inst?.id || "");
-            const name = String(inst?.name || "").toLowerCase();
-            return id === "__pad_1" || name.includes("anular");
-         }) || null,
-      [instructors]
+         effectiveInstructors.filter(
+            (inst) => inst && inst._padType === "cancel"
+         ),
+      [effectiveInstructors]
    );
+
+   /* ================== eventsForCanvas (hidden + cancel pad + laterala) ================== */
 
    const eventsForCanvas = useMemo(() => {
       if (!Array.isArray(events) || !events.length) return [];
 
-      const result = [];
-      const usePad = !!padCancelColumn && slotGeoms.length > 0;
-      const canceled = usePad ? [] : null;
+      const hasHidden = hasHiddenIds();
+      const source = hasHidden
+         ? events.filter((ev) => {
+              const raw = ev.raw || {};
+              const id = raw.id ?? ev.id;
+              if (id == null) return true;
+              return !isHidden(id);
+           })
+         : events;
 
-      for (const ev of events) {
-         if (usePad && isEventCanceled(ev)) {
+      if (!source.length) return [];
+      const useCancelPad = padCancelColumns.length > 0 && slotGeoms.length > 0;
+
+      const colsPerRow = layoutColsPerRow || 4;
+      const hasSlots = slotGeoms.length > 0;
+
+      const instIdToRow = new Map();
+      const rowToLateralInst = new Map();
+      let hasLateralPads = false;
+
+      if (hasSlots && effectiveInstructors && effectiveInstructors.length) {
+         effectiveInstructors.forEach((inst, idx) => {
+            if (!inst) return;
+            const id = String(inst.id ?? "");
+            const row = Math.floor(idx / colsPerRow);
+            const padType = inst._padType || null;
+
+            if (padType === "lateral") {
+               rowToLateralInst.set(row, inst);
+               hasLateralPads = true;
+            } else if (id && !id.startsWith("__pad_")) {
+               instIdToRow.set(id, row);
+            }
+         });
+      }
+
+      const base = [];
+      const canceled = [];
+
+      for (const ev of source) {
+         if (useCancelPad && isEventCanceled(ev)) {
             canceled.push(ev);
-         } else {
-            result.push(ev);
+            continue;
          }
+
+         let outEv = ev;
+
+         if (hasLateralPads && hasSlots) {
+            const startDate =
+               ev.start instanceof Date ? ev.start : new Date(ev.start || 0);
+            if (!Number.isNaN(startDate.getTime())) {
+               const hhmm = hhmmInTZ(startDate, MOLDOVA_TZ);
+               const lateralSlotRawIndex = LATERAL_TIME_MARKS.indexOf(hhmm);
+
+               if (lateralSlotRawIndex >= 0) {
+                  const raw = ev.raw || {};
+                  const origInstId = String(
+                     raw.instructorId ??
+                        raw.instructor_id ??
+                        ev.instructorId ??
+                        ""
+                  );
+
+                  const row = instIdToRow.get(origInstId);
+                  if (row != null) {
+                     const lateralInst = rowToLateralInst.get(row);
+                     if (lateralInst) {
+                        const padSlotIndex = Math.min(
+                           lateralSlotRawIndex,
+                           LATERAL_SLOTS_PER_COLUMN - 1,
+                           slotGeoms.length - 1
+                        );
+
+                        const padColumnIndex =
+                           typeof lateralInst._padColumnIndex === "number"
+                              ? lateralInst._padColumnIndex
+                              : row;
+
+                        outEv = {
+                           ...ev,
+                           instructorId: lateralInst.id,
+                           _padSlotIndex: padSlotIndex,
+                           _padColumnIndex: padColumnIndex,
+                           _fromLateralPad: true,
+                        };
+                     }
+                  }
+               }
+            }
+         }
+
+         base.push(outEv);
       }
 
-      if (!usePad || !canceled || !canceled.length) {
-         return result;
-      }
+      if (!useCancelPad || !canceled.length) return base;
 
-      const padSlots = slotGeoms.slice(0, WAIT_SLOTS_PER_COLUMN);
-      if (!padSlots.length) return result;
+      const padSlots = slotGeoms.slice(0, CANCEL_SLOTS_PER_COLUMN);
+      if (!padSlots.length) return base;
+
+      const maxSlotsTotal = padSlots.length * padCancelColumns.length;
 
       const canceledSorted = canceled.slice().sort((a, b) => {
          const as = a.start instanceof Date ? a.start : new Date(a.start || 0);
@@ -1887,28 +1965,43 @@ function DayviewCanvasTrack({
          return as - bs;
       });
 
-      canceledSorted.slice(0, padSlots.length).forEach((ev, idx) => {
-         const sg = padSlots[idx];
-         if (!sg || !sg.slot) return;
+      canceledSorted.slice(0, maxSlotsTotal).forEach((ev, idx) => {
+         const padIdx = Math.floor(idx / padSlots.length);
+         const localSlotIdx = idx % padSlots.length;
+         const inst = padCancelColumns[padIdx];
+         const sg = padSlots[localSlotIdx];
+
+         if (!inst || !sg || !sg.slot) return;
 
          const s = ev.start instanceof Date ? ev.start : new Date(ev.start);
-         result.push({
+         const padColumnIndex =
+            typeof inst._padColumnIndex === "number"
+               ? inst._padColumnIndex
+               : padIdx;
+
+         base.push({
             ...ev,
-            instructorId: padCancelColumn.id,
+            instructorId: inst.id,
             _padSlotIndex: sg.index,
             localSlotKey: localKeyFromTs(s),
             _movedToCancelPad: true,
+            _padColumnIndex: padColumnIndex,
          });
       });
 
-      return result;
-   }, [events, padCancelColumn, slotGeoms]);
+      return base;
+   }, [
+      events,
+      padCancelColumns,
+      slotGeoms,
+      hiddenVersion,
+      effectiveInstructors,
+      layoutColsPerRow,
+   ]);
 
-   // ✅ filtrăm blockedKeyMap pentru rezervările ANULATE:
-   // sloturile lor devin libere (fără roșu / border) în coloana instructorului
-   const blockedKeyMapFiltered = useMemo(() => {
-      if (!blockedKeyMap) return null;
+   /* ================== blocked normalize + canceled slots per inst ================== */
 
+   const { blockedKeyMapForSlots, canceledSlotKeysByInst } = useMemo(() => {
       const canceledKeysByInst = new Map();
 
       const markCanceled = (instId, localKey) => {
@@ -1933,94 +2026,99 @@ function DayviewCanvasTrack({
          const start =
             ev.start instanceof Date ? ev.start : new Date(ev.start || 0);
          if (!Number.isFinite(start.getTime())) return;
-         const localKey = localKeyFromTs(start);
-         markCanceled(instId, localKey);
+         markCanceled(instId, localKeyFromTs(start));
       });
 
-      if (!canceledKeysByInst.size) {
-         return blockedKeyMap;
+      let normalizedBlocked = null;
+
+      if (!blockedKeyMap) normalizedBlocked = null;
+      else if (blockedKeyMap instanceof Map) normalizedBlocked = blockedKeyMap;
+      else if (Array.isArray(blockedKeyMap))
+         normalizedBlocked = buildBlockedMapFromBlackoutsList(blockedKeyMap);
+      else if (
+         typeof blockedKeyMap === "object" &&
+         Array.isArray(blockedKeyMap.blackouts)
+      )
+         normalizedBlocked = buildBlockedMapFromBlackoutsList(
+            blockedKeyMap.blackouts
+         );
+      else if (typeof blockedKeyMap === "object") {
+         const m = new Map();
+         for (const [key, value] of Object.entries(blockedKeyMap))
+            m.set(key, value);
+         normalizedBlocked = m;
       }
 
-      if (blockedKeyMap instanceof Map) {
-         const out = new Map();
-         blockedKeyMap.forEach((val, key) => {
-            const instId = String(key);
-            const canceledSet = canceledKeysByInst.get(instId);
-            if (!canceledSet || !canceledSet.size) {
-               out.set(key, val);
-               return;
-            }
-
-            if (val instanceof Set) {
-               const next = new Set();
-               val.forEach((slotKey) => {
-                  if (!canceledSet.has(String(slotKey))) {
-                     next.add(slotKey);
-                  }
-               });
-               out.set(key, next);
-            } else if (Array.isArray(val)) {
-               const nextArr = val.filter(
-                  (slotKey) => !canceledSet.has(String(slotKey))
-               );
-               out.set(key, nextArr);
-            } else {
-               out.set(key, val);
-            }
-         });
-         return out;
-      }
-
-      if (typeof blockedKeyMap === "object") {
-         const outObj = {};
-         Object.keys(blockedKeyMap).forEach((instIdRaw) => {
-            const val = blockedKeyMap[instIdRaw];
-            const instId = String(instIdRaw);
-            const canceledSet = canceledKeysByInst.get(instId);
-            if (!canceledSet || !canceledSet.size) {
-               outObj[instIdRaw] = val;
-               return;
-            }
-
-            if (val instanceof Set) {
-               const next = new Set();
-               val.forEach((slotKey) => {
-                  if (!canceledSet.has(String(slotKey))) {
-                     next.add(slotKey);
-                  }
-               });
-               outObj[instIdRaw] = next;
-            } else if (Array.isArray(val)) {
-               const nextArr = val.filter(
-                  (slotKey) => !canceledSet.has(String(slotKey))
-               );
-               outObj[instIdRaw] = nextArr;
-            } else {
-               outObj[instIdRaw] = val;
-            }
-         });
-         return outObj;
-      }
-
-      return blockedKeyMap;
+      return {
+         blockedKeyMapForSlots: normalizedBlocked,
+         canceledSlotKeysByInst: canceledKeysByInst,
+      };
    }, [blockedKeyMap, events]);
+
+   /* ================== overlapEventsByInst (active only) ================== */
+
+   const overlapEventsByInst = useMemo(() => {
+      const map = new Map();
+      if (!Array.isArray(events) || !events.length) return map;
+
+      events.forEach((ev) => {
+         if (!ev) return;
+         if (isEventCanceled(ev)) return;
+
+         const raw = ev.raw || {};
+         let iid = null;
+         if (raw.instructorId != null) iid = raw.instructorId;
+         else if (raw.instructor_id != null) iid = raw.instructor_id;
+         else if (ev.instructorId != null) iid = ev.instructorId;
+
+         if (iid == null) return;
+
+         const start =
+            ev.start instanceof Date ? ev.start : new Date(ev.start || 0);
+         const end = ev.end instanceof Date ? ev.end : new Date(ev.end || 0);
+
+         if (
+            !Number.isFinite(start.getTime()) ||
+            !Number.isFinite(end.getTime())
+         )
+            return;
+
+         const key = String(iid);
+         if (!map.has(key)) map.set(key, []);
+         map.get(key).push({ start, end });
+      });
+
+      return map;
+   }, [events]);
+
+   /* ================== signatures (redraw memo) ================== */
 
    const eventsSig = useMemo(
       () => buildEventsSignatureForDay(eventsForCanvas),
       [eventsForCanvas]
    );
-
+   const overlapSig = useMemo(
+      () => buildEventsSignatureForDay(events || []),
+      [events]
+   );
    const slotsSig = useMemo(() => buildSlotsSignature(slotGeoms), [slotGeoms]);
 
    const blockedSig = useMemo(
-      () => buildBlockedSignature(blockedKeyMapFiltered, instructors),
-      [blockedKeyMapFiltered, instructors]
+      () => buildBlockedSignature(blockedKeyMapForSlots, effectiveInstructors),
+      [blockedKeyMapForSlots, effectiveInstructors]
+   );
+
+   const canceledSig = useMemo(
+      () => buildBlockedSignature(canceledSlotKeysByInst, effectiveInstructors),
+      [canceledSlotKeysByInst, effectiveInstructors]
    );
 
    const waitSig = useMemo(
       () => buildWaitNotesSignature(waitNotes),
       [waitNotes]
    );
+
+   /* ================== draw effect ================== */
 
    useEffect(() => {
       const canvas = canvasRef.current;
@@ -2076,10 +2174,16 @@ function DayviewCanvasTrack({
          blackoutVer,
          themeTick,
          eventsSig,
+         overlapSig,
          slotsSig,
          blockedSig,
+         canceledSig,
          waitSig,
-         highlightId: activeEventId || selectedEventId || null,
+         highlightId: selectedEventId || activeEventId || null,
+         highlightSlotKey:
+            selectedSlot && selectedSlot.slotStart && selectedSlot.instructorId
+               ? `${selectedSlot.instructorId}|${selectedSlot.slotStart}`
+               : "",
          waitEditSlot:
             waitEdit && waitEdit.slotIndex != null
                ? String(waitEdit.slotIndex)
@@ -2087,10 +2191,7 @@ function DayviewCanvasTrack({
       };
 
       const sigKey = JSON.stringify(sig);
-
-      if (lastDrawSigRef.current === sigKey) {
-         return;
-      }
+      if (lastDrawSigRef.current === sigKey) return;
       lastDrawSigRef.current = sigKey;
 
       let width = hoursColWidth + worldWidth;
@@ -2111,13 +2212,26 @@ function DayviewCanvasTrack({
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
 
+      setCanvasPx((prev) =>
+         prev.w === width && prev.h === height ? prev : { w: width, h: height }
+      );
+
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       const hitMap = [];
-      const highlightEventIdForRender = activeEventId || selectedEventId;
+      const highlightEventIdForRender =
+         selectedEventId || activeEventId || null;
+
+      const highlightSlot =
+         selectedSlot && selectedSlot.slotStart && selectedSlot.instructorId
+            ? {
+                 instructorId: String(selectedSlot.instructorId),
+                 slotStart: selectedSlot.slotStart,
+              }
+            : null;
 
       drawAll({
          ctx,
@@ -2132,36 +2246,36 @@ function DayviewCanvasTrack({
          rowsCount,
          rowGap,
          rowHeights,
-         instructors,
+         instructors: effectiveInstructors,
          events: eventsSafe,
          slotGeoms,
          slotHeight,
          slotGap,
          hitMap,
-         blockedKeyMap: blockedKeyMapFiltered || null,
+         blockedKeyMap: blockedKeyMapForSlots || null,
          highlightEventId: highlightEventIdForRender,
+         highlightSlot,
          zoom,
          preGrid: hasPreGrid
-            ? {
-                 columns: preGridCols,
-                 rows: preGridRows,
-              }
+            ? { columns: preGridCols, rows: preGridRows }
             : null,
          preGridWidth,
-         waitNotesMap: waitNotes,
+         waitNotesMap: waitNotesTextMap,
          editingWait: waitEdit
             ? {
                  instId: String(waitEdit.instId),
                  slotIndex: Number(waitEdit.slotIndex || 0),
               }
             : null,
+         overlapEventsByInst,
+         canceledSlotKeysByInst,
       });
 
       hitMapRef.current = hitMap;
    }, [
       dayStart,
       dayEnd,
-      instructors,
+      effectiveInstructors,
       eventsForCanvas,
       slotGeoms,
       headerMetrics,
@@ -2169,63 +2283,26 @@ function DayviewCanvasTrack({
       blackoutVer,
       activeEventId,
       selectedEventId,
-      blockedKeyMapFiltered,
+      selectedSlot,
+      blockedKeyMapForSlots,
       zoom,
       hasPreGrid,
       preGridCols,
       preGridRows,
       waitNotes,
+      waitNotesTextMap,
       waitEdit,
       eventsSig,
+      overlapSig,
       slotsSig,
       blockedSig,
+      canceledSig,
       waitSig,
+      overlapEventsByInst,
+      canceledSlotKeysByInst,
    ]);
 
-   const finishWaitEdit = (commit) => {
-      if (waitCommitRef.current) return;
-      waitCommitRef.current = true;
-
-      const current = waitEdit;
-      setWaitEdit(null);
-
-      if (!commit || !current) return;
-
-      const text = (current.text || "").trim();
-      const slotIndex = Number(current.slotIndex ?? 0);
-
-      setWaitNotes((prev) => {
-         const next = { ...prev };
-         if (text) next[slotIndex] = text;
-         else delete next[slotIndex];
-         return next;
-      });
-
-      if (!text) return;
-
-      const title = String(slotIndex);
-
-      createNote({
-         title,
-         content: text,
-      }).catch((err) => {
-         console.error("notesService.createNote (wait-slot) error", err);
-      });
-   };
-
-   const handleWaitBlur = () => {
-      finishWaitEdit(true);
-   };
-
-   const handleWaitKeyDown = (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-         e.preventDefault();
-         finishWaitEdit(true);
-      } else if (e.key === "Escape") {
-         e.preventDefault();
-         finishWaitEdit(false);
-      }
-   };
+   /* ================== active rect callback ================== */
 
    useEffect(() => {
       if (!activeEventId) return;
@@ -2257,23 +2334,313 @@ function DayviewCanvasTrack({
       });
    }, [activeEventId, onActiveEventRectChange]);
 
-   // CLICK simplu – selectează evenimentul
+   /* ================== delete (Ctrl+X) ================== */
+
+   const deleteReservationById = useCallback(
+      async (reservationId) => {
+         if (!reservationId) return;
+
+         const idStr = String(reservationId);
+
+         dispatch(removeReservationLocal(idStr));
+         hideReservationGlobally(idStr);
+
+         try {
+            await deleteReservation(idStr);
+         } catch (err) {
+            console.error("Eroare la ștergerea programării (Ctrl+X):", err);
+            try {
+               await dispatch(fetchReservationsDelta());
+            } catch (err2) {
+               console.error(
+                  "fetchReservationsDelta după delete eșuat a eșuat și el:",
+                  err2
+               );
+            }
+            return;
+         }
+
+         try {
+            await dispatch(fetchReservationsDelta());
+         } catch (err) {
+            console.error("fetchReservationsDelta după delete a eșuat:", err);
+         }
+
+         triggerCalendarRefresh();
+         setGlobalSelection({ event: null, slot: null });
+      },
+      [dispatch]
+   );
+
+   useEffect(() => {
+      setDeleteFn(deleteReservationById);
+   }, [deleteReservationById]);
+
+   /* ================== copy/cut helper (toolbar) ================== */
+
+   const copyFromEvent = useCallback(
+      (ev, { cut = false } = {}) => {
+         if (!ev) return null;
+
+         const raw = ev.raw || {};
+         const userId =
+            raw.userId ??
+            raw.user_id ??
+            ev.userId ??
+            ev.studentId ??
+            raw.user?.id ??
+            null;
+
+         if (!userId) return null;
+
+         const sector = raw.sector || ev.sector || "Botanica";
+         const gearbox = raw.gearbox || ev.gearbox || "Manual";
+         const colorRaw = raw.color ?? ev.color ?? DEFAULT_EVENT_COLOR_TOKEN;
+         const privateMessageRaw =
+            raw.privateMessage ??
+            ev.privateMessage ??
+            ev.eventPrivateMessage ??
+            "";
+
+         const instructorId =
+            raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? null;
+
+         const payload = {
+            userId,
+            sector,
+            gearbox,
+            color: colorRaw,
+            privateMessage: String(privateMessageRaw || ""),
+            instructorId,
+         };
+
+         setCopyBuffer(payload);
+
+         if (cut) {
+            const reservationId = raw.id ?? ev.id;
+            if (reservationId) deleteReservationById(reservationId);
+         }
+
+         return payload;
+      },
+      [deleteReservationById]
+   );
+
+   /* ================== paste ================== */
+
+   const pasteFromCopyToSlot = useCallback(
+      async (copy, slot) => {
+         if (!copy || !slot) return;
+
+         const startTimeToSend = buildStartTimeForSlot(slot.slotStart);
+         if (!startTimeToSend) return;
+
+         let instructorIdNum = Number(slot.instructorId);
+         if (!Number.isFinite(instructorIdNum) || instructorIdNum <= 0) {
+            instructorIdNum = Number(copy.instructorId);
+         }
+
+         const userIdNum = Number(copy.userId);
+
+         if (!Number.isFinite(instructorIdNum) || instructorIdNum <= 0) return;
+         if (!Number.isFinite(userIdNum) || userIdNum <= 0) return;
+
+         const payload = {
+            userId: userIdNum,
+            instructorId: instructorIdNum,
+            reservations: [
+               {
+                  startTime: startTimeToSend,
+                  sector: copy.sector || "Botanica",
+                  gearbox:
+                     (copy.gearbox || "Manual").toLowerCase() === "automat"
+                        ? "Automat"
+                        : "Manual",
+                  privateMessage: copy.privateMessage || "",
+                  color:
+                     typeof copy.color === "string" && copy.color.trim()
+                        ? copy.color.trim()
+                        : NO_COLOR_TOKEN,
+                  instructorId: instructorIdNum,
+               },
+            ],
+         };
+
+         try {
+            await createReservationsForUser(payload);
+         } catch (err) {
+            console.error("Eroare la crearea programării (paste):", err);
+         } finally {
+            try {
+               await dispatch(fetchReservationsDelta());
+            } catch (err2) {
+               console.error(
+                  "fetchReservationsDelta după paste a eșuat:",
+                  err2
+               );
+            }
+            triggerCalendarRefresh();
+         }
+      },
+      [dispatch]
+   );
+
+   useEffect(() => {
+      setPasteFn(pasteFromCopyToSlot);
+   }, [pasteFromCopyToSlot]);
+
+   /* ================== wait edit commit ================== */
+
+   const finishWaitEdit = (commit) => {
+      const current = waitEdit;
+      setWaitEdit(null);
+
+      if (!commit || !current) return;
+
+      const text = (current.text || "").trim();
+      const slotIndex = Number(current.slotIndex ?? 0);
+
+      if (waitCommitRef.current) return;
+      waitCommitRef.current = true;
+
+      const prevNote =
+         waitNotes && typeof waitNotes === "object"
+            ? waitNotes[slotIndex]
+            : null;
+
+      const existingId =
+         prevNote && typeof prevNote === "object"
+            ? prevNote.id ??
+              prevNote._id ??
+              prevNote.noteId ??
+              prevNote.note_id ??
+              null
+            : null;
+
+      setWaitNotes((prev) => {
+         const old = prev[slotIndex];
+         const oldId =
+            old && typeof old === "object"
+               ? old.id ?? old._id ?? old.noteId ?? old.note_id ?? existingId
+               : existingId;
+
+         const next = { ...prev };
+         if (text) next[slotIndex] = { id: oldId, text };
+         else delete next[slotIndex];
+
+         if (waitRangeKey) {
+            const cacheEntry = WAIT_NOTES_CACHE.get(waitRangeKey) || {
+               data: null,
+               error: null,
+               promise: null,
+            };
+            cacheEntry.data = next;
+            cacheEntry.error = null;
+            cacheEntry.promise = null;
+            WAIT_NOTES_CACHE.set(waitRangeKey, cacheEntry);
+         }
+
+         return next;
+      });
+
+      if (!text) {
+         waitCommitRef.current = false;
+         return;
+      }
+
+      const title = String(slotIndex);
+      const dateIso = buildWaitNoteDateIsoForSlot(
+         dayStart,
+         slotIndex,
+         BUSY_KEYS_MODE
+      );
+
+      const payload = { title, content: text, type: "wait-slot" };
+      if (dateIso) payload.date = dateIso;
+
+      const persistPromise = existingId
+         ? updateNote(existingId, payload)
+         : createNote(payload);
+
+      persistPromise
+         .then((saved) => {
+            if (!saved) return;
+
+            const realId =
+               saved.id ??
+               saved._id ??
+               saved.noteId ??
+               saved.note_id ??
+               existingId;
+            if (!realId) return;
+
+            setWaitNotes((prev) => {
+               const prevNote2 = prev[slotIndex];
+               if (!prevNote2) return prev;
+               if (prevNote2.id === realId) return prev;
+
+               const next = {
+                  ...prev,
+                  [slotIndex]: { ...prevNote2, id: realId },
+               };
+
+               if (waitRangeKey) {
+                  const cacheEntry = WAIT_NOTES_CACHE.get(waitRangeKey) || {
+                     data: null,
+                     error: null,
+                     promise: null,
+                  };
+                  cacheEntry.data = next;
+                  cacheEntry.error = null;
+                  cacheEntry.promise = null;
+                  WAIT_NOTES_CACHE.set(waitRangeKey, cacheEntry);
+               }
+
+               return next;
+            });
+         })
+         .catch((err) => {
+            console.error(
+               existingId
+                  ? "notesService.updateNote (wait-slot) error"
+                  : "notesService.createNote (wait-slot) error",
+               err
+            );
+         })
+         .finally(() => {
+            waitCommitRef.current = false;
+         });
+   };
+
+   const handleWaitBlur = () => finishWaitEdit(true);
+
+   const handleWaitKeyDown = (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+         e.preventDefault();
+         finishWaitEdit(true);
+      } else if (e.key === "Escape") {
+         e.preventDefault();
+         finishWaitEdit(false);
+      }
+   };
+
+   /* ================== canvas click/dblclick/longpress ================== */
+
    useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
       const handleClick = (e) => {
-         // dacă abia am făcut long-press, ignorăm click-ul
-         if (Date.now() < ignoreClickUntilRef.current) {
-            return;
-         }
+         if (Date.now() < ignoreClickUntilRef.current) return;
 
          const rect = canvas.getBoundingClientRect();
          const x = e.clientX - rect.left;
          const y = e.clientY - rect.top;
 
          const items = hitMapRef.current || [];
-         let found = null;
+         let foundEvent = null;
+         let foundEventItem = null;
+         let foundSlotItem = null;
 
          for (let i = items.length - 1; i >= 0; i--) {
             const item = items[i];
@@ -2284,35 +2651,87 @@ function DayviewCanvasTrack({
                y <= item.y + item.h
             ) {
                if (item.kind === "reservation" || item.kind === "student") {
-                  found = item.ev;
+                  foundEvent = item.ev;
+                  foundEventItem = item;
+                  break;
+               }
+               if (item.kind === "empty-slot" || item.kind === "wait-slot") {
+                  foundSlotItem = item;
                   break;
                }
             }
          }
 
-         if (found && found.id != null) {
-            setSelectedEventId(found.id);
+         const isTouchLike =
+            lastPointerTypeRef.current === "touch" ||
+            lastPointerTypeRef.current === "pen";
+
+         if (foundEvent && foundEvent.id != null) {
+            setSelectedEventId(foundEvent.id);
+            setSelectedSlot(null);
+            setGlobalSelection({ event: foundEvent, slot: null });
+
+            if (isTouchLike && foundEventItem) {
+               setTouchToolbar({
+                  type: "event",
+                  ev: foundEvent,
+                  x: foundEventItem.x,
+                  y: foundEventItem.y,
+                  w: foundEventItem.w,
+                  h: foundEventItem.h,
+               });
+            } else {
+               setTouchToolbar(null);
+            }
+         } else if (foundSlotItem) {
+            const slotPayload = {
+               instructorId: foundSlotItem.instructorId,
+               slotStart: foundSlotItem.slotStart,
+               slotEnd: foundSlotItem.slotEnd,
+            };
+            setSelectedEventId(null);
+            setSelectedSlot(slotPayload);
+            setGlobalSelection({ event: null, slot: slotPayload });
+
+            //// ✅ click pe slot gol => deschide panel comun (dacă nu e paste mode)
+            //if (
+            //   foundSlotItem.kind === "empty-slot" &&
+            //   !getCopyBuffer() &&
+            //   foundSlotItem
+            //) {
+            //   openRangePanelFromSlot(slotPayload, foundSlotItem);
+            //}
+
+            if (isTouchLike && getCopyBuffer()) {
+               setTouchToolbar({
+                  type: "slot",
+                  slot: slotPayload,
+                  x: foundSlotItem.x,
+                  y: foundSlotItem.y,
+                  w: foundSlotItem.w,
+                  h: foundSlotItem.h,
+               });
+            } else {
+               setTouchToolbar(null);
+            }
          } else {
             setSelectedEventId(null);
+            setSelectedSlot(null);
+            setGlobalSelection({ event: null, slot: null });
+            setTouchToolbar(null);
          }
       };
 
       canvas.addEventListener("click", handleClick);
-      return () => {
-         canvas.removeEventListener("click", handleClick);
-      };
-   }, []);
+      return () => canvas.removeEventListener("click", handleClick);
+   }, [openRangePanelFromSlot]);
 
-   // DUBLUL-CLICK – acțiunile existente (student / rezervare / empty-slot)
    useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
       const handleDblClick = (e) => {
-         // după long-press ignorăm dblclick-ul accidental
-         if (Date.now() < ignoreClickUntilRef.current) {
-            return;
-         }
+         if (Date.now() < ignoreClickUntilRef.current) return;
 
          const rect = canvas.getBoundingClientRect();
          const x = e.clientX - rect.left;
@@ -2332,30 +2751,33 @@ function DayviewCanvasTrack({
                if (item.kind === "wait-slot") {
                   const slotIndex =
                      typeof item.slotIndex === "number" ? item.slotIndex : 0;
-                  const key = String(slotIndex);
-                  const existingText =
-                     waitNotes[key] || waitNotes[slotIndex] || "";
-
                   waitCommitRef.current = false;
-                  setWaitEdit({
-                     instId: item.instructorId,
-                     slotIndex,
-                     x: item.x,
-                     y: item.y,
-                     w: item.w,
-                     h: item.h,
-                     text: existingText,
-                  });
+
+                  (async () => {
+                     const latest = await reloadWaitNotes();
+                     const map = latest || waitNotes;
+
+                     const key = String(slotIndex);
+                     const noteObj = map[key] || map[slotIndex];
+                     const existingText =
+                        typeof noteObj === "string"
+                           ? noteObj
+                           : (noteObj && noteObj.text) || "";
+
+                     setWaitEdit({
+                        instId: item.instructorId,
+                        slotIndex,
+                        x: item.x,
+                        y: item.y,
+                        w: item.w,
+                        h: item.h,
+                        text: existingText,
+                     });
+                  })();
                } else if (item.kind === "student") {
-                  const ev = item.ev;
-                  requestAnimationFrame(() => {
-                     openStudentPopup(ev);
-                  });
+                  requestAnimationFrame(() => openStudentPopup(item.ev));
                } else if (item.kind === "reservation") {
-                  const ev = item.ev;
-                  requestAnimationFrame(() => {
-                     openReservationPopup(ev);
-                  });
+                  requestAnimationFrame(() => openReservationPopup(item.ev));
                } else if (
                   item.kind === "empty-slot" &&
                   typeof onCreateSlot === "function"
@@ -2365,9 +2787,7 @@ function DayviewCanvasTrack({
                      start: new Date(item.slotStart),
                      end: new Date(item.slotEnd),
                   };
-                  requestAnimationFrame(() => {
-                     onCreateSlot(payload);
-                  });
+                  requestAnimationFrame(() => onCreateSlot(payload));
                }
                break;
             }
@@ -2375,20 +2795,17 @@ function DayviewCanvasTrack({
       };
 
       canvas.addEventListener("dblclick", handleDblClick);
-      return () => {
-         canvas.removeEventListener("dblclick", handleDblClick);
-      };
-   }, [onCreateSlot, waitNotes]);
+      return () => canvas.removeEventListener("dblclick", handleDblClick);
+   }, [onCreateSlot, waitNotes, reloadWaitNotes]);
 
-   // LONG-PRESS (HOLD) – deschide profilul studentului pe toată caseta
    useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      const getHitAt = (e) => {
+      const getHitAtClient = (clientX, clientY) => {
          const rect = canvas.getBoundingClientRect();
-         const x = e.clientX - rect.left;
-         const y = e.clientY - rect.top;
+         const x = clientX - rect.left;
+         const y = clientY - rect.top;
 
          const items = hitMapRef.current || [];
          for (let i = items.length - 1; i >= 0; i--) {
@@ -2398,11 +2815,57 @@ function DayviewCanvasTrack({
                x <= item.x + item.w &&
                y >= item.y &&
                y <= item.y + item.h
-            ) {
+            )
                return item;
-            }
          }
          return null;
+      };
+
+      const openToolbarForHit = (hit) => {
+         if (!hit) {
+            setTouchToolbar(null);
+            return;
+         }
+
+         if (hit.kind === "reservation" || hit.kind === "student") {
+            const ev = hit.ev;
+            if (ev && ev.id != null) {
+               setSelectedEventId(ev.id);
+               setSelectedSlot(null);
+               setGlobalSelection({ event: ev, slot: null });
+            }
+            setTouchToolbar({
+               type: "event",
+               x: hit.x,
+               y: hit.y,
+               w: hit.w,
+               h: hit.h,
+               ev,
+            });
+            return;
+         }
+
+         if (hit.kind === "empty-slot" || hit.kind === "wait-slot") {
+            const slotPayload = {
+               instructorId: hit.instructorId,
+               slotStart: hit.slotStart,
+               slotEnd: hit.slotEnd,
+            };
+            setSelectedEventId(null);
+            setSelectedSlot(slotPayload);
+            setGlobalSelection({ event: null, slot: slotPayload });
+            setTouchToolbar({
+               type: "slot",
+               x: hit.x,
+               y: hit.y,
+               w: hit.w,
+               h: hit.h,
+               slot: slotPayload,
+            });
+            return;
+         }
+
+         setTouchToolbar(null);
       };
 
       const clearLongPress = () => {
@@ -2411,68 +2874,105 @@ function DayviewCanvasTrack({
             longPressTimerRef.current = null;
          }
          longPressTargetRef.current = null;
+         longPressStartRef.current = null;
+      };
+
+      const handleContextMenu = (e) => {
+         e.preventDefault();
+         const hit = getHitAtClient(e.clientX, e.clientY);
+         openToolbarForHit(hit);
+      };
+
+      const fireLongPress = (hit) => {
+         if (!hit) return;
+         ignoreClickUntilRef.current = Date.now() + 600;
+
+         if (hit.kind === "reservation" || hit.kind === "student") {
+            const ev = hit.ev;
+            if (!ev) return;
+
+            if (ev.id != null) {
+               setSelectedEventId(ev.id);
+               setSelectedSlot(null);
+               setGlobalSelection({ event: ev, slot: null });
+            }
+
+            setTouchToolbar(null);
+            requestAnimationFrame(() => openStudentPopup(ev));
+         }
       };
 
       const handlePointerDown = (e) => {
-         // doar button principal (mouse) sau touch
+         if (e.pointerType) lastPointerTypeRef.current = e.pointerType;
          if (e.button !== 0 && e.button !== undefined) return;
 
-         const hit = getHitAt(e);
+         const hit = getHitAtClient(e.clientX, e.clientY);
          if (!hit) return;
          if (hit.kind !== "reservation" && hit.kind !== "student") return;
 
-         longPressTargetRef.current = hit.ev;
+         longPressTargetRef.current = hit;
+         longPressStartRef.current = {
+            x: e.clientX,
+            y: e.clientY,
+            pointerId: e.pointerId ?? null,
+         };
+
+         if (canvas.setPointerCapture && e.pointerId != null) {
+            try {
+               canvas.setPointerCapture(e.pointerId);
+            } catch (_) {}
+         }
 
          longPressTimerRef.current = window.setTimeout(() => {
-            const ev = longPressTargetRef.current;
-            if (!ev) return;
-
-            // blocăm click/dblclick-urile care vin imediat după hold
-            ignoreClickUntilRef.current = Date.now() + 500;
-
-            longPressTargetRef.current = null;
-            longPressTimerRef.current = null;
-
-            requestAnimationFrame(() => {
-               openStudentPopup(ev);
-            });
-         }, 600); // ms până la long-press (poți ajusta 500–700)
+            const target = longPressTargetRef.current;
+            clearLongPress();
+            fireLongPress(target);
+         }, LONG_PRESS_MS);
       };
 
-      const handlePointerUp = () => {
-         clearLongPress();
+      const handlePointerMove = (e) => {
+         if (!longPressTimerRef.current) return;
+         const s = longPressStartRef.current;
+         if (!s) return;
+
+         if (
+            s.pointerId != null &&
+            e.pointerId != null &&
+            s.pointerId !== e.pointerId
+         )
+            return;
+
+         const dx = e.clientX - s.x;
+         const dy = e.clientY - s.y;
+         const dist2 = dx * dx + dy * dy;
+         if (dist2 > LONG_PRESS_MOVE_PX * LONG_PRESS_MOVE_PX) clearLongPress();
       };
 
-      const handlePointerLeave = () => {
-         clearLongPress();
-      };
+      const handlePointerUp = () => clearLongPress();
+      const handlePointerLeave = () => clearLongPress();
+      const handlePointerCancel = () => clearLongPress();
 
-      const handlePointerCancel = () => {
-         clearLongPress();
-      };
-
+      canvas.addEventListener("contextmenu", handleContextMenu);
       canvas.addEventListener("pointerdown", handlePointerDown);
+      canvas.addEventListener("pointermove", handlePointerMove);
       canvas.addEventListener("pointerup", handlePointerUp);
       canvas.addEventListener("pointerleave", handlePointerLeave);
       canvas.addEventListener("pointercancel", handlePointerCancel);
 
       return () => {
+         canvas.removeEventListener("contextmenu", handleContextMenu);
          canvas.removeEventListener("pointerdown", handlePointerDown);
+         canvas.removeEventListener("pointermove", handlePointerMove);
          canvas.removeEventListener("pointerup", handlePointerUp);
          canvas.removeEventListener("pointerleave", handlePointerLeave);
          canvas.removeEventListener("pointercancel", handlePointerCancel);
       };
-   }, []);
+   }, [reloadWaitNotes, waitNotes]);
 
-   const {
-      colWidth,
-      colGap,
-      headerHeight,
-      colsPerRow,
-      rowGap,
-      worldHeight,
-      rowTops,
-   } = headerMetrics;
+   /* ================== UI overlay ================== */
+
+   const { colWidth, colGap, headerHeight, colsPerRow, rowTops } =
+      headerMetrics;
 
    const preGridWidth2 =
       hasPreGrid && colWidth > 0
@@ -2480,101 +2980,304 @@ function DayviewCanvasTrack({
          : 0;
 
    return (
-      <div
-         style={{
-            position: "relative",
-            flex: "0 0 auto",
-         }}
-      >
+      <div style={{ position: "relative", flex: "0 0 auto" }}>
          <canvas ref={canvasRef} />
 
-         {waitEdit && (
+         {effectiveInstructors.map((inst, idx) => {
+            if (!inst) return null;
+            const row = Math.floor(idx / colsPerRow);
+            const col = idx % colsPerRow;
+
+            const left = preGridWidth2 + col * (colWidth + colGap);
+            const top = rowTops[row] ?? 0;
+
+            return (
+               <CanvasInstructorHeader
+                  key={`${String(inst.id)}:${idx}`}
+                  inst={inst}
+                  dayDate={dayStart instanceof Date ? dayStart : new Date()}
+                  sectorClassName=""
+                  style={{ left, top, width: colWidth, height: headerHeight }}
+                  cars={cars}
+                  instructorsFull={instructorsFull}
+                  users={users}
+                  zoom={z}
+               />
+            );
+         })}
+
+         {touchToolbar && (
             <div
+               className="dv-touch-toolbar"
                style={{
                   position: "absolute",
-                  left: waitEdit.x,
-                  top: waitEdit.y,
-                  width: waitEdit.w,
-                  height: waitEdit.h,
-                  pointerEvents: "auto",
-                  zIndex: 3,
-                  display: "flex",
-                  alignItems: "stretch",
-                  justifyContent: "center",
+                  transform: "translateX(-50%)",
+                  left: touchToolbar.x + touchToolbar.w / 2,
+                  top: Math.max(2, touchToolbar.y - 42),
+                  zIndex: 30,
                }}
+               onClick={(e) => e.stopPropagation()}
+               onPointerDown={(e) => e.stopPropagation()}
             >
-               <textarea
-                  ref={waitInputRef}
-                  className="dv-wait-input"
-                  placeholder={WAIT_PLACEHOLDER_TEXT}
-                  value={waitEdit.text}
-                  onChange={(e) => {
-                     const val = e.target.value;
-                     setWaitEdit((prev) =>
-                        prev ? { ...prev, text: val } : prev
-                     );
+               <button
+                  type="button"
+                  className={
+                     "dv-touch-toolbar__btn" +
+                     (touchToolbar.type === "event"
+                        ? " dv-touch-toolbar__btn--active"
+                        : " dv-touch-toolbar__btn--disabled")
+                  }
+                  onClick={() => {
+                     if (touchToolbar.type !== "event" || !touchToolbar.ev)
+                        return;
+                     copyFromEvent(touchToolbar.ev, { cut: false });
+                     setTouchToolbar(null);
                   }}
-                  onBlur={handleWaitBlur}
-                  onKeyDown={handleWaitKeyDown}
-                  style={{
-                     width: "100%",
-                     height: "100%",
-                     fontSize: `${10 * z}px`,
-                     padding: "4px 8px",
-                     borderRadius: "18px",
-                     border: "none",
-                     color: "var(--white-p, #f5f5f5)",
-                     fontWeight: 300,
-                     outline: "none",
-                     resize: "none",
-                     lineHeight: 1.25,
-                     whiteSpace: "pre-wrap",
-                     overflowY: "auto",
+               >
+                  <ReactSVG src={copyIcon} className="dv-touch-toolbar__icon" />
+               </button>
+
+               <button
+                  type="button"
+                  className={
+                     "dv-touch-toolbar__btn" +
+                     (touchToolbar.type === "slot" && getCopyBuffer()
+                        ? " dv-touch-toolbar__btn--active"
+                        : " dv-touch-toolbar__btn--disabled")
+                  }
+                  onClick={() => {
+                     if (touchToolbar.type !== "slot" || !touchToolbar.slot)
+                        return;
+                     const buf = getCopyBuffer();
+                     if (!buf) return;
+                     pasteFromCopyToSlot(buf, touchToolbar.slot);
+                     setTouchToolbar(null);
                   }}
-               />
+               >
+                  <ReactSVG
+                     src={pasteIcon}
+                     className="dv-touch-toolbar__icon"
+                  />
+               </button>
+
+               <button
+                  type="button"
+                  className={
+                     "dv-touch-toolbar__btn" +
+                     (touchToolbar.type === "event"
+                        ? " dv-touch-toolbar__btn--active"
+                        : " dv-touch-toolbar__btn--disabled")
+                  }
+                  onClick={() => {
+                     if (touchToolbar.type !== "event" || !touchToolbar.ev)
+                        return;
+                     copyFromEvent(touchToolbar.ev, { cut: true });
+                     setTouchToolbar(null);
+                  }}
+               >
+                  <ReactSVG src={cutIcon} className="dv-touch-toolbar__icon" />
+               </button>
+
+               {/* ✅ history button: deschide panel comun (event sau slot) */}
+               <button
+                  type="button"
+                  className={
+                     "dv-touch-toolbar__btn" +
+                     (touchToolbar.type === "event" ||
+                     touchToolbar.type === "slot"
+                        ? " dv-touch-toolbar__btn--active"
+                        : " dv-touch-toolbar__btn--disabled")
+                  }
+                  onClick={() => {
+                     if (touchToolbar.type === "event" && touchToolbar.ev) {
+                        openRangePanelFromEvent(touchToolbar.ev, touchToolbar);
+                        setTouchToolbar(null);
+                        return;
+                     }
+                     if (touchToolbar.type === "slot" && touchToolbar.slot) {
+                        openRangePanelFromSlot(touchToolbar.slot, touchToolbar);
+                        setTouchToolbar(null);
+                        return;
+                     }
+                  }}
+               >
+                  <ReactSVG
+                     src={hystoryIcon}
+                     className="dv-touch-toolbar__icon"
+                  />
+               </button>
             </div>
          )}
 
-         <div
-            className="dv-canvas-header-layer"
-            style={{
-               position: "absolute",
-               left: 0,
-               top: 0,
-               width: "100%",
-               height: "100%",
-               pointerEvents: "none",
-               zIndex: 2,
-            }}
-         >
-            {instructors.map((inst, idx) => {
-               const row = Math.floor(idx / colsPerRow);
-               const col = idx % colsPerRow;
-               const rowTop =
-                  rowTops[row] ?? row * (headerHeight + worldHeight + rowGap);
-               const colLeft = preGridWidth2 + col * (colWidth + colGap);
+         {waitEdit && (
+            <textarea
+               ref={waitInputRef}
+               value={waitEdit.text || ""}
+               onChange={(e) =>
+                  setWaitEdit((prev) =>
+                     prev ? { ...prev, text: e.target.value } : prev
+                  )
+               }
+               onBlur={handleWaitBlur}
+               onKeyDown={handleWaitKeyDown}
+               placeholder={WAIT_PLACEHOLDER_TEXT}
+               style={{
+                  position: "absolute",
+                  left: waitEdit.x + 6,
+                  top: waitEdit.y + 6,
+                  width: Math.max(40, waitEdit.w - 12),
+                  height: Math.max(28, waitEdit.h - 12),
+                  resize: "none",
+                  zIndex: 40,
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  background: "rgba(0,0,0,0.25)",
+                  color: "white",
+                  padding: 8,
+                  outline: "none",
+               }}
+               onClick={(e) => e.stopPropagation()}
+               onPointerDown={(e) => e.stopPropagation()}
+            />
+         )}
+w
+         {/* PANEL overlay (istoric comun + lista rezervari in interval) */}
+         {historyUI && (
+            <div
+               className="dv-history"
+               style={{ position: "absolute", inset: 0, zIndex: 455 }}
+               onClick={closeReservationHistory}
+            >
+               <div
+                  className="dv-history__panel"
+                  style={{ ...(historyPanelStyle || {}) }}
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+               >
+                  <div className="dv-history__header">
+                     <div className="dv-history__title">{panelTitle}</div>
 
-               return (
-                  <CanvasInstructorHeader
-                     key={inst?.id ?? idx}
-                     inst={inst}
-                     dayDate={dayStart}
-                     cars={cars}
-                     instructorsFull={instructorsFull}
-                     users={users}
-                     zoom={zoom}
-                     style={{
-                        left: colLeft,
-                        top: rowTop,
-                        width: colWidth,
-                        height: headerHeight,
-                     }}
-                  />
-               );
-            })}
-         </div>
+                     <div className="dv-history__actions">
+                        <span className="dv-history__counter">
+                           {timelineCount
+                              ? `${historyIdx + 1}/${timelineCount}`
+                              : ""}
+                        </span>
+
+                        <button
+                           type="button"
+                           className="dv-history__nav-btn dv-history__nav-btn--prev"
+                           disabled={timelineCount === 0 || historyIdx <= 0}
+                           onClick={() =>
+                              setHistoryIdx((i) => Math.max(0, i - 1))
+                           }
+                        >
+                           <ReactSVG
+                              src={arrowIcon}
+                              className="dv-history__icon"
+                           />
+                        </button>
+
+                        <button
+                           type="button"
+                           className="dv-history__nav-btn dv-history__nav-btn--next"
+                           disabled={
+                              timelineCount === 0 ||
+                              historyIdx >= timelineCount - 1
+                           }
+                           onClick={() =>
+                              setHistoryIdx((i) =>
+                                 Math.min(Math.max(0, timelineCount - 1), i + 1)
+                              )
+                           }
+                        >
+                           <ReactSVG
+                              src={arrowIcon}
+                              className="dv-history__icon reverse"
+                           />
+                        </button>
+
+                        <button
+                           type="button"
+                           className="dv-history__close-btn"
+                           onClick={closeReservationHistory}
+                        >
+                           <ReactSVG
+                              src={closeIcon}
+                              className="dv-history__icon add"
+                           />
+                        </button>
+                     </div>
+                  </div>
+
+
+                  {rangeError ? (
+                     <div className="dv-history__state dv-history__state--error">
+                        {rangeError}
+                     </div>
+                  ) : rangeLoading ? (
+                     <div className="dv-history__state dv-history__state--loading">
+                        Se încarcă rezervările din interval…
+                     </div>
+                  ) : rangeItems.length === 0 ? (
+                     <div className="dv-history__state dv-history__state--empty">
+                        Nu există rezervări în acest interval.
+                     </div>
+                  ) : (
+                     <>
+                        {/* ISTORIC COMUN (PAGINARE UNICA) */}
+                        <div className="dv-history__section dv-history__section--timeline">
+                           {rangeHistError ? (
+                              <div className="dv-history__state dv-history__state--error">
+                                 {rangeHistError}
+                              </div>
+                           ) : rangeHistLoading ? (
+                              <div className="dv-history__state dv-history__state--loading">
+                                 Se încarcă istoricul rezervărilor…
+                              </div>
+                           ) : !currentTimeline ? (
+                              <div className="dv-history__state dv-history__state--empty">
+                                 Nu există istoric disponibil pentru rezervările
+                                 din interval.
+                              </div>
+                           ) : (
+                              <>
+                                 <div className="dv-history__meta">
+                                    <div className="dv-history__avatar">
+                                       {currentTimeline.initial}
+                                    </div>
+
+                                    <div className="dv-history__meta-text">
+                                       <div className="dv-history__who">
+                                          {currentTimeline.who || "—"}
+                                       </div>
+                                       <div className="dv-history__when">
+                                          {currentTimeline.whenLabel || ""}
+                                       </div>
+                                    </div>
+                                 </div>
+
+                                 <div className="dv-history__changes">
+                                    <div className="dv-history__subtitle">
+                                       {currentTimeline.ctxLine}
+                                    </div>
+                                    {currentTimeline.lines.map((line, i) => (
+                                       <div
+                                          key={i}
+                                          className="dv-history__change"
+                                       >
+                                          {line}
+                                       </div>
+                                    ))}
+                                 </div>
+                              </>
+                           )}
+                        </div>
+                     </>
+                  )}
+               </div>
+            </div>
+         )}
       </div>
    );
 }
-
-export default memo(DayviewCanvasTrack);

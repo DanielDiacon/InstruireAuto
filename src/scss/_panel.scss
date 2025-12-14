@@ -152,6 +152,83 @@
 .intro.admin {
    grid-template-columns: 2fr 3fr;
 }
+.professor {
+   padding: 24px 24px 0;
+   height: calc(100svh - 96px);
+   display: grid;
+   grid-template-columns: 1fr 1fr;
+   gap: 12px;
+   &.single {
+      grid-template-columns: 1fr;
+   }
+   .students__grid {
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+   }
+   .practice-stats__bar {
+      height: 20px;
+   }
+   .practice-stats__bar-seg--skip {
+      background: var(--black-s);
+   }
+   .practice {
+      .students__grid {
+         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      }
+      .students__grid-category {
+         grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      }
+   }
+   .practice-scroll {
+      //height: calc(100svh - 1240px);
+      padding: 12px 12px 0 12px;
+   }
+}
+@media (max-width: $tablet) {
+   .professor {
+      grid-template-columns: 1fr;
+   }
+}
+@media only screen and (max-width: $mobile) {
+   .professor {
+      padding: 6px 6px 6px;
+      height: auto;
+      grid-template-rows: auto auto;
+
+      .practice-scroll {
+         height: calc(400px);
+      }
+      .groups {
+         min-height: 300px;
+      }
+      .students {
+         min-height: 300px;
+      }
+      &.single {
+         .groups {
+            height: calc(100svh - 172px);
+         }
+         .students {
+            height: calc(100svh - 172px);
+         }
+      }
+      .tikets-header > div {
+         align-items: flex-start;
+         flex-wrap: wrap;
+         gap: 6px;
+      }
+      .practice {
+         .students__grid {
+            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+         }
+         .students__grid-category {
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+         }
+      }
+      .students__grid {
+         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      }
+   }
+}
 @media (max-width: $tablet) {
    .intro.admin {
       grid-template-columns: 1fr;

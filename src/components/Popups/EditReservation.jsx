@@ -18,20 +18,21 @@ import clockIcon from "../../assets/svg/clock.svg";
 import editIcon from "../../assets/svg/edit.svg";
 import favIcon from "../../assets/svg/material-symbols--star-outline-rounded.svg";
 import importantIcon from "../../assets/svg/zondicons--exclamation-outline.svg";
+import copyIcon from "../../assets/svg/copy.svg";
 
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
 import {
    updateReservation,
    removeReservation,
-   fetchReservationsDelta, // ✅ înlocuiește fetchAllReservations
+   fetchReservationsDelta,
 } from "../../store/reservationsSlice";
 import {
    createReservationsForUser,
    getReservationHistory,
 } from "../../api/reservationsService";
 
-import { triggerCalendarRefresh } from "../Utils/calendarBus"; // ✅ event-bus
+import { triggerCalendarRefresh } from "../Utils/calendarBus";
 import {
    closePopup as closePopupStore,
    closeSubPopup as closeSubPopupStore,
@@ -44,7 +45,6 @@ registerLocale("ro", ro);
 
 /* ================== TZ & chei locale (Moldova) ================== */
 const MOLDOVA_TZ = "Europe/Chisinau";
-/** Setează 'local-match' dacă backend salvează cu hack-ul în care ora locală trebuie să apară neschimbată. Pune 'utc' dacă salvezi UTC corect. */
 const BUSY_KEYS_MODE = "local-match";
 
 function localDateStrTZ(date, tz = MOLDOVA_TZ) {
@@ -81,7 +81,6 @@ function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
    const asUTC = Date.UTC(y, m - 1, d, H, M, S);
    return (asUTC - tsMs) / 60000;
 }
-/** Moldova (zi + "HH:mm") -> ISO UTC corect, stabil la DST */
 function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
    const [hh, mm] = (timeStrHHMM || "00:00").split(":").map(Number);
    const utcGuess = Date.UTC(
@@ -97,7 +96,6 @@ function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
    const fixedUtcMs = utcGuess - offMin * 60000;
    return new Date(fixedUtcMs).toISOString();
 }
-/** HACK: construiește "YYYY-MM-DDTHH:mm:+02/+03" pentru ca în DB să apară „ora locală exactă” */
 function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    const base = new Date(isoUtcFromMoldova);
    const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
@@ -127,7 +125,6 @@ function isoForDbMatchLocalHour(isoUtcFromMoldova) {
 
    return `${Y}-${Mo}-${Da}T${HH}:${MM}:00${sign}${offHH}:${offMM}`;
 }
-/** Cheie locală "YYYY-MM-DD|HH:mm" din timestamp */
 function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
    const fmt = new Intl.DateTimeFormat("en-GB", {
       timeZone: tz,
@@ -150,7 +147,6 @@ const localKeyForIso = (iso) =>
    localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
 const localKeyForDateAndTime = (localDateObj, hhmm) =>
    `${localDateStrTZ(localDateObj, MOLDOVA_TZ)}|${hhmm}`;
-/** Din ce vine din DB (hack sau UTC real) -> cheie locală stabilă */
 function busyLocalKeyFromStored(st) {
    const d = new Date(st);
    if (BUSY_KEYS_MODE === "local-match") {
@@ -168,7 +164,7 @@ const nowHHMMInMoldova = () =>
       hour12: false,
    }).format(new Date());
 
-/* ===== Intervale ore (24h) ===== */
+/* ===== Intervale ore ===== */
 const oreDisponibile = [
    { eticheta: "07:00", oraStart: "07:00" },
    { eticheta: "08:30", oraStart: "08:30" },
@@ -182,9 +178,12 @@ const oreDisponibile = [
 ];
 const SLOT_MINUTES = 90;
 
-/* ===== Culori ===== */
+const SECTOR_ORDER = ["Botanica", "Ciocana", "Buiucani"];
+const GEARBOX_ORDER = ["Manual", "Automat"];
+
+/* Culori */
 const COLOR_TOKENS = [
-   "--event-default", // 🔹 culoarea implicită a evenimentelor (var(--event-default))
+   "--event-default",
    "--red",
    "--orange",
    "--yellow",
@@ -193,7 +192,7 @@ const COLOR_TOKENS = [
    "--indigo",
    "--purple",
    "--pink",
-   "--black-t", // 🔹 negru special (aceeași nuanță ca în calendar)
+   "--black-t",
 ];
 
 const COLOR_LABEL = {
@@ -206,7 +205,7 @@ const COLOR_LABEL = {
    indigo: "Indigo",
    purple: "Mov",
    pink: "Roz",
-   "black-t": "Negru", // 🔹 chiar culoarea var(--black-t)
+   "black-t": "Negru",
 };
 
 const COLOR_HINTS = {
@@ -219,7 +218,7 @@ const COLOR_HINTS = {
    pink: "Grafic Pentru Ciocana/Buiucani",
    blue: "Instructorul Care Activează Pe Ciocana",
    purple: "Instructorul Care Activează Pe Botanica",
-   "black-t": "Trasparent", // 🔹 exact nuanța --black-t
+   "black-t": "Trasparent",
 };
 
 const normalizeColor = (val) => {
@@ -229,7 +228,6 @@ const normalizeColor = (val) => {
    return COLOR_LABEL[key] || key;
 };
 
-/* ===== Helpers existente ===== */
 const fmtDateTimeRO = (iso) =>
    new Date(iso).toLocaleString("ro-RO", {
       dateStyle: "medium",
@@ -242,6 +240,7 @@ const todayAt00 = () => {
    t.setHours(0, 0, 0, 0);
    return t;
 };
+
 const getStartFromReservation = (r) =>
    r?.startTime ??
    r?.start ??
@@ -264,10 +263,12 @@ const getEndFromReservation = (r) => {
    const end = new Date(start.getTime() + getDurationMin(r) * 60000);
    return end.toISOString();
 };
+
 const localDateObjFromStr = (s) => {
    const [y, m, d] = s.split("-").map(Number);
    return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
 };
+
 const nextNDays = (n, fromDate = new Date()) => {
    const out = [];
    const base = new Date(fromDate);
@@ -279,7 +280,7 @@ const nextNDays = (n, fromDate = new Date()) => {
    }
    return out;
 };
-/** Grilă ISO corectă (UTC) din zile + ore în Moldova */
+
 const buildFullGridISO = (daysWindow = 60) => {
    const daysArr = nextNDays(daysWindow, new Date());
    const out = [];
@@ -292,7 +293,6 @@ const buildFullGridISO = (daysWindow = 60) => {
    return out;
 };
 
-/* === Conflicts helpers pe CHEIE LOCALĂ (exclud rezervarea curentă) === */
 const hasInstructorConflict = (
    reservations,
    instructorId,
@@ -308,9 +308,10 @@ const hasInstructorConflict = (
          const st = getStartFromReservation(r);
          if (!st) return false;
          const rKey = busyLocalKeyFromStored(st);
-         return rKey === key; // aceeași oră locală
+         return rKey === key;
       });
 };
+
 const hasStudentConflict = (
    reservations,
    studentId,
@@ -328,7 +329,7 @@ const hasStudentConflict = (
          const st = getStartFromReservation(r);
          if (!st) return false;
          const rKey = busyLocalKeyFromStored(st);
-         return rKey === key; // aceeași oră locală
+         return rKey === key;
       });
 };
 
@@ -363,6 +364,7 @@ const FIELD_LABEL = {
    isImportant: "Important",
    isCancelled: "Anulat",
 };
+
 const makeResolvers = (students, instructors, h) => {
    const stuById = new Map(
       (students || []).map((s) => [
@@ -394,6 +396,7 @@ const makeResolvers = (students, instructors, h) => {
       val == null ? "" : insById.get(String(val)) || String(val);
    return { nameForUserId, nameForInstructorId };
 };
+
 const fmtValue = (field, value, resolvers) => {
    if (value == null || value === "") return "";
    if (field === "startTime") {
@@ -423,6 +426,7 @@ const fmtValue = (field, value, resolvers) => {
    if (typeof value === "boolean") return value ? "Da" : "Nu";
    return String(value);
 };
+
 const buildChangesFromHistoryItem = (h, resolvers) => {
    const action = String(h?.action || "").toUpperCase();
    if (action === "CREATE" || action === "CREATED") return [];
@@ -456,6 +460,7 @@ const buildChangesFromHistoryItem = (h, resolvers) => {
    }
    return [];
 };
+
 const statusFromHistory = (h) => {
    const s = String(h?.status || h?.action || h?.type || "").toUpperCase();
    if (s.includes("CANCEL")) return "cancelled";
@@ -466,6 +471,7 @@ const statusFromHistory = (h) => {
       return "updated";
    return "pending";
 };
+
 const iconFor = (status) => {
    switch (status) {
       case "updated":
@@ -482,20 +488,49 @@ const iconFor = (status) => {
    }
 };
 
-// ⬇️ Acceptă onClose pentru a închide cu aceeași funcție peste tot
 export default function ReservationEditPopup({ reservationId, onClose }) {
    const dispatch = useDispatch();
 
-   // ===== Alert pills =====
    const [alerts, setAlerts] = useState([]);
    const pushAlert = (type, text) =>
       setAlerts((prev) => [...prev, { id: Date.now(), type, text }]);
    const popAlert = () => setAlerts((prev) => prev.slice(0, -1));
 
-   // ⬇️ Funcție unificată de închidere popup
+   const copyToClipboard = (value, label = "Text copiat în clipboard") => {
+      if (!value) return;
+      try {
+         if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value);
+         } else {
+            const textarea = document.createElement("textarea");
+            textarea.value = value;
+            textarea.style.position = "fixed";
+            textarea.style.opacity = "0";
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand("copy");
+            document.body.removeChild(textarea);
+         }
+
+         setAlerts((prev) => [
+            ...prev,
+            { id: Date.now(), type: "success", text: label },
+         ]);
+      } catch (e) {
+         setAlerts((prev) => [
+            ...prev,
+            {
+               id: Date.now(),
+               type: "error",
+               text: "Nu am putut copia în clipboard.",
+            },
+         ]);
+      }
+   };
+
    const closeSelf = useCallback(() => {
       if (typeof onClose === "function") {
-         return onClose(); // ✅ va apela requestCloseSubPopup()
+         return onClose();
       }
       try {
          closeSubPopupStore();
@@ -505,12 +540,12 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       } catch {}
    }, [onClose]);
 
-   // Store
    const reservations = useSelector((s) => s.reservations?.list || []);
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
+
    useEffect(() => {
-      if (!reservations?.length) dispatch(fetchReservationsDelta()); // ✅
+      if (!reservations?.length) dispatch(fetchReservationsDelta());
       if (!studentsAll?.length) dispatch(fetchStudents());
       if (!instructors?.length) dispatch(fetchInstructors());
    }, [dispatch]); // eslint-disable-line
@@ -520,7 +555,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       [reservations, reservationId]
    );
 
-   // Elevi cu rol USER
    const hasUserRole = (u) => {
       const role = String(
          u?.role ?? u?.Role ?? u?.userRole ?? ""
@@ -531,12 +565,12 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          : [];
       return roles.includes("USER");
    };
+
    const students = useMemo(
       () => (studentsAll || []).filter(hasUserRole),
       [studentsAll]
    );
 
-   // --- hidratare UI din rezervarea existentă (în Moldova, DST-safe)
    const didHydrate = useRef(false);
 
    const [selectedDate, setSelectedDate] = useState(() => {
@@ -552,16 +586,13 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const [studentId, setStudentId] = useState("");
    const [instructorId, setInstructorId] = useState("");
 
-   // Notiță (privată) + Culoare token
    const [privateMessage, setPrivateMessage] = useState("");
    const [colorToken, setColorToken] = useState("--blue");
 
-   // 🔹 Toggle-uri noi: Favorit, Important, Anulat
    const [isFavorite, setIsFavorite] = useState(false);
    const [isImportant, setIsImportant] = useState(false);
    const [isCancelled, setIsCanceled] = useState(false);
 
-   /* ——— Tooltip mobil / focus accesibilitate ——— */
    const [colorHoverText, setColorHoverText] = useState("");
    const colorHoverTimerRef = useRef(null);
    useEffect(() => {
@@ -574,9 +605,8 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    useEffect(() => {
       if (!existing || didHydrate.current) return;
 
-      // Hidratează STRICT din cheia locală (stabilă, DST-safe), indiferent de Z/offset
       const lk = existing.startTime
-         ? busyLocalKeyFromStored(existing.startTime) // ex: "2025-10-06|08:00"
+         ? busyLocalKeyFromStored(existing.startTime)
          : localKeyFromTs(Date.now(), MOLDOVA_TZ);
       const [dayStr, hhmm] = lk.split("|");
       setSelectedDate(localDateObjFromStr(dayStr));
@@ -608,7 +638,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          setColorToken("--blue");
       }
 
-      // 🔹 Hidratează și flag-urile noi
       setIsFavorite(!!existing?.isFavorite);
       setIsImportant(!!existing?.isImportant);
       setIsCanceled(!!existing?.isCancelled);
@@ -628,7 +657,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       [existing]
    );
 
-   // ecran: formular vs căutări vs istoric
    const [view, setView] = useState("form"); // "form" | "studentSearch" | "instructorSearch" | "history"
    const [qStudent, setQStudent] = useState("");
    const [qInstructor, setQInstructor] = useState("");
@@ -654,8 +682,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       });
    }, [instructors, qInstructor]);
 
-   // ===== Disponibilități (DOAR pe baza rezervărilor, fără blackout, fără trecut) =====
-   const [freeSlots, setFreeSlots] = useState([]); // ISO[]
+   const [freeSlots, setFreeSlots] = useState([]);
    const freeLocalKeySet = useMemo(
       () => new Set(freeSlots.map((iso) => localKeyForIso(iso))),
       [freeSlots]
@@ -688,7 +715,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          }
       }
 
-      // NU mai filtrăm pe "în viitor" și NU mai punem blackout aici
       const free = fullGrid.filter((iso) => {
          const key = localKeyForIso(iso);
          return !busyStudent.has(key) && !busyInstructor.has(key);
@@ -746,12 +772,28 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       : "(neales)";
    const instructorPhone = selectedInstructor?.phone || "";
 
-   // ===== utilitare mici =====
+   const handleSectorToggle = useCallback(() => {
+      setSector((prev) => {
+         const current = String(prev || "").trim();
+         const idx = SECTOR_ORDER.indexOf(current);
+         if (idx === -1) return SECTOR_ORDER[0];
+         return SECTOR_ORDER[(idx + 1) % SECTOR_ORDER.length];
+      });
+   }, []);
+
+   const handleGearboxToggle = useCallback(() => {
+      setGearbox((prev) => {
+         const current = String(prev || "").toLowerCase();
+         if (current === "automat") return "Manual";
+         return "Automat";
+      });
+   }, []);
+
    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    const AFTER_DELETE_DELAY_MS = 800;
 
-   // ===== Actions =====
    const onDelete = async () => {
+      if (!existing) return;
       const ok = window.confirm("Ștergi această rezervare?");
       if (!ok) return;
 
@@ -760,11 +802,8 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       try {
          await (dispatch(removeReservation(existing.id)).unwrap?.() ??
             dispatch(removeReservation(existing.id)));
-         await (dispatch(fetchReservationsDelta()).unwrap?.() ??
-            dispatch(fetchReservationsDelta()));
-         triggerCalendarRefresh();
       } catch (e) {
-         // opțional: pushAlert("error", "Nu am putut șterge rezervarea.");
+         // opțional alertă
       }
    };
 
@@ -772,7 +811,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       if (!instructorId) return pushAlert("error", "Selectează instructorul.");
       if (!studentId) return pushAlert("error", "Selectează elevul.");
 
-      // CHEI LOCALE pentru comparații de timp
       const currentKey = existing?.startTime
          ? busyLocalKeyFromStored(existing.startTime)
          : null;
@@ -781,7 +819,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             ? localKeyForDateAndTime(selectedDate, selectedTime.oraStart)
             : null;
 
-      // ISO UTC corect pentru selecția curentă (indiferent ce trimitem mai departe)
       const selectedIsoUTC =
          selectedDate && selectedTime
             ? toUtcIsoFromMoldova(selectedDate, selectedTime.oraStart)
@@ -792,13 +829,11 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             ? isoForDbMatchLocalHour(selectedIsoUTC)
             : selectedIsoUTC;
 
-      // „schimbare de timp” / entități
       const changingTime = !!selectedKey && selectedKey !== currentKey;
       const changingStudent = String(studentId) !== String(originalStudentId);
       const changingInstructor =
          String(instructorId) !== String(originalInstructorId);
 
-      // ⚠️ NU mai blocăm mutarea în trecut
       if (changingTime && !selectedIsoUTC) {
          return pushAlert(
             "error",
@@ -806,7 +841,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          );
       }
 
-      // ⚠️ NU mai verificăm blackout (doar conflicte rezervări)
       const effectiveIsoForChecks =
          selectedIsoUTC ||
          (existing?.startTime
@@ -832,71 +866,21 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                "Slot indisponibil (aceeași oră locală pentru elev sau instructor)."
             );
          }
-      } else {
-         if (changingInstructor) {
-            const conflictI = hasInstructorConflict(
-               reservations,
-               instructorId,
-               effectiveIsoForChecks,
-               existing.id
+      } else if (changingInstructor) {
+         const conflictI = hasInstructorConflict(
+            reservations,
+            instructorId,
+            effectiveIsoForChecks,
+            existing.id
+         );
+         if (conflictI) {
+            return pushAlert(
+               "error",
+               "Instructorul ales are deja o rezervare la această oră."
             );
-            if (conflictI)
-               return pushAlert(
-                  "error",
-                  "Instructorul ales are deja o rezervare la această oră."
-               );
-         }
-         if (changingStudent) {
-            const effectiveIsoToSend = changingTime
-               ? selectedIsoForBackend
-               : existing?.startTime;
-
-            const forUserPayload = {
-               userId: Number(studentId),
-               instructorId: Number(instructorId) || undefined,
-               instructorsGroupId:
-                  existing?.instructorsGroupId ??
-                  existing?.groupId ??
-                  undefined,
-               reservations: [
-                  {
-                     startTime: effectiveIsoToSend,
-                     sector,
-                     gearbox,
-                     privateMessage,
-                     color: colorToken,
-                     isFavorite,
-                     isImportant,
-                     isCancelled,
-                  },
-               ],
-            };
-
-            closeSelf();
-
-            try {
-               await (dispatch(removeReservation(existing.id)).unwrap?.() ??
-                  dispatch(removeReservation(existing.id)));
-               await sleep(AFTER_DELETE_DELAY_MS);
-               await createReservationsForUser(forUserPayload);
-               await (dispatch(fetchReservationsDelta()).unwrap?.() ??
-                  dispatch(fetchReservationsDelta()));
-               triggerCalendarRefresh();
-            } catch (e) {
-               setAlerts((prev) => [
-                  ...prev,
-                  {
-                     id: Date.now(),
-                     type: "error",
-                     text: "Nu am putut reprograma elevul.",
-                  },
-               ]);
-            }
-            return;
          }
       }
 
-      // ==== SCHIMB elevul → DELETE vechi + CREATE prin endpoint-ul nou (cazul + schimbare oră)
       if (changingStudent) {
          const effectiveIsoToSend = changingTime
             ? selectedIsoForBackend
@@ -921,15 +905,13 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             ],
          };
 
-         // Închidem popup-ul cu aceeași funcție
          closeSelf();
 
          try {
-            await dispatch(removeReservation(existing.id));
+            await (dispatch(removeReservation(existing.id)).unwrap?.() ??
+               dispatch(removeReservation(existing.id)));
             await sleep(AFTER_DELETE_DELAY_MS);
             await createReservationsForUser(forUserPayload);
-            await dispatch(fetchReservationsDelta()); // ✅
-            triggerCalendarRefresh(); // ✅
          } catch (e) {
             setAlerts((prev) => [
                ...prev,
@@ -943,7 +925,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          return;
       }
 
-      // ==== restul cazurilor: UPDATE pe rezervarea curentă
       const payload = {
          sector,
          gearbox,
@@ -965,7 +946,16 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             : {}),
       };
 
-      // Închidem popup-ul
+      const focusPayload =
+         changingTime && selectedIsoForBackend
+            ? {
+                 type: "focus-reservation",
+                 reservationId: existing.id,
+                 newStartTime: selectedIsoForBackend,
+                 forceReload: false,
+              }
+            : null;
+
       closeSelf();
 
       try {
@@ -973,15 +963,15 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             updateReservation({ id: existing.id, data: payload })
          ).unwrap?.() ??
             dispatch(updateReservation({ id: existing.id, data: payload })));
-         await (dispatch(fetchReservationsDelta()).unwrap?.() ??
-            dispatch(fetchReservationsDelta()));
-         triggerCalendarRefresh(); // 🔔 anunță DayView să aplice pending-ul
+
+         if (focusPayload) {
+            triggerCalendarRefresh(focusPayload);
+         }
       } catch (e) {
-         // opțional: pushAlert("error", "Nu am putut salva modificările.");
+         // opțional alertă
       }
    };
 
-   /* ========= Istoric (doar lista) ========== */
    const [historyLoading, setHistoryLoading] = useState(false);
    const [historyError, setHistoryError] = useState("");
    const [historyItems, setHistoryItems] = useState(null);
@@ -1043,7 +1033,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       });
    }, [historyItems, studentsAll, instructors, existing, reservationId]);
 
-   /* =========================== RENDER =========================== */
+   /* ===================== RENDER HELPERS ===================== */
 
    if (!existing) {
       return (
@@ -1051,7 +1041,9 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             <div className="popup-panel__header">
                <h3 className="popup-panel__title">Editează rezervarea</h3>
             </div>
-            <div className="popup-panel__content">Se încarcă datele...</div>
+            <div className="popupui popupui__content">
+               <div className="popupui__disclaimer">Se încarcă datele...</div>
+            </div>
          </>
       );
    }
@@ -1063,24 +1055,19 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const filterDate = (date) => {
       const key = localDateStr(date);
       if (existingDayKey && key === existingDayKey) return true;
-      // ⚠️ La edit permit și zile în trecut pentru mutare manuală,
-      // dar dacă vrei să poți selecta ABSOLUT orice zi, scoți filtrul:
       return true;
-      // dacă vrei totuși doar de azi în sus + ziua veche:
-      // return date >= todayAt00();
    };
-
    const renderHistoryList = () => (
-      <div className="history__grid-wrapper">
-         <div style={{ display: "flex", gap: 8, marginBottom: -16 }}>
+      <div className="popupui__history">
+         <div className="popupui__history-header">
             <button
-               className="instructors-popup__form-button"
+               className="popupui__btn popupui__btn--normal"
                onClick={() => setView("form")}
             >
                Înapoi
             </button>
             <button
-               className="instructors-popup__form-button"
+               className="popupui__btn popupui__btn--normal"
                onClick={loadHistory}
                disabled={historyLoading}
                title="Reîncarcă istoricul"
@@ -1089,95 +1076,101 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             </button>
          </div>
 
-         <div className="history__grid">
-            {historyError ? (
-               <div className="saddprogramari__disclaimer">{historyError}</div>
-            ) : historyLoading ? (
-               <div className="saddprogramari__disclaimer">
-                  Se încarcă istoricul…
-               </div>
-            ) : (formattedHistory || []).length === 0 ? (
-               <div className="saddprogramari__disclaimer">
-                  Nu există modificări pentru această rezervare.
-               </div>
-            ) : (
-               formattedHistory.map((entry, index) => {
-                  const isCreate = String(entry.action || "")
-                     .toUpperCase()
-                     .startsWith("CREATE");
-                  return (
-                     <div
-                        key={entry.id + "-" + index}
-                        className={`history__item history__item--${entry.status}`}
-                     >
-                        <div className="history__item-left">
-                           <span style={{ opacity: 0.8 }}>{entry.time}</span>
-                           <div
-                              className="reservation-history__changes"
-                              style={{ marginTop: 6 }}
-                           >
-                              {entry.by ? (
-                                 <div
-                                    className="hist-line"
-                                    style={{ marginBottom: 4, opacity: 0.9 }}
-                                 >
-                                    {isCreate ? "Creată de" : "Modificat de"}{" "}
-                                    <b>{entry.by}</b>.
-                                 </div>
-                              ) : null}
+         <div className="popupui__history-grid-wrapper">
+            <div className="popupui__history-grid">
+               {historyError ? (
+                  <div className="popupui__history-placeholder">
+                     {historyError}
+                  </div>
+               ) : historyLoading ? (
+                  <div className="popupui__history-placeholder">
+                     Se încarcă istoricul…
+                  </div>
+               ) : (formattedHistory || []).length === 0 ? (
+                  <div className="popupui__history-placeholder">
+                     Nu există modificări pentru această rezervare.
+                  </div>
+               ) : (
+                  formattedHistory.map((entry, index) => {
+                     const isCreate = String(entry.action || "")
+                        .toUpperCase()
+                        .startsWith("CREATE");
 
-                              {isCreate ? (
-                                 <div className="hist-line">
-                                    Rezervare creată.
-                                 </div>
-                              ) : entry.changes?.length ? (
-                                 entry.changes.map((c, i) => (
-                                    <div key={i} className="hist-line">
-                                       <p>
-                                          <b>{c.label}:</b>&nbsp;
-                                       </p>
-                                       {c.from ? <i>{c.from}</i> : null}
-                                       {c.from ? " → " : null}
-                                       <i>{c.to}</i>
+                     return (
+                        <div
+                           key={entry.id + "-" + index}
+                           className={`popupui__history-item popupui__history-item--${entry.status}`}
+                        >
+                           <div className="popupui__history-item-left">
+                              <span className="popupui__history-time">
+                                 {entry.time}
+                              </span>
+
+                              <div className="popupui__history-changes">
+                                 {entry.by ? (
+                                    <div className="popupui__history-line popupui__history-line--who">
+                                       {isCreate ? "Creată de" : "Modificat de"}{" "}
+                                       <b>{entry.by}</b>.
                                     </div>
-                                 ))
-                              ) : null}
+                                 ) : null}
+
+                                 {isCreate ? (
+                                    <div className="popupui__history-line">
+                                       Rezervare creată.
+                                    </div>
+                                 ) : entry.changes?.length ? (
+                                    entry.changes.map((c, i) => (
+                                       <div
+                                          key={i}
+                                          className="popupui__history-line"
+                                       >
+                                          <p>
+                                             <b>{c.label}:</b>&nbsp;
+                                          </p>
+                                          {c.from ? <i>{c.from}</i> : null}
+                                          {c.from ? " → " : null}
+                                          <i>{c.to}</i>
+                                       </div>
+                                    ))
+                                 ) : null}
+                              </div>
+                           </div>
+
+                           <div className="popupui__history-item-right">
+                              <ReactSVG
+                                 className={`popupui__history-icon ${entry.status}`}
+                                 src={iconFor(entry.status)}
+                              />
                            </div>
                         </div>
-
-                        <div className="history__item-right">
-                           <ReactSVG
-                              className={`history__item-icon ${entry.status}`}
-                              src={iconFor(entry.status)}
-                           />
-                        </div>
-                     </div>
-                  );
-               })
-            )}
+                     );
+                  })
+               )}
+            </div>
          </div>
       </div>
    );
 
    const renderStudentSearch = () => (
       <>
-         <div className="instructors-popup__search-wrapper ">
+         <div className="popupui__search-header">
             <input
                type="text"
-               className="instructors-popup__search"
-               placeholder="Caută elev (doar rol USER)…"
+               className="popupui__search-input"
+               placeholder="Caută elev"
                value={qStudent}
                onChange={(e) => setQStudent(e.target.value)}
             />
             <button
-               className="instructors-popup__form-button instructors-popup__form-button--cancel"
+               className="popupui__btn popupui__btn--normal"
                onClick={() => setView("form")}
             >
                Înapoi
             </button>
          </div>
-         <div className="instructors-popup__list-wrapper">
-            <ul className="instructors-popup__list-items">
+
+         <div className="popupui__search-list-wrapper">
+            <ul className="popupui__search-list">
                {filteredStudents.map((s) => {
                   const full = `${s.firstName || ""} ${
                      s.lastName || ""
@@ -1187,14 +1180,14 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                   return (
                      <li
                         key={s.id}
-                        className="instructors-popup__item"
+                        className="popupui__search-item"
                         onClick={() => {
                            setStudentId(String(s.id));
                            setView("form");
                            setTimeout(() => recomputeAvailability(), 0);
                         }}
                      >
-                        <div className="instructors-popup__item-left">
+                        <div className="popupui__search-item-left">
                            <h3>{highlightText(full, qStudent)}</h3>
                            {phone && <p>{highlightText(phone, qStudent)}</p>}
                            {email && <p>{highlightText(email, qStudent)}</p>}
@@ -1209,23 +1202,24 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
    const renderInstructorSearch = () => (
       <>
-         <div className="instructors-popup__search-wrapper ">
+         <div className="popupui__search-header">
             <input
                type="text"
-               className="instructors-popup__search"
-               placeholder="Caută instructor după nume sau telefon..."
+               className="popupui__search-input"
+               placeholder="Caută instructor "
                value={qInstructor}
                onChange={(e) => setQInstructor(e.target.value)}
             />
             <button
-               className="instructors-popup__form-button instructors-popup__form-button--cancel"
+               className="popupui__btn popupui__btn--normal"
                onClick={() => setView("form")}
             >
                Înapoi
             </button>
          </div>
-         <div className="instructors-popup__list-wrapper">
-            <ul className="instructors-popup__list-items">
+
+         <div className="popupui__search-list-wrapper">
+            <ul className="popupui__search-list">
                {filteredInstructors.map((i) => {
                   const full = `${i.firstName || ""} ${
                      i.lastName || ""
@@ -1234,14 +1228,14 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                   return (
                      <li
                         key={i.id}
-                        className="instructors-popup__item"
+                        className="popupui__search-item"
                         onClick={() => {
                            setInstructorId(String(i.id));
                            setView("form");
                            setTimeout(() => recomputeAvailability(), 0);
                         }}
                      >
-                        <div className="instructors-popup__item-left">
+                        <div className="popupui__search-item-left">
                            <h3>{highlightText(full, qInstructor)}</h3>
                            {phone && <p>{highlightText(phone, qInstructor)}</p>}
                         </div>
@@ -1264,12 +1258,10 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       return (
          <>
             {/* Calendar + Ore */}
-            <div className="saddprogramari__selector">
+            <div className="popupui__selector">
                {/* Calendar */}
-               <div className="saddprogramari__calendar">
-                  <h3 className="saddprogramari__title">
-                     Selectează data și ora:
-                  </h3>
+               <div className="popupui__field popupui__field--calendar">
+                  <h3 className="popupui__field-label">Selectează data:</h3>
                   <DatePicker
                      selected={selectedDate}
                      onChange={(d) => {
@@ -1294,88 +1286,18 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                         const key = localDateStr(date);
                         return freeByDay.has(key) || key === currentDayKey
                            ? ""
-                           : "saddprogramari__day--inactive";
+                           : "popupui__day--inactive";
                      }}
-                     calendarClassName="aAddProg__datepicker"
+                     calendarClassName="popupui__datepicker"
                   />
-                  <div
-                     style={{
-                        display: "grid",
-                        gap: 6,
-                        gridTemplateColumns: "repeat(3, auto)",
-                     }}
-                  >
-                     {/* Favorit – successIcon */}
-                     <button
-                        type="button"
-                        className={`instructors-popup__form-button reservation-flag-btn ${
-                           isFavorite
-                              ? "instructors-popup__form-button--accent"
-                              : ""
-                        }`}
-                        onClick={() => setIsFavorite((v) => !v)}
-                        title={
-                           isFavorite
-                              ? "Scoate din favorite"
-                              : "Marchează ca favorit"
-                        }
-                     >
-                        <ReactSVG
-                           className="reservation-flag-icon react-icon"
-                           src={favIcon}
-                        />
-                     </button>
-
-                     {/* Important – temporar editIcon */}
-                     <button
-                        type="button"
-                        className={`instructors-popup__form-button reservation-flag-btn ${
-                           isImportant
-                              ? "instructors-popup__form-button--accent"
-                              : ""
-                        }`}
-                        onClick={() => setIsImportant((v) => !v)}
-                        title={
-                           isImportant
-                              ? "Scoate marcajul de important"
-                              : "Marchează ca important"
-                        }
-                     >
-                        <ReactSVG
-                           className="reservation-flag-icon react-icon"
-                           src={importantIcon}
-                        />
-                     </button>
-
-                     {/* Anulat – cancelIcon */}
-                     <button
-                        type="button"
-                        className={`instructors-popup__form-button reservation-flag-btn ${
-                           isCancelled
-                              ? "instructors-popup__form-button--accent"
-                              : ""
-                        }`}
-                        onClick={() => setIsCanceled((v) => !v)}
-                        title={
-                           isCancelled
-                              ? "Scoate marcajul de anulat"
-                              : "Marchează rezervarea ca anulată"
-                        }
-                     >
-                        <ReactSVG
-                           className="reservation-flag-icon react-icon"
-                           src={cancelIcon}
-                        />
-                     </button>
-                  </div>
                </div>
 
-               {/* Ore – LISTĂ simplă */}
-               <div className="saddprogramari__times">
-                  <h3 className="saddprogramari__title hide">Selectează:</h3>
-                  <div className="saddprogramari__times-list">
+               {/* Ore */}
+               <div className="popupui__field popupui__field--times">
+                  <h3 className="popupui__field-label">Selectează ora:</h3>
+                  <div className="popupui__times-list">
                      {!selectedDate && (
-                        <div className="saddprogramari__disclaimer">
+                        <div className="popupui__disclaimer">
                            Te rog să selectezi mai întâi o zi!
                         </div>
                      )}
@@ -1395,6 +1317,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                         const isTodayLocal =
                            selectedDate &&
                            localDateStr(selectedDate) === nowDayLocal;
+
                         const pastToday =
                            isTodayLocal && ora.oraStart <= nowHHMM;
 
@@ -1402,30 +1325,30 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                         const studentUnchanged =
                            String(studentId) === String(originalStudentId);
 
-                        // disponibil dacă:
-                        //  - este slot-ul curent al rezervării și elevul e același
-                        //  - sau e liber în freeLocalKeySet (nu are rezervări)
                         const available =
                            (isExistingSlot && studentUnchanged) ||
                            (key ? freeLocalKeySet.has(key) : false);
 
-                        // ⚠️ la edit permitem și trecutul => scoatem blocarea pe pastToday
-                        const disabled = !selectedDate || !available;
+                        const disabled =
+                           !selectedDate || !available || pastToday;
 
                         return (
                            <button
                               key={ora.eticheta}
                               onClick={() => setSelectedTime(ora)}
                               disabled={disabled}
-                              className={`saddprogramari__time-btn ${
+                              className={[
+                                 "popupui__time-btn",
                                  isSelected
-                                    ? "saddprogramari__time-btn--selected"
-                                    : ""
-                              } ${
-                                 disabled
-                                    ? "saddprogramari__time-btn--disabled"
-                                    : ""
-                              }`}
+                                    ? "popupui__time-btn--selected"
+                                    : "",
+                                 disabled ? "popupui__time-btn--disabled" : "",
+                                 ora.eticheta === "19:30"
+                                    ? "popupui__time-btn--wide"
+                                    : "",
+                              ]
+                                 .filter(Boolean)
+                                 .join(" ")}
                               title={
                                  !selectedDate
                                     ? "Alege o zi"
@@ -1445,197 +1368,270 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             </div>
 
             {/* Elev + Instructor */}
-            <div
-               className="instructors-popup__form-row"
-               style={{ marginTop: 10 }}
-            >
-               <label className="instructors-popup__field" style={{ flex: 1 }}>
-                  <span className="instructors-popup__label">Elev</span>
-                  <div className="picker__row">
-                     <input
-                        className="instructors-popup__input"
-                        type="text"
-                        readOnly
-                        value={
-                           studentDisplay +
-                           (studentPhone ? ` · ${studentPhone}` : "")
-                        }
-                        placeholder="Alege elev"
-                     />
-                     <button
-                        type="button"
-                        className="instructors-popup__form-button"
-                        onClick={() => setView("studentSearch")}
-                     >
-                        Caută elev
-                     </button>
+            <div className="popupui__form-row popupui__form-row--spaced">
+               <div className="popupui__field popupui__field--clickable">
+                  <span className="popupui__field-label">Elev</span>
+                  <div
+                     className="popupui__field-line"
+                     onClick={() => setView("studentSearch")}
+                  >
+                     <span className="popupui__field-text">
+                        {studentDisplay !== "(neales)"
+                           ? studentDisplay
+                           : "Alege elev"}
+                     </span>
+                     {selectedStudent && studentDisplay && (
+                        <button
+                           type="button"
+                           className="popupui__icon-btn popupui__icon-btn--copy"
+                           onClick={(e) => {
+                              e.stopPropagation();
+                              copyToClipboard(
+                                 studentDisplay,
+                                 "Numele elevului a fost copiat."
+                              );
+                           }}
+                           title="Copiază numele elevului"
+                        >
+                           <ReactSVG className="popupui__icon" src={copyIcon} />
+                        </button>
+                     )}
                   </div>
-               </label>
 
-               <label className="instructors-popup__field" style={{ flex: 1 }}>
-                  <span className="instructors-popup__label">Instructor</span>
-                  <div className="picker__row">
-                     <input
-                        className="instructors-popup__input"
-                        type="text"
-                        readOnly
-                        value={
-                           instructorDisplay +
-                           (instructorPhone ? ` · ${instructorPhone}` : "")
-                        }
-                        placeholder="Alege instructor"
-                     />
-                     <button
-                        type="button"
-                        className="instructors-popup__form-button"
-                        onClick={() => setView("instructorSearch")}
-                     >
-                        Caută instructor
-                     </button>
+                  <div
+                     className="popupui__field-line"
+                     onClick={() => setView("studentSearch")}
+                  >
+                     <span className="popupui__field-text">
+                        {studentPhone || "Telefon elev"}
+                     </span>
+                     {selectedStudent && studentPhone && (
+                        <button
+                           type="button"
+                           className="popupui__icon-btn popupui__icon-btn--copy"
+                           onClick={(e) => {
+                              e.stopPropagation();
+                              copyToClipboard(
+                                 studentPhone,
+                                 "Telefonul elevului a fost copiat."
+                              );
+                           }}
+                           title="Copiază numărul de telefon"
+                        >
+                           <ReactSVG className="popupui__icon" src={copyIcon} />
+                        </button>
+                     )}
                   </div>
-               </label>
+               </div>
+
+               <div className="popupui__field popupui__field--clickable">
+                  <span className="popupui__field-label">Instructor</span>
+                  <div
+                     className="popupui__field-line"
+                     onClick={() => setView("instructorSearch")}
+                  >
+                     <span className="popupui__field-text">
+                        {instructorDisplay !== "(neales)"
+                           ? instructorDisplay
+                           : "Alege instructor"}
+                     </span>
+                  </div>
+                  <div
+                     className="popupui__field-line"
+                     onClick={() => setView("instructorSearch")}
+                  >
+                     <span className="popupui__field-text">
+                        {instructorPhone || "Telefon instructor"}
+                     </span>
+                  </div>
+               </div>
             </div>
-
-            {/* Notiță scurtă */}
-            <input
-               className="instructors-popup__input"
-               placeholder="Ex.: punct de întâlnire, cerințe speciale, progres etc."
-               value={privateMessage}
-               style={{ marginBottom: "6px" }}
-               onChange={(e) => setPrivateMessage(e.target.value)}
-            />
 
             {/* Sector + Cutie */}
-            <div className="instructors-popup__form-row">
-               <div
-                  className={`instructors-popup__radio-wrapper addprog ${
-                     sector === "Botanica"
-                        ? "active-botanica"
-                        : "active-ciocana"
-                  }`}
-                  style={{ flex: 1 }}
-               >
-                  <label>
-                     <input
-                        type="radio"
-                        name="sector"
-                        value="Botanica"
-                        checked={sector === "Botanica"}
-                        onChange={(e) => setSector(e.target.value)}
-                     />
-                     Botanica
-                  </label>
-                  <label>
-                     <input
-                        type="radio"
-                        name="sector"
-                        value="Ciocana"
-                        checked={sector === "Ciocana"}
-                        onChange={(e) => setSector(e.target.value)}
-                     />
-                     Ciocana
-                  </label>
+            <div className="popupui__form-row popupui__form-row--compact">
+               <div className="popupui__field popupui__field--clickable popupui__field--grow-1">
+                  <span className="popupui__field-label">Sector</span>
+                  <div
+                     className="popupui__field-line"
+                     onClick={handleSectorToggle}
+                  >
+                     <span className="popupui__field-text">
+                        {sector || "Alege sector"}
+                     </span>
+                  </div>
                </div>
 
-               <div
-                  className={`instructors-popup__radio-wrapper addprog ${
-                     gearbox === "Manual" ? "active-botanica" : "active-ciocana"
-                  }`}
-                  style={{ flex: 1 }}
-               >
-                  <label>
-                     <input
-                        type="radio"
-                        name="gearbox"
-                        value="Manual"
-                        checked={gearbox === "Manual"}
-                        onChange={(e) => setGearbox(e.target.value)}
-                     />
-                     Manual
-                  </label>
-                  <label>
-                     <input
-                        type="radio"
-                        name="gearbox"
-                        value="Automat"
-                        checked={gearbox === "Automat"}
-                        onChange={(e) => setGearbox(e.target.value)}
-                     />
-                     Automat
-                  </label>
+               <div className="popupui__field popupui__field--clickable popupui__field--grow-1">
+                  <span className="popupui__field-label">Cutie</span>
+                  <div
+                     className="popupui__field-line"
+                     onClick={handleGearboxToggle}
+                  >
+                     <span className="popupui__field-text">
+                        {gearbox
+                           ? gearbox.toLowerCase() === "automat"
+                              ? "Automat"
+                              : "Manual"
+                           : "Alege cutie"}
+                     </span>
+                  </div>
                </div>
             </div>
 
-            {/* Selector culoare */}
-            <div
-               className="saddprogramari__color-grid"
-               role="radiogroup"
-               aria-label="Culoare eveniment"
-            >
-               {COLOR_TOKENS.map((token) => {
-                  const suffix = token.replace(/^--/, "");
-                  const active = colorToken === token;
-                  const name = COLOR_LABEL[suffix] || suffix;
-                  const tip = COLOR_HINTS[suffix]
-                     ? `${COLOR_HINTS[suffix]}`
-                     : name;
-                  return (
+            {/* Notiță + Tichete */}
+            <div className="popupui__form-row popupui__form-row--gap">
+               <div className="popupui__field ">
+                  <span className="popupui__field-label">Notiță</span>
+                  <textarea
+                     className="popupui__textarea"
+                     rows={2}
+                     placeholder="Notiță..."
+                     value={privateMessage}
+                     style={{ width: "auto", height: "auto" }}
+                     onChange={(e) => setPrivateMessage(e.target.value)}
+                  />
+               </div>
+
+               <div className="popupui__field ">
+                  <span className="popupui__field-label">Tichete</span>
+                  <div className="popupui__flag-grid">
                      <button
-                        key={token}
                         type="button"
-                        role="radio"
-                        aria-checked={active}
-                        aria-label={tip}
-                        title={tip}
                         className={[
-                           "saddprogramari__color-swatch",
-                           `saddprogramari__color-swatch--${suffix}`,
-                           active ? "is-active" : "",
-                        ].join(" ")}
-                        onClick={() => setColorToken(token)}
-                        onFocus={() => setColorHoverText(tip)}
-                        onBlur={() => setColorHoverText("")}
-                        onTouchStart={() => {
-                           setColorHoverText(tip);
-                           if (colorHoverTimerRef.current)
-                              clearTimeout(colorHoverTimerRef.current);
-                           colorHoverTimerRef.current = setTimeout(() => {
-                              setColorHoverText("");
-                           }, 1600);
-                        }}
-                     />
-                  );
-               })}
+                           "popupui__btn",
+                           "popupui__btn--flag",
+                           isFavorite ? "popupui__btn--active" : "",
+                        ]
+                           .filter(Boolean)
+                           .join(" ")}
+                        onClick={() => setIsFavorite((v) => !v)}
+                        title={
+                           isFavorite
+                              ? "Scoate din favorite"
+                              : "Marchează ca favorit"
+                        }
+                     >
+                        <ReactSVG
+                           className="reservation-flag-icon react-icon"
+                           src={favIcon}
+                        />
+                     </button>
+
+                     <button
+                        type="button"
+                        className={[
+                           "popupui__btn",
+                           "popupui__btn--flag",
+                           isImportant ? "popupui__btn--active" : "",
+                        ]
+                           .filter(Boolean)
+                           .join(" ")}
+                        onClick={() => setIsImportant((v) => !v)}
+                        title={
+                           isImportant
+                              ? "Scoate marcajul de important"
+                              : "Marchează ca important"
+                        }
+                     >
+                        <ReactSVG
+                           className="reservation-flag-icon react-icon"
+                           src={importantIcon}
+                        />
+                     </button>
+
+                     <button
+                        type="button"
+                        className={[
+                           "popupui__btn",
+                           "popupui__btn--flag",
+                           isCancelled ? "popupui__btn--active" : "",
+                        ]
+                           .filter(Boolean)
+                           .join(" ")}
+                        onClick={() => setIsCanceled((v) => !v)}
+                        title={
+                           isCancelled
+                              ? "Scoate marcajul de anulat"
+                              : "Marchează rezervarea ca anulată"
+                        }
+                     >
+                        <ReactSVG
+                           className="reservation-flag-icon react-icon"
+                           src={cancelIcon}
+                        />
+                     </button>
+                  </div>
+               </div>
             </div>
 
-            {/* Butoane */}
-            <div
-               className="instructors-popup__btns"
-               style={{ marginTop: 10, alignItems: "center" }}
-            >
+            {/* Culoare */}
+            <div className="popupui__field popupui__field--stacked">
+               <span className="popupui__field-label">Culoare</span>
+
+               <div
+                  className="popupui__color-grid"
+                  role="radiogroup"
+                  aria-label="Culoare eveniment"
+               >
+                  {COLOR_TOKENS.map((token) => {
+                     const suffix = token.replace(/^--/, "");
+                     const active = colorToken === token;
+                     const name = COLOR_LABEL[suffix] || suffix;
+                     const tip = COLOR_HINTS[suffix]
+                        ? `${COLOR_HINTS[suffix]}`
+                        : name;
+                     return (
+                        <button
+                           key={token}
+                           type="button"
+                           role="radio"
+                           aria-checked={active}
+                           aria-label={tip}
+                           title={tip}
+                           className={[
+                              "popupui__color-swatch",
+                              `popupui__color-swatch--${suffix}`,
+                              active ? "is-active" : "",
+                           ]
+                              .filter(Boolean)
+                              .join(" ")}
+                           onClick={() => setColorToken(token)}
+                           onFocus={() => setColorHoverText(tip)}
+                           onBlur={() => setColorHoverText("")}
+                           onTouchStart={() => {
+                              setColorHoverText(tip);
+                              if (colorHoverTimerRef.current)
+                                 clearTimeout(colorHoverTimerRef.current);
+                           }}
+                        />
+                     );
+                  })}
+               </div>
+               {colorHoverText && (
+                  <div className="popupui__color-hint">{colorHoverText}</div>
+               )}
+            </div>
+
+            {/* Butoane footer */}
+            <div className="popupui__btns popupui__btns--bottom">
                <button
-                  className="instructors-popup__form-button instructors-popup__form-button--edit"
+                  className="popupui__btn popupui__btn--edit"
                   onClick={() => setView("history")}
                   title="Vezi istoricul modificărilor"
-                  style={{
-                     display: "inline-flex",
-                     alignItems: "center",
-                     gap: 6,
-                  }}
                >
                   Istoric
                </button>
 
-               <div style={{ flex: 1 }} />
+               <div className="popupui__btns-spacer" />
 
                <button
-                  className="instructors-popup__form-button instructors-popup__form-button--delete edit"
+                  className="popupui__btn popupui__btn--delete popupui__btn--delete"
                   onClick={onDelete}
                >
                   Șterge
                </button>
                <button
-                  className="instructors-popup__form-button instructors-popup__form-button--save"
+                  className="popupui__btn popupui__btn--save"
                   onClick={onSave}
                >
                   Salvează
@@ -1647,13 +1643,11 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
    return (
       <>
-         {/* TITLU FIX */}
          <div className="popup-panel__header">
             <h3 className="popup-panel__title">Editează rezervarea</h3>
          </div>
 
-         {/* CONȚINUT */}
-         <div className="aAddProg instructors-popup__content">
+         <div className="popupui popupui__content">
             {view === "history"
                ? renderHistoryList()
                : view === "studentSearch"

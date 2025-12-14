@@ -12,6 +12,7 @@ import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outlin
 import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import instrIcon from "../../assets/svg/mdi--account-cog-outline.svg";
 import examIcon from "../../assets/svg/mdi--book-clock-outline.svg";
+import clockIcon from "../../assets/svg/clock.svg";
 
 import { getAllReservations } from "../../api/reservationsService";
 import { getUsers } from "../../api/usersService";
@@ -22,18 +23,19 @@ import ReservationHistory from "../../components/APanel/ReservationHistory";
 import { UserContext } from "../../UserContext";
 
 function MPHistory() {
-   const links = [
+  const links = [
       { link: "/manager", text: "Acasă", icon: homeIcon },
       { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
+      { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
-      { link: "/manager/groups", text: "Grupe", icon: groupsIcon },
       { popup: "startExam", text: "Examen", icon: examIcon },
+      { link: "/manager/groups", text: "Grupe", icon: groupsIcon },
       {
          link: "/manager/instr-groups",
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-      { popup: "addProg", text: "Programare", icon: addIcon },
+      { link: "/manager/history", text: "Istoric", icon: clockIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];
    const dispatch = useDispatch();

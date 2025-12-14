@@ -460,6 +460,44 @@ export async function getReservationHistory(reservationId) {
       return [];
    }
 }
+/** GET /api/reservations/history/instructor/{instructorId} */
+export async function getInstructorReservationHistory(instructorId) {
+   const id = Number(instructorId);
+   if (!Number.isFinite(id) || id <= 0) {
+      throw new Error(
+         "getInstructorReservationHistory: instructorId invalid (INT > 0)."
+      );
+   }
+
+   const res = await apiClientService.get(
+      `/reservations/history/instructor/${encodeURIComponent(id)}`
+   );
+
+   if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(
+         `history/instructor ${res.status}: ${text || res.status}`
+      );
+   }
+
+   const ct = res.headers?.get?.("content-type") || "";
+   if (ct.includes("application/json")) {
+      try {
+         return await res.json();
+      } catch {
+         return [];
+      }
+   }
+
+   const text = await res.text().catch(() => "");
+   if (!text) return [];
+   try {
+      return JSON.parse(text);
+   } catch {
+      return [];
+   }
+}
+
 /** POST /api/reservations/for-user — creează una sau mai multe rezervări pentru un user selectat */
 export async function createReservationsForUser(payload) {
    // payload:

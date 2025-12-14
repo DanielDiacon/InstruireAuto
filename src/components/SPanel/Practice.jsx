@@ -1,3 +1,4 @@
+// src/pages/Practice.jsx
 import React, {
    useMemo,
    useRef,
@@ -8,13 +9,21 @@ import React, {
 } from "react";
 import AlertPills from "../Utils/AlertPills";
 import { UserContext } from "../../UserContext";
+
 import {
    startPracticeSession,
+   startPracticeSessionByCategory,
    getPracticeSession,
    submitPracticeAnswer,
    getTicketQuestions,
    getAllMyPracticeHistory,
+   getPracticeCategoryHistory, // ✅ NEW
 } from "../../api/examService";
+
+import {
+   getQuestionCategories,
+   getQuestionCategoriesWithCount,
+} from "../../api/questionCategoriesService";
 
 /* ================= i18n ================= */
 const I18N = {
@@ -39,6 +48,15 @@ const I18N = {
       cannot_submit: "Nu am putut trimite răspunsul.",
       session_closed_switch_local:
          "Sesiunea server s-a închis/expirat. Trec pe mod local curat.",
+
+      // ✅ home tabs
+      tickets_tab: "Bilete",
+      categories_tab: "Categorii",
+      refresh: "Refresh",
+      categories_loading: "Se încarcă categoriile…",
+      categories_empty: "Nu există categorii.",
+      categories_load_failed: "Nu am putut încărca categoriile.",
+      questions_count: "Întrebări",
    },
    ru: {
       practice_title: "Практика",
@@ -62,6 +80,15 @@ const I18N = {
       cannot_submit: "Не удалось отправить ответ.",
       session_closed_switch_local:
          "Серверная сессия закрыта/истекла. Перехожу в локальный режим.",
+
+      // ✅ home tabs
+      tickets_tab: "Билеты",
+      categories_tab: "Категории",
+      refresh: "Обновить",
+      categories_loading: "Загрузка категорий…",
+      categories_empty: "Категории отсутствуют.",
+      categories_load_failed: "Не удалось загрузить категории.",
+      questions_count: "Вопросы",
    },
 };
 
@@ -147,7 +174,7 @@ const pickLang = (v, lang) => {
    }
 };
 
-/** Normalizează sesiunea -> ticket (extrage și textele pe limba curentă) */
+/** Normalizează sesiunea -> ticket (ticket sau category) */
 function normalizeSessionToTicket(sess, lang) {
    if (!sess) return null;
 
@@ -162,6 +189,7 @@ function normalizeSessionToTicket(sess, lang) {
       ticket?.name || sess.ticketName || (tid ? `Bilet ${tid}` : "Bilet"),
       lang
    );
+
    const rawQs = ticket?.questions || sess.questions || [];
 
    const questions = (rawQs || []).map((q, i) => {
@@ -169,22 +197,27 @@ function normalizeSessionToTicket(sess, lang) {
          ? q.answers
          : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null);
 
+      const localId = Number(q?.id ?? q?.questionId ?? i + 1);
+      const serverQuestionId = Number(q?.questionId ?? q?.id ?? localId);
+
       return {
-         id: Number(q?.id ?? q?.questionId ?? i + 1),
+         id: localId, // UI key
+         serverQuestionId, // submit key
          text: pickLang(q?.text ?? q?.question ?? q?.title ?? "", lang),
          answers: answersRaw.map((a) => pickLang(a, lang)).filter(Boolean),
          image: rewriteImageUrl(pickLang(q?.image || q?.img || "", lang)),
          order: Number.isFinite(q?.order) ? Number(q.order) : i,
+         correctAnswer: q?.correctAnswer,
       };
    });
 
    return { id: tid, name, questions };
 }
 
-/* prag „admis” (22/26 sau 85%) — folosit doar la statistica locală */
+/* prag „admis” */
 const requiredOk = (total) => (total >= 26 ? 22 : Math.ceil(total * 0.85));
 
-/* extras P# din denumire “Practice P2” etc. */
+/* extras P# din denumire */
 function getTicketNrFromName(name) {
    const m = String(name || "").match(/P\s*([0-9]+)/i);
    const n = m ? Number(m[1]) : NaN;
@@ -204,11 +237,13 @@ function buildBaselineFromSession(sess) {
    const qs = sess?.ticket?.questions || sess?.questions || [];
    const map = {};
    qs.forEach((q) => {
-      const qid = Number(q?.id ?? q?.questionId);
-      const sel = q?.selectedAnswer ?? q?.userAnswer; // server: 1-based
-      if (Number.isInteger(qid) && Number.isInteger(sel)) {
-         const zeroBased = sel >= 1 ? sel - 1 : sel; // -> 0-based pt. UI/diff
-         map[qid] = zeroBased;
+      const idA = Number(q?.id);
+      const idB = Number(q?.questionId);
+      const sel = q?.selectedAnswer ?? q?.userAnswer;
+      if (Number.isInteger(sel)) {
+         // păstrăm exact (nu forțăm -1 aici) pentru a evita ambiguitatea 0/1-based
+         if (Number.isInteger(idA) && idA > 0) map[idA] = sel;
+         if (Number.isInteger(idB) && idB > 0) map[idB] = sel;
       }
    });
    return map;
@@ -220,6 +255,7 @@ function firstUnansweredIndex(ticket, pendingMap) {
    );
    return i >= 0 ? i : 0;
 }
+
 async function tryResumeFromLocal(tid, lang) {
    try {
       const last = localStorage.getItem(lastKeyForTicket(tid));
@@ -240,17 +276,202 @@ function normalizeCorrectIdx(raw, answersLen) {
    return null;
 }
 
+/* === normalize response de la submitPracticeAnswer (category) === */
+function normalizeSubmitAnswerResponse(raw, answersLen) {
+   const obj =
+      raw && typeof raw === "object"
+         ? raw.data || raw.result || raw.payload || raw
+         : {};
+
+   const correctRaw =
+      obj.correct ??
+      obj.isCorrect ??
+      obj.ok ??
+      obj.success ??
+      obj.right ??
+      obj.isRight;
+
+   const correct = typeof correctRaw === "boolean" ? correctRaw : null;
+
+   const idxRaw =
+      obj.correctIdx ??
+      obj.correctIndex ??
+      obj.correctAnswerIdx ??
+      obj.correctAnswerIndex ??
+      obj.correctAnswer ??
+      obj.rightAnswerIndex ??
+      obj.rightAnswer;
+
+   const correctIdx = normalizeCorrectIdx(idxRaw, answersLen);
+
+   return { correct, correctIdx };
+}
+
+/* ===== Categories helpers ===== */
+const getCatCount = (c) =>
+   c?._count?.questions ??
+   c?.questionCount ??
+   c?.questionsCount ??
+   c?.count ??
+   c?.totalQuestions ??
+   0;
+
+function normalizePagedResponse(raw) {
+   if (Array.isArray(raw)) return raw;
+   const items =
+      raw?.data ||
+      raw?.items ||
+      raw?.results ||
+      raw?.rows ||
+      raw?.categories ||
+      [];
+   return Array.isArray(items) ? items : [];
+}
+
+function catTitleByLang(cat, lang) {
+   const ro = String(cat?.nameRo ?? "").trim();
+   const ru = String(cat?.nameRu ?? "").trim();
+   if (lang === "ru") return ru || ro || `#${cat?.id}`;
+   return ro || ru || `#${cat?.id}`;
+}
+
+/* =========================
+   CATEGORY STATS (history)
+========================= */
+async function unwrapMaybeResponse(raw, fallback) {
+   if (raw == null) return fallback;
+
+   if (typeof raw === "object" && typeof raw.json === "function") {
+      if (raw.ok === false) {
+         let text = "";
+         try {
+            text = await raw.text();
+         } catch {}
+         throw new Error(text || `HTTP ${raw.status || "error"}`);
+      }
+      try {
+         return await raw.json();
+      } catch {
+         return fallback;
+      }
+   }
+
+   return raw;
+}
+
+function normalizeHistoryList(raw) {
+   if (Array.isArray(raw)) return raw;
+   const items =
+      raw?.data ||
+      raw?.items ||
+      raw?.results ||
+      raw?.rows ||
+      raw?.history ||
+      [];
+   return Array.isArray(items) ? items : [];
+}
+
+function histTs(it) {
+   return (
+      Date.parse(
+         it?.completedAt ||
+            it?.finishedAt ||
+            it?.endedAt ||
+            it?.startedAt ||
+            it?.createdAt ||
+            0
+      ) || 0
+   );
+}
+
+function histTotal(it, fallbackTotal) {
+   const total =
+      Number(it?.totalQuestions) ||
+      Number(it?.total) ||
+      Number(it?.questionsTotal) ||
+      Number(it?.progress?.total) ||
+      Number(it?.progress?.questionsTotal);
+
+   if (Number.isFinite(total) && total > 0) return total;
+
+   const fb = Number(fallbackTotal);
+   return Number.isFinite(fb) && fb > 0 ? fb : 0;
+}
+
+function histCorrect(it, total) {
+   let c =
+      it?.correct ??
+      it?.score ??
+      it?.correctCount ??
+      it?.progress?.correct ??
+      it?.progress?.correctCount ??
+      0;
+
+   c = Number(c);
+   if (!Number.isFinite(c)) c = 0;
+
+   if (c > 0 && c <= 1 && Number.isFinite(total) && total > 0) {
+      return Math.round(c * total);
+   }
+
+   return Math.max(0, Math.floor(c));
+}
+
+/**
+ * ✅ IMPORTANT FIX:
+ * Badge-ul pe categorie trebuie să reflecte ULTIMA încercare (latest),
+ * nu "cel mai recent PASSED".
+ */
+function computeCategoryStat(items, fallbackTotal) {
+   const list = Array.isArray(items) ? items.slice() : [];
+   const fbTotal = Number(fallbackTotal) || 0;
+
+   if (!list.length) {
+      return { state: "none", correct: 0, total: fbTotal };
+   }
+
+   list.sort((a, b) => histTs(b) - histTs(a)); // latest first
+
+   const last = list[0];
+   const total = Math.max(0, Number(histTotal(last, fbTotal)) || 0);
+   const correct = Math.min(
+      total,
+      Math.max(0, Number(histCorrect(last, total)) || 0)
+   );
+
+   const st = String(last?.status || "").toUpperCase();
+
+   if (st.includes("IN_PROGRESS") || st.includes("STARTED")) {
+      return { state: "none", correct, total };
+   }
+   if (st.includes("FAILED")) return { state: "bad", correct, total };
+   if (st.includes("PASSED")) return { state: "ok", correct, total };
+
+   if (total > 0) {
+      return {
+         state: correct >= requiredOk(total) ? "ok" : "bad",
+         correct,
+         total,
+      };
+   }
+
+   return { state: "none", correct, total };
+}
+
 export default function Practice() {
    const { user } = useContext(UserContext) || {};
-   const [view, setView] = useState("tickets");
-   const DISPLAY_BASE = START_ID - 1;
 
+   const [view, setView] = useState("tickets");
+   const [homeTab, setHomeTab] = useState("tickets");
+
+   const [sessionKind, setSessionKind] = useState("ticket"); // 'ticket' | 'category'
+
+   const DISPLAY_BASE = START_ID - 1;
    const tickets = useMemo(
       () => TICKET_IDS.map((id) => ({ id, nr: id - DISPLAY_BASE })),
       [DISPLAY_BASE]
    );
 
-   // === i18n state
    const [lang, setLang] = useState(() => {
       const saved =
          (typeof localStorage !== "undefined" &&
@@ -258,6 +479,7 @@ export default function Practice() {
          "ro";
       return saved === "ru" ? "ru" : "ro";
    });
+
    useEffect(() => {
       try {
          localStorage.setItem("exam.lang", lang);
@@ -273,40 +495,38 @@ export default function Practice() {
       [lang]
    );
 
-   // status vizual pt. bilete
    const [ticketStatusMap, setTicketStatusMap] = useState({});
    const [historyLoading, setHistoryLoading] = useState(false);
 
-   // state sesiune practice
-   const [practiceId, setPracticeId] = useState(null); // server
-   const [localAttemptId, setLocalAttemptId] = useState(null); // local
+   const [practiceId, setPracticeId] = useState(null);
+   const [localAttemptId, setLocalAttemptId] = useState(null);
    const [practiceMode, setPracticeMode] = useState("server"); // 'server' | 'local'
 
    const [ticketId, setTicketId] = useState(null);
    const [ticket, setTicket] = useState(null);
 
-   // PENDING răspunsuri din această încercare (vizibile în UI)
    const [answersMap, setAnswersMap] = useState({});
-   // BASELINE din server (ascuns în UI). qid -> selectedIndex (number)
    const [baselineMap, setBaselineMap] = useState({});
-
-   // HARTA cu răspunsul corect (0-based) pt fiecare întrebare (local, fără server)
    const [correctMap, setCorrectMap] = useState({});
    const [correctLoaded, setCorrectLoaded] = useState(false);
 
    const [idx, setIdx] = useState(0);
    const [loading, setLoading] = useState(false);
-   const [pillMsgs, setPillMsgs] = useState([]);
 
+   const [pillMsgs, setPillMsgs] = useState([]);
    const qTextRef = useRef(null);
    const timerRef = useRef(null);
    const [remaining, setRemaining] = useState(20 * 60);
+
+   // ✅ anti-race pentru category stats
+   const catStatsReqRef = useRef(0);
 
    const pushError = (text) =>
       setPillMsgs((arr) => [
          ...arr,
          { id: Date.now() + Math.random(), type: "error", text },
       ]);
+
    const dismissLastPill = () => setPillMsgs((arr) => arr.slice(0, -1));
    useEffect(() => {
       if (!pillMsgs.length) return;
@@ -317,6 +537,7 @@ export default function Practice() {
    useEffect(() => {
       return () => timerRef.current && clearInterval(timerRef.current);
    }, []);
+
    useEffect(() => {
       setRemaining(20 * 60);
       if (timerRef.current) clearInterval(timerRef.current);
@@ -324,10 +545,11 @@ export default function Practice() {
          setRemaining((r) => (r <= 1 ? 0 : r - 1));
       }, 1000);
    }, [practiceId, localAttemptId, practiceMode]);
+
    useEffect(() => {
       if (remaining === 0 && (practiceId || localAttemptId)) {
          (async () => {
-            await finalizeAttempt("timeout"); // nu trimitem dif-urile
+            await finalizeAttempt("timeout");
          })();
       }
    }, [remaining, practiceId, localAttemptId]); // eslint-disable-line
@@ -340,6 +562,7 @@ export default function Practice() {
          window.scrollTo({ top, behavior: "smooth" });
       }
    };
+
    useEffect(() => {
       if (!ticket) return;
       const raf = requestAnimationFrame(() =>
@@ -348,7 +571,7 @@ export default function Practice() {
       return () => cancelAnimationFrame(raf);
    }, [ticket, idx]);
 
-   /* ====== Culoarea biletelor din istoric (fallback pe P#) ====== */
+   /* ====== Culoarea biletelor din istoric ====== */
    useEffect(() => {
       if (view !== "tickets") return;
       let alive = true;
@@ -435,8 +658,139 @@ export default function Practice() {
       };
    }, [view]);
 
-   /* ========= START LOCAL FRESH (fallback fără server) ========= */
+   /* =========================
+      CATEGORIES (HOME TAB)
+  ========================= */
+   const [categories, setCategories] = useState([]);
+   const [catLoading, setCatLoading] = useState(false);
+   const [catError, setCatError] = useState("");
+
+   const [catStatsMap, setCatStatsMap] = useState({});
+   const [catStatsLoading, setCatStatsLoading] = useState(false);
+
+   const hasAnyCatStats = useMemo(
+      () => Object.keys(catStatsMap || {}).length > 0,
+      [catStatsMap]
+   );
+
+   const loadCategoryStats = useCallback(
+      async (cats) => {
+         const list = Array.isArray(cats) ? cats : [];
+         const reqId = ++catStatsReqRef.current;
+
+         if (!list.length) {
+            setCatStatsMap({});
+            return;
+         }
+
+         setCatStatsLoading(true);
+         setCatStatsMap({}); // ✅ nu lăsăm rezultate vechi
+
+         try {
+            const CHUNK = 8;
+
+            for (let i = 0; i < list.length; i += CHUNK) {
+               const slice = list.slice(i, i + CHUNK);
+
+               const pairs = await Promise.all(
+                  slice.map(async (c) => {
+                     const cid = Number(c?.id);
+                     const fallbackTotal = getCatCount(c);
+
+                     if (!Number.isInteger(cid) || cid <= 0) {
+                        return [
+                           cid,
+                           { state: "none", correct: 0, total: fallbackTotal },
+                        ];
+                     }
+
+                     try {
+                        const raw = await getPracticeCategoryHistory(cid, {
+                           page: 1,
+                           limit: 30,
+                           lang,
+                        });
+
+                        const unwrapped = await unwrapMaybeResponse(raw, []);
+                        const items = normalizeHistoryList(unwrapped);
+                        const stat = computeCategoryStat(items, fallbackTotal);
+
+                        return [cid, stat];
+                     } catch {
+                        return [
+                           cid,
+                           { state: "none", correct: 0, total: fallbackTotal },
+                        ];
+                     }
+                  })
+               );
+
+               if (catStatsReqRef.current !== reqId) return; // ✅ abandon dacă s-a pornit alt load
+
+               const partial = {};
+               for (const [cid, stat] of pairs) {
+                  if (Number.isInteger(cid) && cid > 0) partial[cid] = stat;
+               }
+
+               setCatStatsMap((prev) =>
+                  catStatsReqRef.current === reqId
+                     ? { ...prev, ...partial }
+                     : prev
+               );
+            }
+         } finally {
+            if (catStatsReqRef.current === reqId) setCatStatsLoading(false);
+         }
+      },
+      [lang]
+   );
+
+   const loadCategories = useCallback(async () => {
+      setCatLoading(true);
+      setCatError("");
+      try {
+         let data;
+         try {
+            data = await getQuestionCategoriesWithCount();
+         } catch {
+            const raw = await getQuestionCategories(1, 2000);
+            data = normalizePagedResponse(raw);
+         }
+         const list = Array.isArray(data) ? data : normalizePagedResponse(data);
+         setCategories(list);
+
+         await loadCategoryStats(list);
+      } catch (e) {
+         setCategories([]);
+         setCatStatsMap({});
+         setCatError(e?.message || t("categories_load_failed"));
+      } finally {
+         setCatLoading(false);
+      }
+   }, [t, loadCategoryStats]);
+
+   useEffect(() => {
+      if (view !== "tickets") return;
+      if (homeTab !== "categories") return;
+      if (categories.length) return;
+      loadCategories();
+   }, [view, homeTab, categories.length, loadCategories]);
+
+   useEffect(() => {
+      if (view !== "tickets") return;
+      if (homeTab !== "categories") return;
+      if (!categories.length) return;
+      if (hasAnyCatStats) return;
+      loadCategoryStats(categories);
+   }, [view, homeTab, categories, hasAnyCatStats, loadCategoryStats]);
+
+   const getServerQid = useCallback((q) => {
+      return Number(q?.serverQuestionId ?? q?.questionId ?? q?.id);
+   }, []);
+
    async function startLocalFresh(tid) {
+      setSessionKind("ticket");
+
       setPracticeMode("local");
       setPracticeId(null);
       setLocalAttemptId(
@@ -456,6 +810,7 @@ export default function Practice() {
          questions: (qs || [])
             .map((q, i) => ({
                id: Number(q?.id ?? i + 1),
+               serverQuestionId: Number(q?.id ?? i + 1),
                text: pickLang(q?.text ?? q?.question ?? q?.title ?? "", lang),
                answers: (Array.isArray(q?.answers)
                   ? q.answers
@@ -470,7 +825,6 @@ export default function Practice() {
       };
       setTicket(tkt);
 
-      // corecte locale
       const cm = {};
       (qs || []).forEach((q, i) => {
          const qid = Number(q?.id ?? i + 1);
@@ -484,8 +838,9 @@ export default function Practice() {
       setView("test");
    }
 
-   // pornește PRACTICA: resume dacă există, altfel creează; NU arătăm răsp. vechi
    const enterTicket = async (tid) => {
+      setSessionKind("ticket");
+
       setLoading(true);
 
       setPracticeId(null);
@@ -500,7 +855,6 @@ export default function Practice() {
       setIdx(0);
 
       try {
-         // 1) Resume prin practiceId memorat local (dacă există)
          const resumed = await tryResumeFromLocal(tid, lang);
          if (resumed?.sess && resumed?.pid) {
             const pid = Number(resumed.pid);
@@ -523,7 +877,6 @@ export default function Practice() {
             const base = buildBaselineFromSession(sess);
             setBaselineMap(base);
 
-            // corecte (din setul complet de întrebări)
             try {
                const srvQs = await getTicketQuestions(tid);
                const cm = {};
@@ -549,7 +902,6 @@ export default function Practice() {
             return;
          }
 
-         // 2) altfel start (endpoint face Start sau Resume pe server)
          const started = await startPracticeSession(tid, lang);
          const pid =
             Number(started?.id) ||
@@ -558,6 +910,7 @@ export default function Practice() {
          if (!Number.isInteger(pid) || pid <= 0) {
             throw new Error("PracticeID invalid la start.");
          }
+
          const serverTid = Number(started?.ticketId);
          const effectiveTid =
             Number.isInteger(serverTid) && serverTid > 0
@@ -583,7 +936,6 @@ export default function Practice() {
          const base = buildBaselineFromSession(sess);
          setBaselineMap(base);
 
-         // corecte (din setul complet de întrebări)
          try {
             const srvQs = await getTicketQuestions(effectiveTid);
             const cm = {};
@@ -614,15 +966,93 @@ export default function Practice() {
       }
    };
 
+   const enterCategory = async (cat) => {
+      setSessionKind("category");
+
+      const cid = Number(cat?.id);
+      if (!Number.isInteger(cid) || cid <= 0) return;
+
+      const title = catTitleByLang(cat, lang);
+
+      const count = Number(getCatCount(cat) || 0);
+      const questionCount = Number.isInteger(count) && count > 0 ? count : 20;
+
+      setLoading(true);
+
+      setPracticeId(null);
+      setLocalAttemptId(null);
+      setPracticeMode("server");
+      setTicket(null);
+      setTicketId(null);
+
+      setAnswersMap({});
+      setBaselineMap({});
+      setCorrectMap({});
+      setCorrectLoaded(false);
+      setIdx(0);
+
+      try {
+         const started = await startPracticeSessionByCategory({
+            categoryId: cid,
+            questionCount,
+            lang,
+         });
+
+         const pid =
+            Number(started?.id) ||
+            Number(started?.practiceId) ||
+            Number(started?.sessionId);
+
+         if (!Number.isInteger(pid) || pid <= 0) {
+            throw new Error(
+               "PracticeID invalid la startPracticeSessionByCategory."
+            );
+         }
+
+         const sess = await getPracticeSession(pid, lang);
+
+         setPracticeMode("server");
+         setPracticeId(pid);
+
+         let tkt = normalizeSessionToTicket(sess, lang);
+         tkt = {
+            ...tkt,
+            name: title || tkt?.name || "Categorie",
+            questions: [...(tkt?.questions || [])].sort(
+               (a, b) => (a.order ?? 0) - (b.order ?? 0)
+            ),
+         };
+         setTicket(tkt);
+
+         const base = buildBaselineFromSession(sess);
+         setBaselineMap(base);
+
+         setCorrectMap({});
+         setCorrectLoaded(true);
+
+         setAnswersMap({});
+         setIdx(firstUnansweredIndex(tkt, {}));
+         setView("test");
+      } catch (e) {
+         setCorrectLoaded(true);
+         setCorrectMap({});
+         pushError(t("cannot_start_practice"));
+      } finally {
+         setLoading(false);
+      }
+   };
+
    const current = ticket?.questions?.[idx] || null;
    const total = ticket?.questions?.length || 0;
 
-   // Recalculează corectitudinea pentru selecțiile deja făcute odată ce avem correctMap
    useEffect(() => {
       if (!correctLoaded || !ticket) return;
+      if (sessionKind === "category") return;
+
       setAnswersMap((prev) => {
          let changed = false;
          const next = { ...prev };
+
          for (const q of ticket.questions || []) {
             const qid = q.id;
             const sel = next[qid]?.selected;
@@ -634,6 +1064,7 @@ export default function Practice() {
                   Number.isInteger(ci) && Number.isInteger(sel)
                      ? Number(sel) === Number(ci)
                      : null;
+
                if (
                   next[qid]?.correct !== corr ||
                   next[qid]?.correctIdx !== ci
@@ -647,11 +1078,11 @@ export default function Practice() {
                }
             }
          }
+
          return changed ? next : prev;
       });
-   }, [correctLoaded, correctMap, ticket]);
+   }, [correctLoaded, correctMap, ticket, sessionKind]);
 
-   // metrice pentru UI (din pending)
    const metrics = useMemo(() => {
       let ok = 0,
          bad = 0,
@@ -664,7 +1095,6 @@ export default function Practice() {
       return { ok, bad, answered, left: Math.max(0, total - answered) };
    }, [answersMap, total]);
 
-   // Finalizează apare DOAR dacă ai răspuns la toate întrebările în această încercare
    const allAnsweredNow = useMemo(() => {
       if (!ticket?.questions?.length) return false;
       return ticket.questions.every((q) => {
@@ -678,72 +1108,24 @@ export default function Practice() {
       const clamped = Math.max(0, Math.min(i, total - 1));
       setIdx(clamped);
    };
+
    const goNext = () => {
       if (!ticket) return;
       setIdx(Math.min(idx + 1, total - 1));
    };
 
-   // Trimite DOAR dif-urile (ce ai modificat față de baseline) — doar la Finish
-   async function sendPendingDiffs() {
-      if (practiceMode !== "server" || !practiceId) return;
-
-      const diffs = [];
-      for (const q of ticket?.questions || []) {
-         const qid = Number(q.id);
-         const pendingSel =
-            answersMap[qid] && Number.isInteger(answersMap[qid].selected)
-               ? Number(answersMap[qid].selected)
-               : null;
-         if (pendingSel == null) continue;
-
-         const baselineSel = Number.isInteger(baselineMap[qid])
-            ? Number(baselineMap[qid])
-            : null;
-
-         if (baselineSel === null || pendingSel !== baselineSel) {
-            diffs.push({ questionId: qid, selectedAnswer: pendingSel + 1 });
-         }
-      }
-
-      for (const d of diffs) {
-         try {
-            await submitPracticeAnswer(practiceId, d);
-         } catch (e) {
-            // ignorăm punctual, nu blocăm restul
-         }
-      }
-   }
-
-   const finalizeAttempt = async (reason = "user-finish") => {
-      if (reason === "user-finish") {
-         try {
-            await sendPendingDiffs();
-         } catch {}
-      }
-
-      // curățare state și revenire la listă
-      setView("tickets");
-      setPracticeId(null);
-      setLocalAttemptId(null);
-      setPracticeMode("server");
-      setTicket(null);
-      setTicketId(null);
-      setAnswersMap({});
-      setBaselineMap({});
-      setCorrectMap({});
-      setCorrectLoaded(false);
-      setIdx(0);
-   };
-
-   // onChoose: setăm pending în UI + marcăm corect/greșit local (fără server)
-   const onChoose = (answerIdx) => {
+   const onChooseTicket = (answerIdx) => {
       if (!current) return;
-      if (answersMap[current.id]?.selected != null) return;
+
+      const qKey = Number(current.id);
+      if (!Number.isInteger(qKey) || qKey <= 0) return;
+
+      if (answersMap[qKey]?.selected != null) return;
 
       const selected = Number(answerIdx);
 
-      const ci = Number.isInteger(correctMap[current.id])
-         ? Number(correctMap[current.id])
+      const ci = Number.isInteger(correctMap[qKey])
+         ? Number(correctMap[qKey])
          : null;
       const corr =
          Number.isInteger(ci) && Number.isInteger(selected)
@@ -752,13 +1134,154 @@ export default function Practice() {
 
       setAnswersMap((prevMap) => ({
          ...prevMap,
-         [current.id]: {
+         [qKey]: {
             selected,
             correct: corr,
             correctIdx: Number.isInteger(ci) ? ci : null,
             at: new Date().toISOString(),
+            pending: false,
          },
       }));
+   };
+
+   // ✅ Category: 0-based la submit
+   const onChooseCategory = async (answerIdx) => {
+      if (!current) return;
+      if (practiceMode !== "server" || !practiceId) return;
+
+      const qKey = Number(current.id);
+      const serverQid = getServerQid(current);
+
+      if (!Number.isInteger(qKey) || qKey <= 0) return;
+      if (!Number.isInteger(serverQid) || serverQid <= 0) return;
+
+      const already = answersMap[qKey];
+      if (already?.selected != null || already?.pending) return;
+
+      const selected = Number(answerIdx);
+
+      setAnswersMap((prev) => ({
+         ...prev,
+         [qKey]: {
+            selected,
+            correct: null,
+            correctIdx: null,
+            at: new Date().toISOString(),
+            pending: true,
+         },
+      }));
+
+      try {
+         const resp = await submitPracticeAnswer(practiceId, {
+            questionId: serverQid,
+            selectedAnswer: selected, // ✅ 0-based (NU +1)
+         });
+
+         const answersLen = (current.answers || []).length;
+         const payload = typeof resp === "function" ? resp(answersLen) : resp;
+         const norm = normalizeSubmitAnswerResponse(payload, answersLen);
+
+         const finalCorrectIdx = Number.isInteger(norm.correctIdx)
+            ? norm.correctIdx
+            : norm.correct === true
+            ? selected
+            : null;
+
+         setAnswersMap((prev) => ({
+            ...prev,
+            [qKey]: {
+               ...prev[qKey],
+               pending: false,
+               correct:
+                  typeof norm.correct === "boolean"
+                     ? norm.correct
+                     : prev[qKey]?.correct ?? null,
+               correctIdx: Number.isInteger(finalCorrectIdx)
+                  ? finalCorrectIdx
+                  : null,
+            },
+         }));
+
+         setBaselineMap((prev) => ({ ...prev, [qKey]: selected }));
+      } catch (e) {
+         setAnswersMap((prev) => ({
+            ...prev,
+            [qKey]: { ...prev[qKey], pending: false, error: true },
+         }));
+         pushError(t("cannot_submit"));
+      }
+   };
+
+   // ✅ Trimite diffs DOAR pentru bilete (categorii deja trimit la fiecare click)
+   async function sendPendingDiffs() {
+      if (sessionKind !== "ticket") return;
+      if (practiceMode !== "server" || !practiceId) return;
+
+      const diffs = [];
+      for (const q of ticket?.questions || []) {
+         const qKey = Number(q.id);
+         const pendingSel =
+            answersMap[qKey] && Number.isInteger(answersMap[qKey].selected)
+               ? Number(answersMap[qKey].selected)
+               : null;
+         if (pendingSel == null) continue;
+
+         const baselineSel = Number.isInteger(baselineMap[qKey])
+            ? Number(baselineMap[qKey])
+            : null;
+
+         if (baselineSel === null || pendingSel !== baselineSel) {
+            const serverQid = getServerQid(q);
+            if (Number.isInteger(serverQid) && serverQid > 0) {
+               diffs.push({
+                  questionId: serverQid,
+                  selectedAnswer: pendingSel + 1, // ✅ bilete rămân 1-based pe server
+               });
+            }
+         }
+      }
+
+      for (const d of diffs) {
+         try {
+            await submitPracticeAnswer(practiceId, d);
+         } catch {
+            // ignore punctual
+         }
+      }
+   }
+
+   const finalizeAttempt = async (reason = "user-finish") => {
+      // mic "sync" pentru ca serverul să finalizeze statusul înainte de history
+      if (practiceMode === "server" && practiceId) {
+         try {
+            await getPracticeSession(practiceId, lang);
+         } catch {}
+      }
+
+      if (reason === "user-finish") {
+         try {
+            await sendPendingDiffs();
+         } catch {}
+      }
+
+      setView("tickets");
+      setPracticeId(null);
+      setLocalAttemptId(null);
+      setPracticeMode("server");
+      setSessionKind("ticket");
+      setTicket(null);
+      setTicketId(null);
+      setAnswersMap({});
+      setBaselineMap({});
+      setCorrectMap({});
+      setCorrectLoaded(false);
+      setIdx(0);
+
+      if (categories.length) {
+         try {
+            await loadCategoryStats(categories);
+         } catch {}
+      }
    };
 
    const statusBoard = useMemo(() => {
@@ -794,55 +1317,165 @@ export default function Practice() {
                   <h2 style={{ margin: 0 }}>{t("practice_title")}</h2>
 
                   <div
-                     className="exam-lang"
-                     style={{ display: "flex", gap: 8, alignItems: "center" }}
+                     style={{ display: "flex", gap: 10, alignItems: "center" }}
                   >
-                     <button
-                        type="button"
-                        className={
-                           "practice__back bottom toggle" +
-                           (lang === "ro" ? " yellow" : "")
-                        }
-                        onClick={() => setLang("ro")}
-                        title={t("lang_ro")}
+                     <div
+                        className="practice__tabs"
+                        style={{ display: "flex", gap: 8 }}
                      >
-                        RO
-                     </button>
-                     <button
-                        type="button"
-                        className={
-                           "practice__back bottom toggle" +
-                           (lang === "ru" ? " yellow" : "")
-                        }
-                        onClick={() => setLang("ru")}
-                        title={t("lang_ru")}
+                        <button
+                           type="button"
+                           className={
+                              "practice__back bottom toggle" +
+                              (homeTab === "tickets" ? " yellow" : "")
+                           }
+                           onClick={() => setHomeTab("tickets")}
+                        >
+                           {t("tickets_tab")}
+                        </button>
+
+                        <button
+                           type="button"
+                           className={
+                              "practice__back bottom toggle" +
+                              (homeTab === "categories" ? " yellow" : "")
+                           }
+                           onClick={() => {
+                              setHomeTab("categories");
+                              if (!categories.length) loadCategories();
+                              else if (!hasAnyCatStats && !catStatsLoading)
+                                 loadCategoryStats(categories);
+                           }}
+                        >
+                           {t("categories_tab")}
+                        </button>
+                     </div>
+
+                     <div
+                        className="exam-lang"
+                        style={{ display: "flex", gap: 8 }}
                      >
-                        RU
-                     </button>
+                        <button
+                           type="button"
+                           className={
+                              "practice__back bottom toggle" +
+                              (lang === "ro" ? " yellow" : "")
+                           }
+                           onClick={() => setLang("ro")}
+                           title={t("lang_ro")}
+                        >
+                           RO
+                        </button>
+
+                        <button
+                           type="button"
+                           className={
+                              "practice__back bottom toggle" +
+                              (lang === "ru" ? " yellow" : "")
+                           }
+                           onClick={() => setLang("ru")}
+                           title={t("lang_ru")}
+                        >
+                           RU
+                        </button>
+                     </div>
                   </div>
                </div>
 
-               <div className="practice__grid">
-                  {tickets.map((tkt) => {
-                     const st = ticketStatusMap[tkt.id];
-                     const cls =
-                        "practice__ticket" +
-                        (st ? ` practice__ticket--${st}` : "");
-                     return (
-                        <button
-                           key={tkt.id}
-                           className={cls}
-                           onClick={() => enterTicket(tkt.id)}
-                           disabled={loading || historyLoading}
-                           title={t("start_ticket_title", { n: tkt.nr })}
-                        >
-                           <div className="practice__ticket-title">
-                              {t("ticket_n", { n: tkt.nr })}
-                           </div>
-                        </button>
-                     );
-                  })}
-               </div>
+               {homeTab === "categories" && (
+                  <div className="practice__cat-list">
+                     {catError ? (
+                        <div className="practice__cat-empty">{catError}</div>
+                     ) : catLoading ? (
+                        <div className="practice__cat-empty">
+                           {t("categories_loading")}
+                        </div>
+                     ) : (categories || []).length === 0 ? (
+                        <div className="practice__cat-empty">
+                           {t("categories_empty")}
+                        </div>
+                     ) : (
+                        (categories || []).map((c) => {
+                           const title = catTitleByLang(c, lang);
+                           const cnt = Number(getCatCount(c) || 0);
+
+                           const stat = catStatsMap[c.id];
+                           const state = stat?.state || "none";
+                           const totalDisp = Number(stat?.total ?? cnt ?? 0);
+                           const correctDisp = Number(stat?.correct ?? 0);
+
+                           const badgeText =
+                              !stat && catStatsLoading
+                                 ? `…/${totalDisp || cnt || 0}`
+                                 : `${correctDisp}/${totalDisp || cnt || 0}`;
+
+                           return (
+                              <button
+                                 key={c.id}
+                                 className="practice__cat-item"
+                                 onClick={() => enterCategory(c)}
+                                 disabled={loading}
+                                 title={title}
+                              >
+                                 <div className="practice__cat-left">
+                                    <div className="practice__cat-title">
+                                       {title}
+                                    </div>
+                                    <div className="practice__cat-sub">
+                                       ID: {c.id}
+                                    </div>
+                                 </div>
+
+                                 <div
+                                    className={
+                                       "practice__cat-badge" +
+                                       (state === "ok"
+                                          ? " practice__cat-badge--ok"
+                                          : "") +
+                                       (state === "bad"
+                                          ? " practice__cat-badge--bad"
+                                          : "") +
+                                       (state === "none"
+                                          ? " practice__cat-badge--none"
+                                          : "")
+                                    }
+                                    style={{
+                                       opacity:
+                                          !stat && catStatsLoading ? 0.75 : 1,
+                                    }}
+                                 >
+                                    {badgeText}
+                                 </div>
+                              </button>
+                           );
+                        })
+                     )}
+                  </div>
+               )}
+
+               {homeTab === "tickets" && (
+                  <div className="practice__grid">
+                     {tickets.map((tkt) => {
+                        const st = ticketStatusMap[tkt.id];
+                        const cls =
+                           "practice__ticket" +
+                           (st ? ` practice__ticket--${st}` : "");
+                        return (
+                           <button
+                              key={tkt.id}
+                              className={cls}
+                              onClick={() => enterTicket(tkt.id)}
+                              disabled={loading || historyLoading}
+                              title={t("start_ticket_title", { n: tkt.nr })}
+                           >
+                              <div className="practice__ticket-title">
+                                 {t("ticket_n", { n: tkt.nr })}
+                              </div>
+                           </button>
+                        );
+                     })}
+                  </div>
+               )}
             </>
          )}
 
@@ -948,26 +1581,31 @@ export default function Practice() {
                            {(current.answers || []).map((ans, i) => {
                               const saved = answersMap[current.id];
                               const selected = saved?.selected;
+
                               const correctIdx = Number.isInteger(
                                  saved?.correctIdx
                               )
                                  ? saved.correctIdx
-                                 : Number.isInteger(correctMap[current.id])
+                                 : sessionKind === "ticket" &&
+                                   Number.isInteger(correctMap[current.id])
                                  ? correctMap[current.id]
                                  : null;
 
+                              const isSelected = selected === i;
+                              const hasCorrectIdx =
+                                 Number.isInteger(correctIdx);
+
                               const isCorrectOption =
                                  selected != null &&
-                                 Number.isInteger(correctIdx) &&
-                                 i === Number(correctIdx);
+                                 (hasCorrectIdx
+                                    ? i === Number(correctIdx)
+                                    : saved?.correct === true && isSelected);
 
                               const isWrongSelected =
                                  selected != null &&
-                                 Number.isInteger(correctIdx) &&
-                                 selected === i &&
-                                 i !== Number(correctIdx);
-
-                              const isSelected = selected === i;
+                                 (hasCorrectIdx
+                                    ? isSelected && i !== Number(correctIdx)
+                                    : saved?.correct === false && isSelected);
 
                               const className =
                                  "practice__answer" +
@@ -981,12 +1619,22 @@ export default function Practice() {
                                     ? " practice__answer--selected"
                                     : "");
 
+                              const isDisabled =
+                                 !!saved?.pending ||
+                                 saved?.selected != null ||
+                                 loading;
+
                               return (
                                  <button
                                     key={i}
                                     className={className}
-                                    onClick={() => onChoose(i)}
+                                    onClick={() =>
+                                       sessionKind === "category"
+                                          ? onChooseCategory(i)
+                                          : onChooseTicket(i)
+                                    }
                                     title={t("choose_answer")}
+                                    disabled={isDisabled}
                                  >
                                     {ans}
                                  </button>

@@ -14,8 +14,6 @@ import {
    updateGroup,
    removeGroup,
 } from "../../store/groupsSlice";
-import { fetchInstructors } from "../../store/instructorsSlice";
-import { fetchCars } from "../../store/carsSlice";
 import { openPopup } from "../Utils/popupStore";
 
 /* ===== Utils ===== */
@@ -46,10 +44,9 @@ const isProtectedToken = (token) =>
       .trim()
       .toUpperCase() === "ABCD1234";
 
-/* ====== Chooser ca în InstructorsGroupManager (aceleași clase) ====== */
-function InstructorChooser({
-   instructors,
-   cars,
+/* ====== Chooser (aceleași clase), DAR pentru PROFESSOR ====== */
+function ProfessorChooser({
+   professors,
    excludeIds = [],
    onPick,
    onClose,
@@ -61,29 +58,25 @@ function InstructorChooser({
    const list = useMemo(() => {
       const q = String(query ?? "").toLowerCase();
       const base = q
-         ? instructors.filter(
-              (i) =>
-                 `${i.firstName} ${i.lastName}`.toLowerCase().includes(q) ||
-                 String(i.phone || "")
+         ? professors.filter((p) => {
+              const full = `${p.firstName || ""} ${p.lastName || ""}`.trim();
+              return (
+                 full.toLowerCase().includes(q) ||
+                 String(p.phone || "")
                     .toLowerCase()
                     .includes(q) ||
-                 (
-                    cars.find((c) => String(c.instructorId) === String(i.id))
-                       ?.plateNumber || ""
-                 )
+                 String(p.email || "")
                     .toLowerCase()
                     .includes(q)
-           )
-         : instructors;
-      return base.map((i) => {
-         const car = cars.find((c) => String(c.instructorId) === String(i.id));
-         return {
-            ...i,
-            carPlate: car?.plateNumber || "—",
-            disabled: taken.has(String(i.id)),
-         };
-      });
-   }, [query, instructors, cars, excludeIds]);
+              );
+           })
+         : professors;
+
+      return base.map((p) => ({
+         ...p,
+         disabled: taken.has(String(p.id)),
+      }));
+   }, [query, professors, excludeIds]);
 
    return (
       <div
@@ -107,7 +100,7 @@ function InstructorChooser({
             </button>
             <input
                className="picker__search"
-               placeholder="Caută instructor (nume, telefon, plăcuță)…"
+               placeholder="Caută profesor (nume, telefon, email)…"
                value={query}
                onChange={(e) => setQuery(e.target.value)}
                style={{ width: "100%" }}
@@ -118,27 +111,27 @@ function InstructorChooser({
             {list.length === 0 && (
                <li className="picker__empty">Niciun rezultat</li>
             )}
-            {list.map((i) => (
+            {list.map((p) => (
                <li
-                  key={i.id}
+                  key={p.id}
                   role="option"
                   className={
-                     "picker__item" + (i.disabled ? " is-disabled" : "")
+                     "picker__item" + (p.disabled ? " is-disabled" : "")
                   }
                   title={
-                     i.disabled
+                     p.disabled
                         ? "Deja selectat"
-                        : `${i.firstName} ${i.lastName} ${i.phone || "—"}  ${
-                             i.carPlate
-                          }`
+                        : `${p.firstName || ""} ${p.lastName || ""} ${
+                             p.phone || "—"
+                          } ${p.email || ""}`
                   }
-                  onClick={() => !i.disabled && onPick(i)}
+                  onClick={() => !p.disabled && onPick(p)}
                >
                   <div className="picker__label">
-                     {i.firstName} {i.lastName}
+                     {p.firstName} {p.lastName}
                   </div>
-                  <div className="picker__meta">{i.phone || "—"}</div>
-                  <div className="picker__meta">{i.carPlate}</div>
+                  <div className="picker__meta">{p.phone || "—"}</div>
+                  <div className="picker__meta">{p.email || "—"}</div>
                </li>
             ))}
          </ul>
@@ -149,13 +142,12 @@ function InstructorChooser({
 /* ========= Form Reutilizabil (Create & Edit) ========= */
 function GroupForm({
    mode, // "create" | "edit"
-   values, // { name, token, instructorLabel }
+   values, // { name, token, professorLabel }
    setValues, // (patch) => void
    onSubmit, // () => void
-   onCancel, // () => void  (în edit = close icon din header)
+   onCancel, // () => void
    openPicker, // () => void
 
-   // pentru Șterge pe același rând cu Salvează
    showDelete = true,
    isConfirmingDelete = false,
    onStartDelete,
@@ -188,7 +180,8 @@ function GroupForm({
                </button>
             )}
          </div>
-         {mode === "edit" && showDelete && (
+
+         {mode === "edit" && (
             <div className="groups__keyline instructorsgroup__keyline">
                <input
                   type="text"
@@ -206,10 +199,9 @@ function GroupForm({
             onClick={openPicker}
             style={{ textAlign: "left" }}
          >
-            {values.instructorLabel}
+            {values.professorLabel}
          </button>
 
-         {/* Acțiuni pe o singură linie: Salvează + Șterge/Confirmare */}
          <div
             className="instructorsgroup__actions"
             style={{ display: "flex", gap: 6, alignItems: "center" }}
@@ -224,7 +216,6 @@ function GroupForm({
                </button>
             )}
 
-            {/* 🔒 butonul Șterge apare doar dacă showDelete=true */}
             {mode === "edit" && showDelete && (
                <div
                   className="instructorsgroup__item-delete groups__item-delete"
@@ -268,50 +259,62 @@ function GroupManager() {
    const { user } = useContext(UserContext);
    const dispatch = useDispatch();
 
-   const { list: groups, users } = useSelector((state) => state.groups);
-   const instructors = useSelector((s) => s.instructors.list || []);
-   const cars = useSelector((s) => s.cars.list || []);
+   const groupsState = useSelector((state) => state.groups || {});
+   const groups = Array.isArray(groupsState.list) ? groupsState.list : [];
+   const users = Array.isArray(groupsState.users) ? groupsState.users : [];
+
+   // ✅ PROFESORI = user.role === "PROFESSOR"
+   const professors = useMemo(
+      () =>
+         users.filter(
+            (u) => String(u?.role || "").toUpperCase() === "PROFESSOR"
+         ),
+      [users]
+   );
 
    const [search, setSearch] = useState({ open: false, query: "" });
    const [viewMode, setViewMode] = useState({ mode: "list", group: null });
    const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
-   // un singur form reutilizabil (create & edit)
    const [form, setForm] = useState({
       open: false,
       mode: null, // "create" | "edit"
-      groupId: null, // doar la edit
-      values: { name: "", token: "", instructorId: "" },
+      groupId: null,
+      values: { name: "", token: "", professorId: "" },
    });
 
-   // control pentru picker
    const [picker, setPicker] = useState({ open: false });
 
    useEffect(() => {
       dispatch(fetchGroups());
-      dispatch(fetchInstructors());
-      dispatch(fetchCars());
    }, [dispatch, user]);
 
-   const instructorLabel = (id) => {
-      if (!id) return "Selectează instructor";
-      const i = instructors.find((x) => String(x.id) === String(id));
-      if (!i) return "Selectează instructor";
-      return `${i.firstName} ${i.lastName}`;
+   const professorLabel = (id) => {
+      if (!id) return "Selectează profesor";
+      const p = professors.find((x) => String(x.id) === String(id));
+      if (!p) return "Selectează profesor";
+      return `${p.firstName} ${p.lastName}`.trim();
    };
 
-   const groupedUsersByGroup = groups.map((group) => ({
-      ...group,
-      members: users.filter((u) => u.groupId === group.id),
-   }));
+   const groupedUsersByGroup = useMemo(() => {
+      return groups.map((group) => ({
+         ...group,
+         members: users.filter((u) => String(u.groupId) === String(group.id)),
+      }));
+   }, [groups, users]);
 
-   const filteredGroups = groupedUsersByGroup.filter(
-      (g) =>
-         g.name.toLowerCase().includes((search.query || "").toLowerCase()) ||
-         (g.token || "")
-            .toLowerCase()
-            .includes((search.query || "").toLowerCase())
-   );
+   const filteredGroups = useMemo(() => {
+      const q = (search.query || "").toLowerCase();
+      return groupedUsersByGroup.filter(
+         (g) =>
+            String(g.name || "")
+               .toLowerCase()
+               .includes(q) ||
+            String(g.token || "")
+               .toLowerCase()
+               .includes(q)
+      );
+   }, [groupedUsersByGroup, search.query]);
 
    const patchFormValues = (patch) =>
       setForm((f) => ({ ...f, values: { ...f.values, ...patch } }));
@@ -322,24 +325,30 @@ function GroupManager() {
          open: true,
          mode: "create",
          groupId: null,
-         values: { name: "", token: "", instructorId: "" },
+         values: { name: "", token: "", professorId: "" },
       });
 
    const submitCreate = () => {
-      const { name, token, instructorId } = form.values;
+      const { name, token, professorId } = form.values;
       if (!String(name || "").trim()) return;
+
+      // ✅ trimitem professorId (și păstrăm compatibilitate dacă backend-ul încă așteaptă instructorId)
+      const pid = toNum(professorId);
+
       dispatch(
          addGroup({
             name: String(name).trim(),
             token: token || "",
-            instructorId: toNum(instructorId),
+            professorId: pid,
+            instructorId: pid,
          })
       );
+
       setForm({
          open: false,
          mode: null,
          groupId: null,
-         values: { name: "", token: "", instructorId: "" },
+         values: { name: "", token: "", professorId: "" },
       });
    };
 
@@ -352,20 +361,29 @@ function GroupManager() {
          values: {
             name: group.name || "",
             token: group.token || "",
-            instructorId: group.instructorId ? String(group.instructorId) : "",
+            // ✅ suportăm ambele câmpuri: professorId (nou) / instructorId (vechi)
+            professorId: group.professorId
+               ? String(group.professorId)
+               : group.instructorId
+               ? String(group.instructorId)
+               : "",
          },
       });
 
    const submitEdit = () => {
-      const { name, token, instructorId } = form.values;
+      const { name, token, professorId } = form.values;
+      const pid = toNum(professorId);
+
       dispatch(
          updateGroup({
             id: form.groupId,
             name: String(name ?? "").trim(),
             token: token ?? "",
-            instructorId: toNum(instructorId),
+            professorId: pid,
+            instructorId: pid,
          })
       );
+
       cancelForm();
    };
 
@@ -374,12 +392,11 @@ function GroupManager() {
          open: false,
          mode: null,
          groupId: null,
-         values: { name: "", token: "", instructorId: "" },
+         values: { name: "", token: "", professorId: "" },
       });
 
    /* DELETE */
    const handleDeleteGroup = (id) => {
-      // (opțional) mai lăsăm și o protecție în backend-ul UI:
       const g = groups.find((x) => x.id === id);
       if (isProtectedToken(g?.token)) {
          setConfirmDeleteId(null);
@@ -425,6 +442,7 @@ function GroupManager() {
                      />
                   </button>
                </div>
+
                <button
                   onClick={() =>
                      form.open && form.mode === "create"
@@ -447,16 +465,13 @@ function GroupManager() {
                   <>
                      {picker.open ? (
                         <div className="groups__create">
-                           <InstructorChooser
+                           <ProfessorChooser
                               inline
-                              instructors={instructors}
-                              cars={cars}
+                              professors={professors}
                               excludeIds={[]}
                               onClose={() => setPicker({ open: false })}
-                              onPick={(inst) => {
-                                 patchFormValues({
-                                    instructorId: String(inst.id),
-                                 });
+                              onPick={(p) => {
+                                 patchFormValues({ professorId: String(p.id) });
                                  setPicker({ open: false });
                               }}
                            />
@@ -467,8 +482,8 @@ function GroupManager() {
                               mode="create"
                               values={{
                                  ...form.values,
-                                 instructorLabel: instructorLabel(
-                                    form.values.instructorId
+                                 professorLabel: professorLabel(
+                                    form.values.professorId
                                  ),
                               }}
                               setValues={(p) => patchFormValues(p)}
@@ -481,7 +496,7 @@ function GroupManager() {
                   </>
                )}
 
-               {/* ===== LISTĂ; la edit înlocuim cardul cu ACELAȘI formular și ascundem complet dreapta ===== */}
+               {/* ===== LISTĂ; la edit înlocuim cardul cu formular ===== */}
                {viewMode.mode === "list" &&
                   filteredGroups.map((group) => {
                      const isEditingThis =
@@ -490,7 +505,6 @@ function GroupManager() {
                         form.groupId === group.id;
 
                      if (isEditingThis) {
-                        // card de edit complet; fără coloană dreapta
                         const protectedByToken = isProtectedToken(group?.token);
 
                         return (
@@ -499,14 +513,13 @@ function GroupManager() {
                               className="instructorsgroup__item active"
                            >
                               {picker.open ? (
-                                 <InstructorChooser
-                                    instructors={instructors}
-                                    cars={cars}
+                                 <ProfessorChooser
+                                    professors={professors}
                                     excludeIds={[]}
                                     onClose={() => setPicker({ open: false })}
-                                    onPick={(inst) => {
+                                    onPick={(p) => {
                                        patchFormValues({
-                                          instructorId: String(inst.id),
+                                          professorId: String(p.id),
                                        });
                                        setPicker({ open: false });
                                     }}
@@ -516,15 +529,14 @@ function GroupManager() {
                                     mode="edit"
                                     values={{
                                        ...form.values,
-                                       instructorLabel: instructorLabel(
-                                          form.values.instructorId
+                                       professorLabel: professorLabel(
+                                          form.values.professorId
                                        ),
                                     }}
                                     setValues={(p) => patchFormValues(p)}
                                     onSubmit={submitEdit}
                                     onCancel={cancelForm}
                                     openPicker={() => setPicker({ open: true })}
-                                    /* 🔒 ascundem butonul Șterge dacă token = ABCD1234 */
                                     showDelete={!protectedByToken}
                                     isConfirmingDelete={
                                        confirmDeleteId === group.id
@@ -544,7 +556,17 @@ function GroupManager() {
                         );
                      }
 
-                     // card view normal
+                     const p =
+                        professors.find(
+                           (x) =>
+                              String(x.id) ===
+                              String(group.professorId ?? group.instructorId)
+                        ) || null;
+
+                     const pLabel = p
+                        ? `${p.firstName || ""} ${p.lastName || ""}`.trim()
+                        : "—";
+
                      return (
                         <div key={group.id} className="groups__item">
                            <div className="groups__item-left">
@@ -566,23 +588,7 @@ function GroupManager() {
 
                               <div className="groups__item-left-bottom">
                                  <span className="groups__item-instructor">
-                                    {(() => {
-                                       const i = instructors.find(
-                                          (x) =>
-                                             String(x.id) ===
-                                             String(group.instructorId)
-                                       );
-                                       if (!i) return "—";
-                                       const label = `${i.firstName} ${i.lastName}`;
-                                       return (
-                                          <>
-                                             {highlightText(
-                                                label,
-                                                search.query
-                                             )}
-                                          </>
-                                       );
-                                    })()}
+                                    {highlightText(pLabel, search.query)}
                                  </span>
                               </div>
 
@@ -620,6 +626,7 @@ function GroupManager() {
                      >
                         Înapoi la grupe
                      </button>
+
                      {viewMode.group.members.length > 0 ? (
                         viewMode.group.members.map((student) => (
                            <div

@@ -43,7 +43,7 @@ function DarkModeToggle() {
       navigate("/"); // redirecționează spre login
    };
    return (
-      <ul className="header__settings settings">
+      <>
          <li className="settings__item">
             <button
                className="settings__mode-btn"
@@ -72,7 +72,7 @@ function DarkModeToggle() {
                </div>
             </button>
          </li>
-      </ul>
+      </>
    );
 }
 

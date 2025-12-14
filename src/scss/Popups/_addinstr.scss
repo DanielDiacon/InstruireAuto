@@ -209,7 +209,7 @@
          background: #80d1f6 !important;
          color: #002c41;
       }
-      
+
       &--delete {
          background: hsl(0, 90%, 80%);
          color: #330000;
@@ -568,4 +568,51 @@
    &__btn-day.active {
       border-radius: 22px;
    }
+}
+
+// copy
+.picker__column {
+   display: flex;
+   flex-direction: column;
+   background: var(--black-p);
+   color: var(--white-s);
+   border-radius: 16px;
+   width: 100%;
+   display: block;
+   padding: 3px 6px;
+   border-radius: 10px 16px 16px 16px;
+   padding: 20px 14px 10px 14px;
+   width: 100%;
+   position: relative;
+}
+//.picker__label {
+//   color: var(--white-t);
+//   position: absolute;
+//   top: 4px;
+//   left: 8px;
+//   font-size: 10px;
+//   z-index: 2;
+//}
+
+.picker__row-line {
+   display: flex;
+   justify-content: space-between;
+   padding: 2px;
+}
+
+.picker__text {
+   flex: 1 1 auto;
+   min-width: 0;
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis;
+}
+
+.picker__icon-btn {
+   color: var(--white-s);
+}
+
+.picker__icon {
+   width: 16px;
+   height: 16px;
 }

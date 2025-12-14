@@ -67,7 +67,7 @@ export default function EventInfoPopup({ event }) {
               .filter(Boolean)
               .join(", ") || "-";
 
-   // transformă „069..., +373...” în link-uri tel:
+   // transformălink-uri tel:
    const phoneList =
       phoneField && phoneField !== "-"
          ? phoneField

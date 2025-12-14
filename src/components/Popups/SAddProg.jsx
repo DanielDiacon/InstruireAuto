@@ -299,9 +299,7 @@ const keyForReservation = (r) => {
    const gid = r?.instructorsGroupId ?? r?.groupId ?? r?.group?.id ?? null;
    const iid =
       r?.instructorId ??
-      r?.teacherId ??
       r?.instructor?.id ??
-      r?.teacher?.id ??
       null;
    if (gid != null) return { type: "group", id: String(gid) };
    if (iid != null) return { type: "instructor", id: String(iid) };
@@ -324,9 +322,7 @@ function findDominantAnchor(resList = []) {
       const gid = r?.instructorsGroupId ?? r?.groupId ?? r?.group?.id ?? null;
       const iid =
          r?.instructorId ??
-         r?.teacherId ??
          r?.instructor?.id ??
-         r?.teacher?.id ??
          null;
       if (gid != null) return { type: "group", id: String(gid) };
       if (iid != null) return { type: "instructor", id: String(iid) };
@@ -422,9 +418,7 @@ async function mergeBlackoutsIntoStartSets(
          const t = String(b?.type || "").toUpperCase();
          const instructId =
             b?.instructorId ??
-            b?.teacherId ??
             b?.instructor?.id ??
-            b?.teacher?.id ??
             null;
 
          if (t === "REPEAT") {
@@ -500,9 +494,7 @@ async function fetchBusyForEntity(entityType, entityId, allowedKeysSet) {
          const set = startBusyLocal.get(key) || new Set();
          const rInstr =
             r?.instructorId ??
-            r?.teacherId ??
             r?.instructor?.id ??
-            r?.teacher?.id ??
             (entityType === "instructor" ? Number(entityId) : null);
 
          if (rInstr != null) set.add(Number(rInstr));
@@ -921,9 +913,7 @@ export default function SAddProg({ onClose }) {
                   const set = startBusyLocal.get(key) || new Set();
                   const rInstr =
                      r?.instructorId ??
-                     r?.teacherId ??
                      r?.instructor?.id ??
-                     r?.teacher?.id ??
                      (entityType === "instructor" ? Number(entityId) : null);
                   if (rInstr != null) set.add(Number(rInstr));
                   startBusyLocal.set(key, set);

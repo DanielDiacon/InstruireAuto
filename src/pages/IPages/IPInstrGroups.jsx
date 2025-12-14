@@ -10,14 +10,17 @@ import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import todayIcon from "../../assets/svg/material-symbols--today-outline.svg";
 import InstrGroups from "../../components/IPanel/InstrGroups";
+import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
 
 /* ========= Localizer + RO formats/messages ========= */
 
 function IPInstrGroups() {
-   const links = [
+  const links = [
+      // 👇 nou: link de Acasă pentru instructor, la fel ca la admin/manager
       { link: "/instructor", text: "Acasă", icon: homeIcon },
       { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
       { link: "/instructor/today", text: "Azi", icon: todayIcon },
+      { link: "/instructor/groups", text: "Grupe", icon: groupsIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];
 

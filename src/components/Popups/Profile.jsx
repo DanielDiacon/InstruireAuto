@@ -38,24 +38,6 @@ const roleIcon = (role) => {
    return studentIcon;
 };
 
-// Afișăm +373 în UI
-const formatMDPhone = (p) => {
-   if (!p) return "–";
-   const digits = String(p).replace(/\D/g, "");
-   if (digits.length === 8) {
-      // 22 123 456 -> +373 22 123 456
-      return `+373 ${digits.replace(/(\d{2})(\d{3})(\d{3})/, "$1 $2 $3")}`;
-   }
-   if (digits.startsWith("373") && digits.length === 11) {
-      // 373 22 123 456 -> +373 22 123 456
-      return `+${digits.replace(
-         /(\d{3})(\d{2})(\d{3})(\d{3})/,
-         "$1 $2 $3 $4"
-      )}`;
-   }
-   return String(p);
-};
-
 const isDateLike = (v) =>
    typeof v === "string" && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v);
 
@@ -108,6 +90,7 @@ const PRIMARY_KEYS = new Set([
    "phone",
    "role",
 ]);
+
 // === Format ISO -> "DD MM YYYY - HH:MM" fără schimbare de oră (fără timezone) ===
 function fmtIsoDDMMYYYY_HHMM_Plain(val) {
    if (val == null) return "–";
@@ -252,28 +235,8 @@ export default function Profile() {
             </div>
             <div className="students-info__field">
                <ReactSVG src={phoneIcon} className="students-info__icon" />
-               {formatMDPhone(liveEntity.phone)}
+               {liveEntity.phone || "–"}
             </div>
-
-            {/* DETALII DINAMICE (fără groupId/instructor etc.) */}
-            {/*
-        {dynamicDetails.length > 0 && (
-          <>
-            <h4 className="students-info__subtitle">Detalii:</h4>
-            {dynamicDetails.map(([key, value]) => (
-              <div key={key} className="students-info__field">
-                <strong style={{ marginRight: 8 }}>
-                  {key
-                    .replace(/([A-Z])/g, " $1")
-                    .replace(/^./, (c) => c.toUpperCase())}
-                  :
-                </strong>
-                <span>{renderValue(value)}</span>
-              </div>
-            ))}
-          </>
-        )}
-        */}
 
             {/* PROGRAMĂRI – doar pentru studenți (USER) */}
             {showReservations && (
@@ -318,7 +281,11 @@ export default function Profile() {
                                     <div className="students-info__item-left">
                                        <h3>{studentName}</h3>
                                        {/*<p>{instructorName}</p>*/}
-                                      <span>{fmtIsoDDMMYYYY_HHMM_Plain(res.startTime)}</span>
+                                       <span>
+                                          {fmtIsoDDMMYYYY_HHMM_Plain(
+                                             res.startTime
+                                          )}
+                                       </span>
                                     </div>
 
                                     <div className="students-info__item-right">

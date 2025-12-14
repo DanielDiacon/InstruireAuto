@@ -20,7 +20,7 @@
 
 .darkmode {
    /* Culori evenimente (dark) */
-   --event-default: #f1f7c7;
+   --event-default: #ecf6af;
    --event-red: hsl(0 100% 87%);
    --event-orange: hsl(30 100% 80%);
    --event-yellow: hsl(54 95% 76%);
@@ -105,21 +105,6 @@
    .dv-sector-toggle {
       background: var(--accent-l);
       color: var(--accent-d);
-   }
-
-   .dv-search__input {
-      width: 100%;
-      height: 36px;
-      padding: 10px 16px;
-      border-radius: 32px;
-      background: var(--black-p);
-      color: var(--white-p);
-      font-size: 13px;
-      outline: none;
-   }
-
-   .dv-search__input::placeholder {
-      color: var(--muted);
    }
 
    .dv-btn:active {
@@ -386,6 +371,128 @@
       user-select: none;
    }
 }
+/* Dayview - Reservation History (BEM scaffold) */
+.dv-history {
+   &__backdrop {
+      /* full-screen dim layer */
+   }
+
+   &__panel {
+      background: var(--black-p);
+      padding: 8px 12px;
+      box-shadow: 0px 0px 30px -6px rgba(0, 0, 0, 0.3);
+      backdrop-filter: blur(10px) saturate(150%);
+      background: var(--transparent);
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+   }
+
+   &__header {
+      /* top row: title + actions */
+      display: flex;
+      justify-content: space-between;
+   }
+
+   &__title {
+      /* "Istoricul modificărilor" */
+   }
+
+   &__actions {
+      /* right actions group */
+      display: flex;
+      gap: 6px;
+   }
+
+   &__counter {
+      font-size: 14px;
+      color: var(--white-p);
+   }
+   &__nav-btn {
+      /* prev/next buttons */
+      font-size: 14px;
+
+      color: var(--white-p);
+      &--prev {
+      }
+      &--next {
+      }
+   }
+
+   &__icon {
+      height: 16px;
+      width: 16px;
+      div {
+         display: grid;
+         place-items: center;
+      }
+      &.reverse {
+         svg {
+            rotate: 180deg;
+         }
+      }
+      &.add {
+         height: 18px;
+         width: 18px;
+         svg {
+            rotate: 45deg;
+            height: 18px;
+            width: 18px;
+         }
+      }
+   }
+
+   &__close-btn {
+      color: var(--white-p);
+   }
+
+   &__state {
+      /* common state text (loading/error/empty) */
+      &--loading {
+      }
+      &--error {
+      }
+      &--empty {
+      }
+   }
+   &__meta {
+      display: flex;
+      gap: 6px;
+   }
+   &__avatar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 36px;
+      width: 36px;
+      aspect-ratio: 1;
+      background: var(--accent-l);
+      color: var(--accent-d);
+      border-radius: 30px;
+   }
+
+   &__meta-text {
+      /* wrapper for who + when */
+   }
+
+   &__who {
+      /* author name */
+   }
+
+   &__when {
+      font-size: 10px;
+      color: var(--white-s);
+   }
+
+   &__changes {
+      /* list container */
+   }
+
+   &__change {
+      /* one line item */
+   }
+}
 
 .dv-dd {
    position: relative;
@@ -472,6 +579,107 @@
       color: var(--accent-d);
    }
 }
+/* === Search (toolbar) === */
+
+.dv-search {
+   gap: 3px;
+   display: flex;
+   width: 100%;
+   &__nav {
+      gap: 3px;
+      display: flex;
+   }
+   &__input-wrapper {
+      width: 100%;
+      position: relative;
+   }
+   &__input {
+      width: 100%;
+      height: 36px;
+      padding: 10px 16px;
+      border-radius: 32px 8px 8px 32px;
+      background: var(--black-p);
+      color: var(--white-p);
+      font-size: 13px;
+      outline: none;
+
+      &::placeholder {
+         color: var(--white-p);
+         opacity: 0.7;
+      }
+   }
+   &__btn-clear {
+      padding: 8px 14px;
+      position: absolute;
+      right: 0;
+      top: 0;
+      font-size: 15px;
+      color: var(--white-t);
+      background: linear-gradient(
+         90deg,
+         transparent,
+         var(--black-p),
+         var(--black-p),
+         var(--black-p),
+         var(--black-p)
+      );
+      border-radius: 8px;
+      font-weight: 700;
+   }
+   &__btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      height: 100%;
+      padding: 10px 16px 10px 14px;
+      border-radius: 8px 32px 32px 8px;
+
+      background: var(--black-p);
+      color: var(--white-p);
+      gap: 6px;
+      z-index: 3;
+   }
+   &__count-wrapper {
+      display: flex;
+      position: relative;
+      background: var(--black-p);
+      border-radius: 20px;
+      gap: 1px;
+   }
+   &__count {
+      min-width: 40px;
+      text-align: center;
+      font-size: 11px;
+      user-select: none;
+      width: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      padding-top: 3px;
+   }
+
+   &__btn-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      height: 100%;
+      padding: 20px 10px 5px 10px;
+      color: var(--white-p);
+      cursor: pointer;
+      line-height: 1.2;
+      font-size: 8px;
+      gap: 6px;
+      z-index: 3;
+      &:nth-child(2) {
+         padding: 20px 5px 5px 15px;
+      }
+      &:nth-child(3) {
+         padding: 20px 15px 5px 5px;
+      }
+   }
+}
 
 @media only screen and (max-width: $mobile) {
    .dayview {
@@ -480,26 +688,19 @@
          align-items: center;
          flex-direction: row;
          justify-content: space-between;
-         gap: 3px !important;
+         flex-wrap: wrap;
+         gap: 6px !important;
          padding: 6px 8px 6px 8px;
       }
-      &__header-left {
-         display: flex;
-         gap: 3px !important;
-         font-size: 12px;
+      .dv-search {
+         order: 4;
+         width: 100%;
+         min-width: 100%;
       }
-      &__toolbar-compact {
-         display: flex;
-         gap: 3px !important;
+      .dv-dd--sector {
+         margin-right: auto;
       }
-      &__toolbar {
-         gap: 3px;
 
-         .dv-search__input {
-            font-size: 12px;
-            margin-right: 0px;
-         }
-      }
       .dv-btn {
          height: 100%;
          border-radius: 18px;
@@ -705,10 +906,51 @@
    }
 }
 
-.dayview__group-skeleton {
-   /* stilul l-am pus deja inline, aici poți să-l mai rafinezi dacă vrei */
-}
-.dayview__skeleton{
-   height: 100%;
-   background: red;
+.dv-touch-toolbar {
+   position: absolute;
+   transform: translateX(-50%);
+   display: flex;
+   border-radius: 22px;
+   backdrop-filter: blur(10px) saturate(150%);
+   background: var(--transparent);
+   box-shadow: 0px 0px 30px -6px rgba(0, 0, 0, 0.3);
+   z-index: 4;
+   pointer-events: auto;
+   padding: 0 2px;
+   &__btn {
+      border: none;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: default;
+      opacity: 0.35;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      padding: 10px 8px;
+   }
+
+   &__btn--active {
+      cursor: pointer;
+      opacity: 1;
+   }
+
+   &__btn--disabled {
+      cursor: default;
+      opacity: 0.35;
+   }
+
+   &__icon {
+      width: 18px;
+      height: 18px;
+      display: block;
+      color: var(--white-p);
+      div {
+         display: grid;
+         place-items: center;
+      }
+      svg {
+         width: 18px;
+         height: 18px;
+      }
+   }
 }

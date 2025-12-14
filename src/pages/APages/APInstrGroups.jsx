@@ -12,6 +12,7 @@ import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import calendarIcon from "../../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../../assets/svg/mdi--account-star-outline.svg";
 import instrGroupsIcon from "../../assets/svg/material-symbols--group-add-outline.svg";
+import categoriiIcon from "../../assets/svg/mdi--category-plus-outline.svg";
 
 import SubPopup from "../../components/Utils/SubPopup";
 import InstructorsGroupManager from "../../components/APanel/InstructorsGroupManager";
@@ -30,6 +31,7 @@ function APInstrGroups() {
          icon: instrGroupsIcon,
       },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
+      { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
       { popup: "profile", text: "Profil", icon: accIcon },
    ];
 

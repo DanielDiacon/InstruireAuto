@@ -1,3 +1,4 @@
+// src/pages/SPanel.jsx
 import { useContext, useEffect, useState } from "react";
 import { dateFnsLocalizer } from "react-big-calendar";
 import format from "date-fns/format";
@@ -25,6 +26,8 @@ import addIcon from "../assets/svg/mdi--calendar-plus-outline.svg";
 import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
 import testIcon from "../assets/svg/material-symbols--book-outline.svg";
 import examIcon from "../assets/svg/mdi--book-clock-outline.svg";
+import homeIcon from "../assets/svg/material-symbols--home-outline.svg"; // 👈 nou
+
 import { openPopup } from "../components/Utils/popupStore";
 import Footer from "../components/Footer";
 
@@ -142,6 +145,8 @@ const messagesRO = {
 
 function SPanel() {
    const links = [
+      // 👇 nou: Acasă pentru student, ca să fie root /student
+      { link: "/student", text: "Acasă", icon: homeIcon },
       { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "sAddProg", text: "Programare", icon: addIcon },
       { link: "/student/test", text: "Testare", icon: testIcon },
@@ -250,9 +255,7 @@ function SPanel() {
                />
             </section>
             <Footer />
-
          </main>
-
       </>
    );
 }
