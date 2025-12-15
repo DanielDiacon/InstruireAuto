@@ -332,7 +332,6 @@ function GroupManager() {
       const { name, token, professorId } = form.values;
       if (!String(name || "").trim()) return;
 
-      // ✅ trimitem professorId (și păstrăm compatibilitate dacă backend-ul încă așteaptă instructorId)
       const pid = toNum(professorId);
 
       dispatch(
@@ -340,7 +339,6 @@ function GroupManager() {
             name: String(name).trim(),
             token: token || "",
             professorId: pid,
-            instructorId: pid,
          })
       );
 
@@ -380,7 +378,6 @@ function GroupManager() {
             name: String(name ?? "").trim(),
             token: token ?? "",
             professorId: pid,
-            instructorId: pid,
          })
       );
 

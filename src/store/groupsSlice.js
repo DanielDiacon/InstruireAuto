@@ -51,9 +51,9 @@ export const fetchGroups = createAsyncThunk(
 
 export const addGroup = createAsyncThunk(
    "groups/addGroup",
-   async ({ name, instructorId, token }, thunkApi) => {
+   async ({ name, professorId, token }, thunkApi) => {
       try {
-         return await createGroups({ name, instructorId, token });
+         return await createGroups({ name, professorId, token });
       } catch (err) {
          return thunkApi.rejectWithValue(errToMessage(err));
       }
@@ -62,12 +62,12 @@ export const addGroup = createAsyncThunk(
 
 export const updateGroup = createAsyncThunk(
    "groups/updateGroup",
-   async ({ id, name, instructorId, token }, thunkApi) => {
+   async ({ id, name, professorId, token }, thunkApi) => {
       try {
          const payload = {};
          if (typeof name !== "undefined") payload.name = name;
-         if (typeof instructorId !== "undefined")
-            payload.instructorId = instructorId;
+         if (typeof professorId !== "undefined")
+            payload.professorId = professorId;
          if (typeof token !== "undefined") payload.token = token;
 
          await patchGroup(id, payload);

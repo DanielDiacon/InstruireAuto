@@ -11,7 +11,6 @@ const container = document.getElementById("root");
 const root = createRoot(container);
 
 root.render(
-   // ⛔️ SCOS StrictMode – evita dublarea render-urilor în dev
    <Provider store={store}>
       <PersistGate loading={null} persistor={persistor}>
          <UserProvider>

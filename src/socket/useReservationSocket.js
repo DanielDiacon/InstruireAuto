@@ -6,6 +6,7 @@ export function useReservationSocket(token, handlers = {}) {
    const socketRef = useRef(null);
    const handlersRef = useRef(handlers);
 
+   // păstrăm mereu ultimele handlers fără să reînregistrăm listeners
    useEffect(() => {
       handlersRef.current = handlers;
    }, [handlers]);
@@ -13,83 +14,68 @@ export function useReservationSocket(token, handlers = {}) {
    useEffect(() => {
       if (!token) return;
 
+      // dacă există un socket vechi (token schimbat / remount), îl închidem
+      if (socketRef.current) {
+         try {
+            socketRef.current.disconnect();
+         } catch {}
+         socketRef.current = null;
+      }
+
       const socket = createSocket(token);
       socketRef.current = socket;
 
-      socket.on("connect", () => {
-         handlersRef.current.onConnect?.(socket);
-      });
+      const onConnect = () => {
+         console.log("WS connected:", socket.id);
+         handlersRef.current?.onConnect?.(socket);
+      };
 
-      socket.on("disconnect", (reason) => {
-         handlersRef.current.onDisconnect?.(reason);
-      });
+      const onJoined = (data) => {
+         console.log("JOINED:", data);
+         handlersRef.current?.onReservationJoined?.(data);
+      };
 
-      // existing reservation locks/presence
-      socket.on("reservation:joined", (data) => {
-         handlersRef.current.onReservationJoined?.(data);
-      });
+      const onLeft = (data) => {
+         console.log("LEFT:", data);
+         handlersRef.current?.onReservationLeft?.(data);
+      };
 
-      socket.on("reservation:left", (data) => {
-         handlersRef.current.onReservationLeft?.(data);
-      });
+      const onJoinDenied = (data) => {
+         console.warn("DENIED:", data);
+         handlersRef.current?.onReservationJoinDenied?.(data);
+      };
 
-      socket.on("reservation:joinDenied", (data) => {
-         handlersRef.current.onReservationJoinDenied?.(data);
-      });
-
-      // NEW: dayview slot presence
-      socket.on("dayview:slotSelected", (data) => {
-         handlersRef.current.onSlotSelected?.(data);
-      });
-
-      socket.on("dayview:slotCleared", (data) => {
-         handlersRef.current.onSlotCleared?.(data);
-      });
-
-      socket.on("dayview:presenceSnapshot", (data) => {
-         handlersRef.current.onPresenceSnapshot?.(data);
-      });
+      socket.on("connect", onConnect);
+      socket.on("reservation:joined", onJoined);
+      socket.on("reservation:left", onLeft);
+      socket.on("reservation:joinDenied", onJoinDenied);
 
       return () => {
+         socket.off("connect", onConnect);
+         socket.off("reservation:joined", onJoined);
+         socket.off("reservation:left", onLeft);
+         socket.off("reservation:joinDenied", onJoinDenied);
+
          socket.disconnect();
-         socketRef.current = null;
+         if (socketRef.current === socket) socketRef.current = null;
       };
    }, [token]);
 
    const joinReservation = useCallback((reservationId) => {
-      socketRef.current?.emit("reservation:join", { reservationId });
+      const id = Number(reservationId);
+      if (!Number.isFinite(id) || id <= 0) return;
+      socketRef.current?.emit("reservation:join", { reservationId: id });
    }, []);
 
    const leaveReservation = useCallback((reservationId) => {
-      socketRef.current?.emit("reservation:leave", { reservationId });
-   }, []);
-
-   // NEW: join/leave “room” for dayview
-   const joinDayview = useCallback((dayKey) => {
-      if (!dayKey) return;
-      socketRef.current?.emit("dayview:join", { dayKey });
-   }, []);
-
-   const leaveDayview = useCallback((dayKey) => {
-      if (!dayKey) return;
-      socketRef.current?.emit("dayview:leave", { dayKey });
-   }, []);
-
-   // NEW: emit slot presence
-   const selectSlot = useCallback((payload) => {
-      socketRef.current?.emit("dayview:selectSlot", payload);
-   }, []);
-
-   const clearSlot = useCallback((payload) => {
-      socketRef.current?.emit("dayview:clearSlot", payload);
+      const id = Number(reservationId);
+      if (!Number.isFinite(id) || id <= 0) return;
+      socketRef.current?.emit("reservation:leave", { reservationId: id });
    }, []);
 
    return {
       joinReservation,
       leaveReservation,
-      joinDayview,
-      leaveDayview,
-      selectSlot,
-      clearSlot,
+      socket: socketRef.current, // opțional, dacă vrei acces direct la socket
    };
 }

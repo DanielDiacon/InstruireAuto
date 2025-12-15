@@ -74,7 +74,90 @@ function resolveColor(color) {
 
    COLOR_CACHE.set(color, result);
    return result;
+} /* ================== PRESENCE (colored borders) ================== */
+
+function resolveCanvasColor(input) {
+   const s = String(input || "").trim();
+   if (!s) return "";
+
+   // token CSS
+   if (s.startsWith("--") || s.startsWith("var(")) return resolveColor(s);
+
+   // hex / rgb / hsl
+   if (/^#[0-9a-fA-F]{3,8}$/.test(s) || /^(rgb\(|hsl\()/i.test(s)) return s;
+
+   // nume CSS (red/green/blue etc.)
+   if (/^[a-z]+$/i.test(s)) return s;
+
+   // fallback: acceptă "GREEN", "event-green", etc.
+   return resolveColor(normalizeEventColor(s));
 }
+
+function getPresenceColorsForId(presenceMap, reservationId) {
+   if (!presenceMap || reservationId == null) return null;
+
+   const ridStr = String(reservationId);
+   const ridNum = Number(reservationId);
+
+   if (presenceMap instanceof Map) {
+      // IMPORTANT: suport și chei string și chei number
+      return (
+         presenceMap.get(ridStr) ||
+         (Number.isFinite(ridNum) ? presenceMap.get(ridNum) : null) ||
+         null
+      );
+   }
+
+   if (typeof presenceMap === "object") {
+      const v =
+         presenceMap[ridStr] ??
+         (Number.isFinite(ridNum) ? presenceMap[ridNum] : undefined);
+      return Array.isArray(v) ? v : null;
+   }
+
+   return null;
+}
+
+function drawPresenceBorder(
+   ctx,
+   x,
+   y,
+   w,
+   h,
+   colors,
+   baseRadius = 0,
+   fontScale = 1
+) {
+   if (!colors || !colors.length) return;
+
+   const max = Math.min(3, colors.length);
+   const lineW = Math.max(2, 3 * (fontScale || 1));
+   const gap = Math.max(1, 2 * (fontScale || 1));
+
+   ctx.save();
+   ctx.lineJoin = "round";
+
+   for (let i = 0; i < max; i++) {
+      const inset = i * (lineW + gap);
+      const c = resolveCanvasColor(colors[i]) || "#31d17c";
+
+      const rx = x + inset + 0.5;
+      const ry = y + inset + 0.5;
+      const rw = w - inset * 2 - 1;
+      const rh = h - inset * 2 - 1;
+      if (rw <= 1 || rh <= 1) continue;
+
+      ctx.strokeStyle = c;
+      ctx.lineWidth = lineW;
+
+      const r = Math.max(0, (baseRadius || 0) - inset);
+      drawRoundRect(ctx, rx, ry, rw, rh, r);
+      ctx.stroke();
+   }
+
+   ctx.restore();
+}
+
 
 const EVENT_COLOR_MAP = {
    DEFAULT: DEFAULT_EVENT_COLOR_TOKEN,
@@ -377,6 +460,11 @@ export function drawAll({
    editingWait = null,
    overlapEventsByInst = null,
    canceledSlotKeysByInst = null,
+
+   // ✅ NEW (presence)
+   presenceReservationIds = null, // Set<string> | string[] | { [id]: true }
+
+   presenceByReservationColors = null,
 }) {
    if (!ctx || !width || !height) return;
 
@@ -1076,6 +1164,41 @@ export function drawAll({
 
             ctx.restore();
 
+            /* ✅ presence border (outer) */
+            const ridPresence = raw?.id ?? ev?.raw?.id ?? ev?.id ?? null;
+            const presenceColors = getPresenceColorsForId(
+               presenceByReservationColors,
+               ridPresence
+            );
+            if (ridPresence != null) {
+               // o singură dată, ca să nu-ți omoare consola
+               if (!window.__presenceDbgOnce) {
+                  window.__presenceDbgOnce = true;
+                  console.log(
+                     "presenceByReservationColors sample:",
+                     presenceByReservationColors
+                  );
+               }
+               console.log(
+                  "RID:",
+                  String(ridPresence),
+                  "colors:",
+                  presenceColors
+               );
+            }
+
+            if (presenceColors && presenceColors.length) {
+               drawPresenceBorder(
+                  ctx,
+                  cardX,
+                  cardY,
+                  cardW,
+                  cardH,
+                  presenceColors,
+                  eventRadius
+               );
+            }
+
             if (isBlockedEvent) {
                ctx.lineWidth = 1.3;
                ctx.strokeStyle = blackoutBorderColor;
@@ -1105,6 +1228,48 @@ export function drawAll({
             }
 
             ctx.restore();
+            // ✅ DEBUG: overlay negru dacă rezervarea e în editare (presence)
+            const rid = String(raw?.id ?? ev.id ?? "");
+
+            const isEditing =
+               !!rid &&
+               (presenceReservationIds instanceof Set
+                  ? presenceReservationIds.has(rid)
+                  : Array.isArray(presenceReservationIds)
+                  ? presenceReservationIds.includes(rid)
+                  : presenceReservationIds &&
+                    typeof presenceReservationIds === "object"
+                  ? !!presenceReservationIds[rid]
+                  : false);
+
+            if (isEditing) {
+               ctx.save();
+
+               ctx.fillStyle = "rgba(0,0,0,0.65)";
+               drawRoundRect(
+                  ctx,
+                  cardX + 1,
+                  cardY + 1,
+                  cardW - 2,
+                  cardH - 2,
+                  eventRadius
+               );
+               ctx.fill();
+
+               ctx.fillStyle = "#fff";
+               ctx.textBaseline = "top";
+               ctx.font = `bold ${Math.max(
+                  11,
+                  12 * fontScale
+               )}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+               ctx.fillText(
+                  "EDIT",
+                  cardX + 8 * fontScale,
+                  cardY + 6 * fontScale
+               );
+
+               ctx.restore();
+            }
 
             if (hitMap) {
                const reservationId = raw?.id ?? ev.id;

@@ -1,12 +1,12 @@
 // src/components/APanel/Calendar/ACalendarOptimized.jsx
 import React, {
-  useMemo,
-  useEffect,
-  useState,
-  useCallback,
-  useRef,
-  useLayoutEffect,
-  memo,
+   useMemo,
+   useEffect,
+   useState,
+   useCallback,
+   useRef,
+   useLayoutEffect,
+   memo,
 } from "react";
 import { useDispatch, useSelector, shallowEqual } from "react-redux";
 
@@ -17,9 +17,9 @@ import { listenCalendarRefresh } from "../../Utils/calendarBus";
 import { fetchInstructorsGroups } from "../../../store/instructorsGroupSlice";
 import { fetchCars } from "../../../store/carsSlice";
 import {
-  fetchReservationsDelta,
-  maybeRefreshReservations,
-  fetchReservationsForMonth,
+   fetchReservationsDelta,
+   maybeRefreshReservations,
+   fetchReservationsForMonth,
 } from "../../../store/reservationsSlice";
 import { fetchStudents } from "../../../store/studentsSlice";
 import { fetchUsers } from "../../../store/usersSlice";
@@ -29,8 +29,8 @@ import { ReactSVG } from "react-svg";
 import searchIcon from "../../../assets/svg/search.svg";
 
 import {
-  selectCalendarBaseData,
-  selectCalendarDerivedData,
+   selectCalendarBaseData,
+   selectCalendarDerivedData,
 } from "../../../store/calendarSelectors";
 
 // ✅ din Calendar -> APanel -> components -> Utils
@@ -42,7 +42,6 @@ import useInertialPan from "./useInertialPan";
 // ✅ din Calendar -> APanel -> components -> src -> socket/api
 import { useReservationSocket } from "../../../socket/useReservationSocket";
 import { getInstructorBlackouts } from "../../../api/instructorsService";
-
 
 /* ================= HELPERE GENERALE ================= */
 
@@ -77,6 +76,52 @@ const norm = (s = "") =>
 const digitsOnly = (s = "") => s.toString().replace(/\D+/g, "");
 
 const normPlate = (s = "") => s.toString().replace(/[\s-]/g, "").toUpperCase();
+function normalizeUsersList(users) {
+   if (!users) return [];
+   if (Array.isArray(users)) return users;
+
+   // suport pentru forme comune din slice-uri
+   if (Array.isArray(users.items)) return users.items;
+   if (Array.isArray(users.list)) return users.list;
+   if (Array.isArray(users.data)) return users.data;
+
+   return [];
+}
+function isAdminOrManager(u) {
+   const role = String(
+      u?.role ?? u?.userRole ?? u?.type ?? u?.profile?.role ?? ""
+   ).toUpperCase();
+   return role === "ADMIN" || role === "MANAGER";
+}
+function pickUserProfileColor(u) {
+   // ia “culoarea din profil” – încearcă mai multe câmpuri (nu știm exact schema ta)
+   return (
+      u?.profile?.color ||
+      u?.profileColor ||
+      u?.color ||
+      u?.uiColor ||
+      u?.profile?.uiColor ||
+      null
+   );
+}
+
+// fallback deterministic (dacă userul n-are culoare setată în profil)
+const FALLBACK_USER_COLOR_TOKENS = [
+   "--event-blue",
+   "--event-green",
+   "--event-pink",
+   "--event-purple",
+   "--event-yellow",
+   "--event-orange",
+   "--event-indigo",
+];
+
+function hashToColorToken(id) {
+   const s = String(id || "");
+   let h = 0;
+   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+   return FALLBACK_USER_COLOR_TOKENS[h % FALLBACK_USER_COLOR_TOKENS.length];
+}
 
 // citire token din cookie
 const getCookie = (name) => {
@@ -384,28 +429,88 @@ export default function ACalendarOptimized({
 
    // 🔐 WebSocket pentru rezervări – FĂRĂ scheduleSmartTick/polling
    const token = getCookie("access_token");
+   // ✅ Presence: reservationId -> Set(userId)
+   const [presenceByReservationUsers, setPresenceByReservationUsers] = useState(
+      () => new Map()
+   );
 
-   useReservationSocket(token, {
+   const applyPresenceDelta = useCallback((type, payload) => {
+      const ridRaw =
+         payload?.reservationId ??
+         payload?.reservation_id ??
+         payload?.rid ??
+         null;
+      const uidRaw =
+         payload?.userId ?? payload?.user_id ?? payload?.uid ?? null;
+
+      if (ridRaw == null) return;
+
+      const rid = String(ridRaw);
+      const uid = uidRaw != null ? String(uidRaw) : null;
+
+      setPresenceByReservationUsers((prev) => {
+         const next = new Map(prev);
+
+         // JOIN fără userId (fallback) => doar marcăm ca “cineva e acolo”
+         if (!uid) {
+            next.set(rid, new Set(["__someone__"]));
+            return next;
+         }
+
+         const set = new Set(next.get(rid) || []);
+         if (type === "join") set.add(uid);
+         else if (type === "left") set.delete(uid);
+
+         if (set.size) next.set(rid, set);
+         else next.delete(rid);
+
+         return next;
+      });
+   }, []);
+
+   const reservationWS = useReservationSocket(token, {
       onConnect: () => {
-         // la conectare, tragem un delta proaspăt
+         // reset presence la reconnect (evită “ghost borders”)
+         setPresenceByReservationUsers(new Map());
          dispatch(fetchReservationsDelta());
       },
       onDisconnect: () => {
-         // nimic special; când revii în tab, mai jos avem maybeRefreshReservations
+         setPresenceByReservationUsers(new Map());
       },
-      onReservationJoined: () => {
-         dispatch(fetchReservationsDelta());
-      },
-      onReservationLeft: () => {
-         dispatch(fetchReservationsDelta());
-      },
-      onReservationJoinDenied: (data) => {
-         console.warn("[WS] join denied", data);
-      },
-      onReservationsChanged: () => {
-         dispatch(fetchReservationsDelta());
-      },
+
+      // ✅ aici vrem payload-ul {reservationId, userId}
+      onReservationJoined: (data) => applyPresenceDelta("join", data),
+      onReservationLeft: (data) => applyPresenceDelta("left", data),
+
+      onReservationJoinDenied: (data) => console.warn("[WS] join denied", data),
+
+      // rezervările s-au schimbat => refresh din store
+      onReservationsChanged: () => dispatch(fetchReservationsDelta()),
    });
+
+   const joinReservationSafe = useCallback(
+      (reservationId) => {
+         const rid = String(reservationId ?? "").trim();
+         if (!rid) return;
+
+         // suportă mai multe semnături (în funcție de cum ai scris hook-ul)
+         if (typeof reservationWS?.joinReservation === "function") {
+            reservationWS.joinReservation(rid);
+            return;
+         }
+         if (typeof reservationWS?.join === "function") {
+            reservationWS.join(rid);
+            return;
+         }
+      },
+      [reservationWS]
+   );
+
+   const presenceReservationIds =
+      reservationWS?.presenceReservationIds ??
+      reservationWS?.presenceIds ??
+      reservationWS?.presence ??
+      null;
 
    const [sectorFilter, setSectorFilter] = useState("Toate");
    const sectorFilterNorm = sectorFilter.toLowerCase();
@@ -448,6 +553,53 @@ export default function ACalendarOptimized({
       selectCalendarDerivedData,
       shallowEqual
    );
+   const usersList = useMemo(() => normalizeUsersList(users), [users]);
+
+   const adminManagerColorById = useMemo(() => {
+      const map = new Map();
+
+      for (const u of usersList) {
+         if (!isAdminOrManager(u)) continue;
+
+         const id = u?.id ?? u?.userId ?? u?._id;
+         if (id == null) continue;
+
+         const c = pickUserProfileColor(u) || hashToColorToken(id);
+         map.set(String(id), String(c));
+      }
+
+      return map;
+   }, [usersList]);
+
+   const presenceByReservationColors = useMemo(() => {
+      const out = new Map();
+      if (!(presenceByReservationUsers instanceof Map)) return out;
+
+      presenceByReservationUsers.forEach((uidsSet, rid) => {
+         const colors = [];
+         const seen = new Set();
+
+         const uids = uidsSet instanceof Set ? Array.from(uidsSet) : [];
+         for (const uidRaw of uids) {
+            const uid = String(uidRaw || "");
+            if (!uid) continue;
+
+            const color =
+               uid === "__someone__"
+                  ? "--event-green"
+                  : adminManagerColorById.get(uid) || hashToColorToken(uid);
+
+            if (color && !seen.has(color)) {
+               seen.add(color);
+               colors.push(color);
+            }
+         }
+
+         if (colors.length) out.set(String(rid), colors);
+      });
+
+      return out;
+   }, [presenceByReservationUsers, adminManagerColorById]);
 
    // ✅ Fără copie locală / pending: folosim direct datele din store
    const reservationsUIDedup = reservationsLive || [];
@@ -802,11 +954,7 @@ export default function ACalendarOptimized({
       const map = new Map();
 
       (reservationsUIDedup || []).forEach((r) => {
-         const startRaw =
-            r.startTime ??
-            r.start ??
-            r.startedAt ??
-            r.startDate ;
+         const startRaw = r.startTime ?? r.start ?? r.startedAt ?? r.startDate;
          if (!startRaw) return;
 
          const start = toFloatingDate(startRaw);
@@ -1523,6 +1671,7 @@ export default function ACalendarOptimized({
                monthOptions={monthOptions}
                onMonthChange={handleMonthChange}
                sectorFilter={sectorFilter}
+               presenceByReservationColors={presenceByReservationColors}
                sectorOptions={sectorOptions}
                onSectorChange={setSectorFilter}
             />
@@ -1548,6 +1697,10 @@ export default function ACalendarOptimized({
                canvasInstructors={canvasInstructors}
                viewModel={calendarViewModel}
                forceAllDaysVisible={hasSearchHits}
+               /* ✅ ADĂUGI ASTEA */
+               onReservationJoin={joinReservationSafe}
+               presenceReservationIds={presenceReservationIds}
+               presenceByReservationColors={presenceByReservationColors}
             />
          </div>
       </div>
@@ -1576,6 +1729,7 @@ function ACalendarToolbar({
    sectorFilter,
    sectorOptions,
    onSectorChange,
+   presenceByReservationColors,
 }) {
    return (
       <div className="dayview__header">
@@ -1714,6 +1868,9 @@ const ACalendarTrack = memo(function ACalendarTrack({
    canvasInstructors,
    viewModel,
    forceAllDaysVisible,
+   onReservationJoin,
+   presenceByReservationUsers, // ✅
+   presenceByReservationColors, // ✅
 }) {
    const eventsByDay = viewModel?.eventsByDay || new Map();
    const standardSlotsByDay = viewModel?.standardSlotsByDay || new Map();
@@ -1842,6 +1999,13 @@ const ACalendarTrack = memo(function ACalendarTrack({
                               instructorsFull={instructors}
                               users={users}
                               zoom={zoom / Z_BASE}
+                              onReservationJoin={onReservationJoin}
+                              presenceByReservationUsers={
+                                 presenceByReservationUsers
+                              }
+                              presenceByReservationColors={
+                                 presenceByReservationColors
+                              }
                            />
                         ) : (
                            <div className="dayview__skeleton" />

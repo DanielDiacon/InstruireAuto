@@ -726,65 +726,6 @@ const CanvasInstructorHeader = memo(
 
 /* ================== COMPONENTA REACT ================== */
 
-function openReservationPopup(ev) {
-   if (!ev) return;
-   const reservationId = ev.raw?.id ?? ev.id;
-   if (!reservationId) return;
-   openPopup("reservationEdit", { reservationId });
-}
-
-function openStudentPopup(ev) {
-   if (!ev) return;
-   const raw = ev.raw || {};
-
-   const fallbackName =
-      raw?.clientName ||
-      raw?.customerName ||
-      raw?.name ||
-      ev.title ||
-      "Programare";
-
-   const phoneVal = getStudentPhoneFromEv(ev);
-
-   const noteFromEvent = (ev.eventPrivateMessage || "").toString().trim();
-   const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
-      .toString()
-      .trim();
-
-   const reservationId = raw?.id ?? ev.id;
-
-   const userIdRaw =
-      raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
-
-   const emailRaw = raw?.user?.email ?? raw?.email ?? ev?.studentEmail ?? "";
-
-   const firstNameSeed =
-      (ev.studentFirst || "").trim() || fallbackName.split(" ")[0] || "";
-   const lastNameSeed = (ev.studentLast || "").trim();
-
-   if (ev.studentId || userIdRaw) {
-      openPopup("studentDetails", {
-         student: {
-            id: ev.studentId ?? null,
-            userId: userIdRaw ?? null,
-            firstName: firstNameSeed,
-            lastName: lastNameSeed,
-            phone: phoneVal || "",
-            email: emailRaw || "",
-            privateMessage: noteFromProfile,
-            isConfirmed: !!ev.isConfirmed,
-         },
-         noteFromEvent,
-         studentPrivateMessage: noteFromProfile,
-         fromReservationId: reservationId,
-         fromReservationStartISO:
-            raw?.startTime || raw?.start || ev.start || null,
-      });
-   } else {
-      openReservationPopup(ev);
-   }
-}
-
 export default function DayviewCanvasTrack({
    dayStart,
    dayEnd,
@@ -804,6 +745,9 @@ export default function DayviewCanvasTrack({
    zoom = 1,
    preGrid,
    onManualSelection,
+   onReservationJoin,
+   presenceByReservationUsers = null,
+   presenceByReservationColors,
 }) {
    const canvasRef = useRef(null);
    const hitMapRef = useRef([]);
@@ -814,6 +758,65 @@ export default function DayviewCanvasTrack({
    const longPressTargetRef = useRef(null);
    const ignoreClickUntilRef = useRef(0);
    const lastPointerTypeRef = useRef("mouse");
+
+   //   function openReservationPopup(ev) {
+   //      if (!ev) return;
+   //      const reservationId = ev.raw?.id ?? ev.id;
+   //      if (!reservationId) return;
+   //      openPopup("reservationEdit", { reservationId });
+   //   }
+   //
+   //   function openStudentPopup(ev) {
+   //      if (!ev) return;
+   //      const raw = ev.raw || {};
+   //
+   //      const fallbackName =
+   //         raw?.clientName ||
+   //         raw?.customerName ||
+   //         raw?.name ||
+   //         ev.title ||
+   //         "Programare";
+   //
+   //      const phoneVal = getStudentPhoneFromEv(ev);
+   //
+   //      const noteFromEvent = (ev.eventPrivateMessage || "").toString().trim();
+   //      const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
+   //         .toString()
+   //         .trim();
+   //
+   //      const reservationId = raw?.id ?? ev.id;
+   //
+   //      const userIdRaw =
+   //         raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
+   //
+   //      const emailRaw = raw?.user?.email ?? raw?.email ?? ev?.studentEmail ?? "";
+   //
+   //      const firstNameSeed =
+   //         (ev.studentFirst || "").trim() || fallbackName.split(" ")[0] || "";
+   //      const lastNameSeed = (ev.studentLast || "").trim();
+   //
+   //      if (ev.studentId || userIdRaw) {
+   //         openPopup("studentDetails", {
+   //            student: {
+   //               id: ev.studentId ?? null,
+   //               userId: userIdRaw ?? null,
+   //               firstName: firstNameSeed,
+   //               lastName: lastNameSeed,
+   //               phone: phoneVal || "",
+   //               email: emailRaw || "",
+   //               privateMessage: noteFromProfile,
+   //               isConfirmed: !!ev.isConfirmed,
+   //            },
+   //            noteFromEvent,
+   //            studentPrivateMessage: noteFromProfile,
+   //            fromReservationId: reservationId,
+   //            fromReservationStartISO:
+   //               raw?.startTime || raw?.start || ev.start || null,
+   //         });
+   //      } else {
+   //         openReservationPopup(ev);
+   //      }
+   //   }
 
    const preGridCols =
       !preGrid || preGrid.enabled === false
@@ -870,6 +873,171 @@ export default function DayviewCanvasTrack({
    const waitCommitRef = useRef(false);
 
    const dispatch = useDispatch();
+
+   // ✅ B) Normalizează presence -> Set de reservationId-uri (pentru render.js)
+   const presenceReservationIds = useMemo(() => {
+      const src = presenceByReservationUsers;
+
+      if (!src) return null;
+
+      // dacă deja e Set
+      if (src instanceof Set) return src;
+
+      // dacă vine ca array de id-uri
+      if (Array.isArray(src)) {
+         return new Set(src.map((x) => String(x)).filter(Boolean));
+      }
+
+      // dacă vine ca obiect/map: { [reservationId]: true | users[] | {..} }
+      if (typeof src === "object") {
+         const ids = [];
+         for (const [rid, v] of Object.entries(src)) {
+            if (!rid) continue;
+            const ok =
+               v === true ||
+               (Array.isArray(v) && v.length > 0) ||
+               (v && typeof v === "object" && Object.keys(v).length > 0);
+            if (ok) ids.push(String(rid));
+         }
+         return ids.length ? new Set(ids) : null;
+      }
+
+      return null;
+   }, [presenceByReservationUsers]);
+   // ✅ A) Culori user + culori prezență per rezervare
+   const userColorById = useMemo(() => {
+      const m = new Map();
+      (users || []).forEach((u) => {
+         if (u?.id == null) return;
+         const c = (u.color ?? u.profileColor ?? u.colour ?? "")
+            .toString()
+            .trim();
+         if (c) m.set(String(u.id), c);
+      });
+      return m;
+   }, [users]);
+
+   const presenceColorsByReservation = useMemo(() => {
+      if (!presenceByReservationColors) return new Map();
+
+      if (presenceByReservationColors instanceof Map)
+         return presenceByReservationColors;
+
+      // suport dacă vine ca obiect plain
+      const m = new Map();
+      for (const [rid, cols] of Object.entries(presenceByReservationColors)) {
+         if (!rid) continue;
+         const arr = Array.isArray(cols)
+            ? cols.filter(Boolean).map(String)
+            : [];
+         if (arr.length) m.set(String(rid), arr);
+      }
+      return m;
+   }, [presenceByReservationColors]);
+
+   const effectivePresenceReservationIds = useMemo(() => {
+      if (presenceReservationIds instanceof Set) return presenceReservationIds;
+      if (presenceColorsByReservation?.size)
+         return new Set([...presenceColorsByReservation.keys()]);
+      return null;
+   }, [presenceReservationIds, presenceColorsByReservation]);
+
+   const presenceSig = useMemo(() => {
+      if (!presenceColorsByReservation || !presenceColorsByReservation.size)
+         return "";
+      const parts = [];
+      for (const [rid, cols] of presenceColorsByReservation.entries()) {
+         parts.push(`${rid}:${(cols || []).join(",")}`);
+      }
+      parts.sort();
+      return parts.join("|");
+   }, [presenceColorsByReservation]);
+
+   const joinReservationSafe = useCallback(
+      (reservationId) => {
+         const rid = String(reservationId ?? "").trim();
+         if (!rid) return;
+         try {
+            if (typeof onReservationJoin === "function") onReservationJoin(rid);
+         } catch (e) {
+            console.warn("onReservationJoin error:", e);
+         }
+      },
+      [onReservationJoin]
+   );
+
+   const openReservationPopup = useCallback(
+      (ev) => {
+         if (!ev) return;
+         const reservationId = ev.raw?.id ?? ev.id;
+         if (!reservationId) return;
+
+         // ✅ JOIN înainte de popup
+         joinReservationSafe(reservationId);
+
+         openPopup("reservationEdit", { reservationId });
+      },
+      [joinReservationSafe]
+   );
+
+   const openStudentPopup = useCallback(
+      (ev) => {
+         if (!ev) return;
+         const raw = ev.raw || {};
+
+         const fallbackName =
+            raw?.clientName ||
+            raw?.customerName ||
+            raw?.name ||
+            ev.title ||
+            "Programare";
+
+         const phoneVal = getStudentPhoneFromEv(ev);
+
+         const noteFromEvent = (ev.eventPrivateMessage || "").toString().trim();
+         const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
+            .toString()
+            .trim();
+
+         const reservationId = raw?.id ?? ev.id;
+
+         const userIdRaw =
+            raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
+
+         const emailRaw =
+            raw?.user?.email ?? raw?.email ?? ev?.studentEmail ?? "";
+
+         const firstNameSeed =
+            (ev.studentFirst || "").trim() || fallbackName.split(" ")[0] || "";
+         const lastNameSeed = (ev.studentLast || "").trim();
+
+         if (ev.studentId || userIdRaw) {
+            // ✅ JOIN și la studentDetails (că e tot “din rezervare”)
+            if (reservationId) joinReservationSafe(reservationId);
+
+            openPopup("studentDetails", {
+               student: {
+                  id: ev.studentId ?? null,
+                  userId: userIdRaw ?? null,
+                  firstName: firstNameSeed,
+                  lastName: lastNameSeed,
+                  phone: phoneVal || "",
+                  email: emailRaw || "",
+                  privateMessage: noteFromProfile,
+                  isConfirmed: !!ev.isConfirmed,
+               },
+               noteFromEvent,
+               studentPrivateMessage: noteFromProfile,
+               fromReservationId: reservationId,
+               fromReservationStartISO:
+                  raw?.startTime || raw?.start || ev.start || null,
+            });
+         } else {
+            openReservationPopup(ev);
+         }
+      },
+      [joinReservationSafe, openReservationPopup]
+   );
 
    /* ================== HISTORY + RANGE PANEL (COMUN) ================== */
 
@@ -2179,6 +2347,7 @@ export default function DayviewCanvasTrack({
          blockedSig,
          canceledSig,
          waitSig,
+         presenceSig,
          highlightId: selectedEventId || activeEventId || null,
          highlightSlotKey:
             selectedSlot && selectedSlot.slotStart && selectedSlot.instructorId
@@ -2269,8 +2438,10 @@ export default function DayviewCanvasTrack({
             : null,
          overlapEventsByInst,
          canceledSlotKeysByInst,
+         presenceByReservationColors,
+           presenceReservationIds: effectivePresenceReservationIds,
+  presenceColorsByReservation,
       });
-
       hitMapRef.current = hitMap;
    }, [
       dayStart,
@@ -2300,6 +2471,10 @@ export default function DayviewCanvasTrack({
       waitSig,
       overlapEventsByInst,
       canceledSlotKeysByInst,
+      presenceReservationIds, // ✅
+      presenceSig, // ✅
+      presenceColorsByReservation, // ✅ (recomandat)
+      presenceByReservationColors,
    ]);
 
    /* ================== active rect callback ================== */
@@ -2796,7 +2971,13 @@ export default function DayviewCanvasTrack({
 
       canvas.addEventListener("dblclick", handleDblClick);
       return () => canvas.removeEventListener("dblclick", handleDblClick);
-   }, [onCreateSlot, waitNotes, reloadWaitNotes]);
+   }, [
+      onCreateSlot,
+      waitNotes,
+      reloadWaitNotes,
+      openStudentPopup,
+      openReservationPopup,
+   ]);
 
    useEffect(() => {
       const canvas = canvasRef.current;
@@ -2967,8 +3148,7 @@ export default function DayviewCanvasTrack({
          canvas.removeEventListener("pointerleave", handlePointerLeave);
          canvas.removeEventListener("pointercancel", handlePointerCancel);
       };
-   }, [reloadWaitNotes, waitNotes]);
-
+   }, [reloadWaitNotes, waitNotes, openStudentPopup]);
    /* ================== UI overlay ================== */
 
    const { colWidth, colGap, headerHeight, colsPerRow, rowTops } =
@@ -3140,7 +3320,6 @@ export default function DayviewCanvasTrack({
                onPointerDown={(e) => e.stopPropagation()}
             />
          )}
-w
          {/* PANEL overlay (istoric comun + lista rezervari in interval) */}
          {historyUI && (
             <div
@@ -3209,7 +3388,6 @@ w
                         </button>
                      </div>
                   </div>
-
 
                   {rangeError ? (
                      <div className="dv-history__state dv-history__state--error">
