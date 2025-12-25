@@ -18,6 +18,14 @@ import {
 
 import { searchQuestions, updateQuestion } from "../../api/questionsService";
 
+/* ===========================
+   CONFIG
+=========================== */
+const QUESTIONS_PAGE_SIZE = 1000;
+
+/* ===========================
+   CATEGORY HELPERS
+=========================== */
 const getCount = (c) =>
    c?._count?.questions ??
    c?.questionCount ??
@@ -49,38 +57,6 @@ function normalizeQuestionsPaged(raw) {
       [];
    return Array.isArray(items) ? items : [];
 }
-
-function pickLangText(raw, lang = "ro") {
-   if (raw == null) return "";
-   if (typeof raw === "string") {
-      const s = raw.trim();
-      if (!s) return "";
-      if (s.startsWith("{") && (s.includes('"ro"') || s.includes('"ru"'))) {
-         try {
-            const obj = JSON.parse(s);
-            return String(obj?.[lang] ?? obj?.ro ?? obj?.ru ?? s).trim();
-         } catch {
-            return s;
-         }
-      }
-      return s;
-   }
-   if (typeof raw === "object") {
-      return String(raw?.[lang] ?? raw?.ro ?? raw?.ru ?? "").trim();
-   }
-   return String(raw).trim();
-}
-
-const qTitle = (q) => {
-   const ro = pickLangText(q?.text, "ro");
-   const ru = pickLangText(q?.text, "ru");
-   return (
-      ro ||
-      ru ||
-      String(q?.content ?? q?.questionText ?? "").trim() ||
-      "(fără text)"
-   );
-};
 
 function toStringOrJson(x) {
    if (typeof x === "string") return x;
@@ -117,27 +93,184 @@ function buildQuestionUpdatePayload(q, nextCategoryId) {
    return payload;
 }
 
-function mergeUniqueById(prev, next) {
-   const m = new Map((prev || []).map((x) => [String(x?.id), x]));
-   (next || []).forEach((x) => m.set(String(x?.id), x));
-   return Array.from(m.values());
-}
-
 /* ===========================
-   LOCAL SEARCH (scan pages) + HIGHLIGHT
+   LOCAL SEARCH (RO + RU)
+   - DOAR în textul întrebării (RO/RU)
+   - fără ID, fără answers, fără content/questionText
+   - token based:
+      * 1 char  -> nu căutăm
+      * 2 chars -> match doar la început de cuvânt
+      * 3+      -> match pe segmente (substring)
 =========================== */
 
 function foldText(input) {
    const s = String(input ?? "");
    return s
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[\u0300-\u036f]/g, "") // diacritice latine
       .toLowerCase()
       .replace(/[^\p{L}\p{N}]+/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
 }
 
+function safeJsonParseMaybe(s) {
+   if (typeof s !== "string") return null;
+   const t = s.trim();
+   if (!t) return null;
+   if (!(t.startsWith("{") || t.startsWith("["))) return null;
+   try {
+      return JSON.parse(t);
+   } catch {
+      return null;
+   }
+}
+
+function pickLangAny(raw, lang) {
+   if (raw == null) return "";
+
+   if (typeof raw === "object") {
+      return String(
+         raw?.[lang] ??
+            raw?.ro ??
+            raw?.ru ??
+            raw?.RO ??
+            raw?.RU ??
+            raw?.["ro-RO"] ??
+            raw?.["ru-RU"] ??
+            ""
+      ).trim();
+   }
+
+   if (typeof raw === "string") {
+      const t = raw.trim();
+      if (!t) return "";
+      const parsed = safeJsonParseMaybe(t);
+      if (parsed && typeof parsed === "object")
+         return pickLangAny(parsed, lang);
+      return t;
+   }
+
+   return String(raw).trim();
+}
+
+function tokenizeQuery(query) {
+   const q = foldText(query);
+   if (!q) return [];
+   return q.split(" ").filter(Boolean);
+}
+
+/** ===== Matching rules ===== */
+const MIN_TOKEN_LEN = 2; // 2 litere -> permis
+const SUBSTRING_TOKEN_LEN = 3; // 3+ -> substring match
+
+function normalizeTokens(tokens) {
+   return (tokens || [])
+      .map((t) => String(t || "").trim())
+      .filter(Boolean)
+      .map((t) => t); // deja sunt "folded" din tokenizeQuery, dar păstrăm simplu
+}
+
+function hasUsableTokens(tokens) {
+   const toks = normalizeTokens(tokens);
+   return toks.some((t) => t.length >= MIN_TOKEN_LEN);
+}
+
+/**
+ * token match:
+ *  - len >= 3: substring în foldedText
+ *  - len == 2: doar început de cuvânt (în wordedText: " ... pe...")
+ */
+function tokenMatch(foldedText, wordedText, tok) {
+   const folded = String(foldedText || "");
+   const worded = String(wordedText || "");
+
+   if (!tok) return true;
+
+   if (tok.length >= SUBSTRING_TOKEN_LEN) {
+      return folded.includes(tok);
+   }
+
+   // len == 2: început de cuvânt
+   // worded are forma " <text> " => include(" pe") acoperă și început de string
+   return worded.includes(` ${tok}`);
+}
+
+function matchesAllTokensSmart(foldedText, wordedText, tokens) {
+   const toks = normalizeTokens(tokens).filter(
+      (t) => t.length >= MIN_TOKEN_LEN
+   );
+   if (!toks.length) return false;
+
+   for (const tok of toks) {
+      if (!tokenMatch(foldedText, wordedText, tok)) return false;
+   }
+   return true;
+}
+
+/**
+ * Index DOAR pe textul întrebării (RO/RU).
+ */
+function buildQuestionSearchIndex(qItem) {
+   const roText = pickLangAny(qItem?.text, "ro");
+   const ruText = pickLangAny(qItem?.text, "ru");
+
+   const roFold = foldText(roText);
+   const ruFold = foldText(ruText);
+
+   const combinedFold = foldText([roText, ruText].filter(Boolean).join(" "));
+
+   // “worded” pentru match început de cuvânt (2 litere)
+   const roW = ` ${roFold} `;
+   const ruW = ` ${ruFold} `;
+   const combinedW = ` ${combinedFold} `;
+
+   return {
+      roText,
+      ruText,
+      roFold,
+      ruFold,
+      combinedFold,
+      roW,
+      ruW,
+      combinedW,
+   };
+}
+
+/**
+ * Match:
+ *  - toate token-urile trebuie să existe în combined (RO+RU)
+ *  - source = RO / RU / MIX
+ */
+function matchQuestionTextSmart(idx, queryTokens) {
+   if (!hasUsableTokens(queryTokens)) return { matches: false, source: "" };
+   if (!idx?.combinedFold) return { matches: false, source: "" };
+
+   const inCombined = matchesAllTokensSmart(
+      idx.combinedFold,
+      idx.combinedW,
+      queryTokens
+   );
+   if (!inCombined) return { matches: false, source: "" };
+
+   const inRo = idx.roFold
+      ? matchesAllTokensSmart(idx.roFold, idx.roW, queryTokens)
+      : false;
+
+   const inRu = idx.ruFold
+      ? matchesAllTokensSmart(idx.ruFold, idx.ruW, queryTokens)
+      : false;
+
+   if (inRo && !inRu) return { matches: true, source: "RO" };
+   if (inRu && !inRo) return { matches: true, source: "RU" };
+   return { matches: true, source: "MIX" };
+}
+
+/* ===========================
+   HIGHLIGHT (tokens)
+   - 2 litere: highlight doar la început de cuvânt
+   - 3+: highlight substring
+=========================== */
 function foldWithMap(original) {
    const src = String(original ?? "");
    let folded = "";
@@ -154,125 +287,141 @@ function foldWithMap(original) {
    return { folded: folded.toLowerCase(), map, original: src };
 }
 
-function highlightText(original, query) {
+function highlightTokens(original, tokens) {
    const text = String(original ?? "");
-   const qFold = foldText(query);
-   if (!qFold) return text;
+   const toks = normalizeTokens(tokens).filter(
+      (t) => t.length >= MIN_TOKEN_LEN
+   );
+   if (!toks.length) return text;
 
    const { folded, map } = foldWithMap(text);
    if (!folded) return text;
 
    const hits = [];
-   let from = 0;
 
-   while (true) {
-      const idx = folded.indexOf(qFold, from);
-      if (idx === -1) break;
+   const pushHit = (startFoldIdx, len) => {
+      const startOrig = map[startFoldIdx];
+      const endOrig = map[Math.min(startFoldIdx + len - 1, map.length - 1)] + 1;
+      if (startOrig == null || endOrig == null) return;
+      hits.push({ start: startOrig, end: endOrig });
+   };
 
-      const startOrig = map[idx];
-      const endFoldIdx = idx + qFold.length - 1;
-      const endOrig = map[endFoldIdx] + 1;
+   for (const tok of toks) {
+      if (tok.length >= SUBSTRING_TOKEN_LEN) {
+         let from = 0;
+         while (true) {
+            const idx = folded.indexOf(tok, from);
+            if (idx === -1) break;
+            pushHit(idx, tok.length);
+            from = idx + tok.length;
+            if (from >= folded.length) break;
+         }
+      } else {
+         // tok len == 2: doar început de cuvânt
+         // 1) dacă începe chiar de la început
+         if (folded.startsWith(tok)) pushHit(0, tok.length);
 
-      if (hits.length === 0 || startOrig >= hits[hits.length - 1].end) {
-         hits.push({ start: startOrig, end: endOrig });
+         // 2) toate aparițiile după spațiu: " pe"
+         let from = 0;
+         while (true) {
+            const p = folded.indexOf(` ${tok}`, from);
+            if (p === -1) break;
+            const startTok = p + 1;
+            pushHit(startTok, tok.length);
+            from = startTok + tok.length;
+            if (from >= folded.length) break;
+         }
       }
-
-      from = idx + qFold.length;
-      if (from >= folded.length) break;
    }
 
-   if (hits.length === 0) return text;
+   if (!hits.length) return text;
+
+   // merge intervals
+   hits.sort((a, b) => a.start - b.start);
+   const merged = [];
+   for (const h of hits) {
+      const last = merged[merged.length - 1];
+      if (!last || h.start > last.end) merged.push({ ...h });
+      else last.end = Math.max(last.end, h.end);
+   }
 
    const out = [];
    let cursor = 0;
-
-   for (let i = 0; i < hits.length; i++) {
-      const h = hits[i];
+   for (let i = 0; i < merged.length; i++) {
+      const h = merged[i];
       if (h.start > cursor) out.push(text.slice(cursor, h.start));
       out.push(
-         <span key={`hl-${i}-${h.start}`} className="highlight">
+         <span key={`hlt-${i}-${h.start}`} className="highlight">
             {text.slice(h.start, h.end)}
          </span>
       );
       cursor = h.end;
    }
-
    if (cursor < text.length) out.push(text.slice(cursor));
    return out;
 }
 
-function levenshtein(a, b) {
-   a = String(a ?? "");
-   b = String(b ?? "");
-   const m = a.length;
-   const n = b.length;
-   if (m === 0) return n;
-   if (n === 0) return m;
+/**
+ * Debug snippet: arată unde apare PRIMUL token “potrivit” conform regulilor.
+ */
+function findTokenSnippetTokens(originalText, tokens) {
+   const text = String(originalText ?? "");
+   const toks = normalizeTokens(tokens).filter(
+      (t) => t.length >= MIN_TOKEN_LEN
+   );
+   if (!text || !toks.length) return "";
 
-   const dp = new Array(n + 1);
-   for (let j = 0; j <= n; j++) dp[j] = j;
+   const { folded, map } = foldWithMap(text);
+   if (!folded) return "";
 
-   for (let i = 1; i <= m; i++) {
-      let prev = dp[0];
-      dp[0] = i;
-      for (let j = 1; j <= n; j++) {
-         const tmp = dp[j];
-         const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-         dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
-         prev = tmp;
-      }
-   }
-   return dp[n];
-}
+   let bestFoldIdx = -1;
+   let bestLen = 0;
 
-function fuzzyIncludes(hay, needle) {
-   const h = foldText(hay);
-   const n = foldText(needle);
+   for (const tok of toks) {
+      let idx = -1;
 
-   if (!n) return true;
-   if (!h) return false;
-
-   if (h.includes(n)) return true;
-
-   if (n.length >= 4 && h.includes(n.slice(0, -1))) return true;
-   if (n.length >= 6 && h.includes(n.slice(0, -2))) return true;
-
-   const words = h.split(" ").filter(Boolean);
-   const qTokens = n.split(" ").filter(Boolean);
-
-   const okAll = qTokens.every((t) => {
-      return words.some((w) => {
-         if (w.includes(t)) return true;
-         if (Math.abs(w.length - t.length) > 2) return false;
-         return levenshtein(w, t) <= 1;
-      });
-   });
-
-   return okAll;
-}
-
-function questionMatchesLocal(qItem, query) {
-   const q = String(query ?? "").trim();
-   if (!q) return false;
-
-   if (fuzzyIncludes(qItem?.id, q)) return true;
-
-   const roText = pickLangText(qItem?.text, "ro");
-   const ruText = pickLangText(qItem?.text, "ru");
-   if (fuzzyIncludes(roText, q) || fuzzyIncludes(ruText, q)) return true;
-
-   const answers = Array.isArray(qItem?.answers) ? qItem.answers : [];
-   for (const a of answers) {
-      if (a && typeof a === "object") {
-         if (fuzzyIncludes(a?.ro, q) || fuzzyIncludes(a?.ru, q)) return true;
+      if (tok.length >= SUBSTRING_TOKEN_LEN) {
+         idx = folded.indexOf(tok);
       } else {
-         if (fuzzyIncludes(a, q)) return true;
+         // len == 2: început de cuvânt
+         if (folded.startsWith(tok)) idx = 0;
+         else {
+            const p = folded.indexOf(` ${tok}`);
+            if (p !== -1) idx = p + 1;
+         }
+      }
+
+      if (idx !== -1 && (bestFoldIdx === -1 || idx < bestFoldIdx)) {
+         bestFoldIdx = idx;
+         bestLen = tok.length;
       }
    }
 
-   return false;
+   if (bestFoldIdx === -1) return "";
+
+   const startOrig = map[bestFoldIdx] ?? 0;
+   const endOrig =
+      map[Math.min(bestFoldIdx + bestLen - 1, map.length - 1)] ?? startOrig;
+
+   const start = Math.max(0, startOrig - 25);
+   const end = Math.min(text.length, endOrig + 1 + 25);
+   return text.slice(start, end);
 }
 
+function qTitle(q) {
+   const ro = pickLangAny(q?.text, "ro");
+   const ru = pickLangAny(q?.text, "ru");
+   return (
+      ro ||
+      ru ||
+      String(q?.content ?? q?.questionText ?? "").trim() ||
+      "(fără text)"
+   );
+}
+
+/* ===========================
+   COMPONENT
+=========================== */
 export default function QuestionCategoriesPopup({ onClose }) {
    const [alerts, setAlerts] = useState([]);
    const pushAlert = (type, text) =>
@@ -291,36 +440,24 @@ export default function QuestionCategoriesPopup({ onClose }) {
    const [nameRu, setNameRu] = useState("");
    const [saving, setSaving] = useState(false);
 
-   // ===== Inline Questions UI =====
+   // Inline Questions UI
+   const [qTab, setQTab] = useState("search"); // search | added
    const [qSearch, setQSearch] = useState("");
-
-   const QUESTIONS_PAGE_SIZE = 60;
-
-   // browse (prima intrare)
-   const [browseRes, setBrowseRes] = useState([]);
-   const [browsePage, setBrowsePage] = useState(1);
-   const [browseHasMore, setBrowseHasMore] = useState(false);
-   const [browseLoading, setBrowseLoading] = useState(false);
-   const [browseError, setBrowseError] = useState("");
-
-   // scan (când scrii în search)
-   const [scanRes, setScanRes] = useState([]);
-   const [scanHasMore, setScanHasMore] = useState(false);
-   const [scanLoading, setScanLoading] = useState(false);
-   const [scanError, setScanError] = useState("");
-   const [scanScanned, setScanScanned] = useState(0);
-
    const [busyQuestionId, setBusyQuestionId] = useState(null);
 
-   const scanRef = useRef({
-      token: 0,
-      query: "",
-      nextPage: 1,
-      hasMore: true,
-      seenIds: new Set(),
-      matches: [],
-      targetCount: QUESTIONS_PAGE_SIZE,
-   });
+   // Local cache
+   const [allQuestions, setAllQuestions] = useState([]);
+   const [allLoading, setAllLoading] = useState(false);
+   const [allReady, setAllReady] = useState(false);
+   const [allError, setAllError] = useState("");
+   const [allScanned, setAllScanned] = useState(0);
+
+   const [listLimit, setListLimit] = useState(QUESTIONS_PAGE_SIZE);
+
+   const allLoadRef = useRef({ token: 0 });
+
+   // ✅ cache index (DOAR text RO/RU) per questionId
+   const indexCacheRef = useRef(new Map());
 
    const resetForm = useCallback(() => {
       setEditing(null);
@@ -340,7 +477,7 @@ export default function QuestionCategoriesPopup({ onClose }) {
       setView("form");
    };
 
-   const load = useCallback(async () => {
+   const loadCategories = useCallback(async () => {
       setLoading(true);
       setError("");
       try {
@@ -360,10 +497,10 @@ export default function QuestionCategoriesPopup({ onClose }) {
    }, []);
 
    useEffect(() => {
-      load();
-   }, [load]);
+      loadCategories();
+   }, [loadCategories]);
 
-   const filtered = useMemo(() => {
+   const filteredCategories = useMemo(() => {
       const query = (q || "").trim().toLowerCase();
       if (!query) return items;
 
@@ -398,7 +535,7 @@ export default function QuestionCategoriesPopup({ onClose }) {
 
          setView("list");
          resetForm();
-         await load();
+         await loadCategories();
       } catch (e) {
          pushAlert("error", e?.message || "Eroare la salvare.");
       } finally {
@@ -419,7 +556,7 @@ export default function QuestionCategoriesPopup({ onClose }) {
             setView("list");
             resetForm();
          }
-         await load();
+         await loadCategories();
       } catch (e) {
          pushAlert("error", e?.message || "Eroare la ștergere.");
       } finally {
@@ -427,216 +564,157 @@ export default function QuestionCategoriesPopup({ onClose }) {
       }
    };
 
+   const thisCatId = useMemo(() => {
+      const n = Number(editing?.id);
+      return Number.isFinite(n) ? n : null;
+   }, [editing?.id]);
+
    // ===========================
-   // BROWSE MODE (prima intrare)
+   // LOAD ALL QUESTIONS ONCE
    // ===========================
-   const loadBrowsePage = useCallback(
-      async ({ page = 1, append = false } = {}) => {
-         setBrowseLoading(true);
-         setBrowseError("");
-         try {
+   const loadAllQuestionsOnce = useCallback(async () => {
+      allLoadRef.current.token += 1;
+      const myToken = allLoadRef.current.token;
+
+      setAllLoading(true);
+      setAllReady(false);
+      setAllError("");
+      setAllScanned(0);
+      setAllQuestions([]);
+
+      // reset index cache
+      indexCacheRef.current = new Map();
+
+      try {
+         const map = new Map();
+         let page = 1;
+         let safety = 0;
+
+         while (safety < 5000) {
+            safety += 1;
+
             const raw = await searchQuestions({
                page,
                limit: QUESTIONS_PAGE_SIZE,
             });
+
+            if (allLoadRef.current.token !== myToken) return;
+
             const rows = normalizeQuestionsPaged(raw);
-
-            setBrowseRes((prev) =>
-               append ? mergeUniqueById(prev, rows) : rows
-            );
-            setBrowsePage(page);
-            setBrowseHasMore((rows || []).length === QUESTIONS_PAGE_SIZE);
-         } catch (e) {
-            if (!append) setBrowseRes([]);
-            setBrowseHasMore(false);
-            setBrowseError(e?.message || "Nu am putut încărca întrebările.");
-         } finally {
-            setBrowseLoading(false);
-         }
-      },
-      []
-   );
-
-   // ===========================
-   // SCAN MODE (când scrii)
-   // ===========================
-   const startScan = useCallback(async ({ query, targetCount } = {}) => {
-      const qRaw = String(query ?? "").trim();
-      const qFold = foldText(qRaw);
-
-      // dacă user a șters query -> revenim la browse UI
-      if (!qFold) {
-         scanRef.current.token += 1;
-         setScanRes([]);
-         setScanHasMore(false);
-         setScanLoading(false);
-         setScanError("");
-         setScanScanned(0);
-         return;
-      }
-
-      const st = scanRef.current;
-      st.token += 1;
-      const myToken = st.token;
-
-      st.query = qRaw;
-      st.nextPage = 1;
-      st.hasMore = true;
-      st.seenIds = new Set();
-      st.matches = [];
-      st.targetCount = Number(targetCount || QUESTIONS_PAGE_SIZE);
-
-      setScanLoading(true);
-      setScanError("");
-      setScanRes([]);
-      setScanHasMore(false);
-      setScanScanned(0);
-
-      try {
-         let safety = 0;
-
-         while (
-            scanRef.current.token === myToken &&
-            st.hasMore &&
-            st.matches.length < st.targetCount &&
-            safety < 600
-         ) {
-            safety += 1;
-
-            const raw = await searchQuestions({
-               page: st.nextPage,
-               limit: QUESTIONS_PAGE_SIZE,
-            });
-            const rows = normalizeQuestionsPaged(raw);
-
-            if ((rows || []).length < QUESTIONS_PAGE_SIZE) st.hasMore = false;
-            st.nextPage += 1;
-
-            setScanScanned((p) => p + (rows?.length || 0));
-
-            for (const row of rows || []) {
-               const id = String(row?.id);
-               if (!id || st.seenIds.has(id)) continue;
-               st.seenIds.add(id);
-
-               if (questionMatchesLocal(row, st.query)) st.matches.push(row);
+            for (const r of rows || []) {
+               const id = String(r?.id);
+               if (!id) continue;
+               map.set(id, r);
             }
 
-            setScanRes([...st.matches]);
-            setScanHasMore(st.hasMore);
+            setAllScanned(map.size);
+
+            if ((rows || []).length < QUESTIONS_PAGE_SIZE) break;
+            page += 1;
          }
 
-         if (st.matches.length === 0)
-            setScanError("Nu există rezultate pentru căutarea ta.");
+         if (allLoadRef.current.token !== myToken) return;
+
+         setAllQuestions(Array.from(map.values()));
+         setAllReady(true);
       } catch (e) {
-         setScanError(e?.message || "Nu am putut căuta prin întrebări.");
+         if (allLoadRef.current.token !== myToken) return;
+         setAllQuestions([]);
+         setAllReady(false);
+         setAllError(
+            e?.message || "Nu am putut încărca lista completă de întrebări."
+         );
       } finally {
-         if (scanRef.current.token === myToken) setScanLoading(false);
+         if (allLoadRef.current.token === myToken) setAllLoading(false);
       }
    }, []);
 
-   const continueScan = useCallback(async () => {
-      const st = scanRef.current;
-      if (!foldText(st.query)) return;
-      if (!st.hasMore) return;
-
-      st.token += 1;
-      const myToken = st.token;
-
-      st.targetCount =
-         Number(st.targetCount || QUESTIONS_PAGE_SIZE) + QUESTIONS_PAGE_SIZE;
-
-      setScanLoading(true);
-      setScanError("");
-
-      try {
-         let safety = 0;
-
-         while (
-            scanRef.current.token === myToken &&
-            st.hasMore &&
-            st.matches.length < st.targetCount &&
-            safety < 600
-         ) {
-            safety += 1;
-
-            const raw = await searchQuestions({
-               page: st.nextPage,
-               limit: QUESTIONS_PAGE_SIZE,
-            });
-            const rows = normalizeQuestionsPaged(raw);
-
-            if ((rows || []).length < QUESTIONS_PAGE_SIZE) st.hasMore = false;
-            st.nextPage += 1;
-
-            setScanScanned((p) => p + (rows?.length || 0));
-
-            for (const row of rows || []) {
-               const id = String(row?.id);
-               if (!id || st.seenIds.has(id)) continue;
-               st.seenIds.add(id);
-
-               if (questionMatchesLocal(row, st.query)) st.matches.push(row);
-            }
-
-            setScanRes([...st.matches]);
-            setScanHasMore(st.hasMore);
-         }
-      } catch (e) {
-         setScanError(e?.message || "Nu am putut continua căutarea.");
-      } finally {
-         if (scanRef.current.token === myToken) setScanLoading(false);
-      }
-   }, []);
-
-   // ===========================
-   // INIT pe intrare în EDIT (form)
-   // ===========================
+   // init când intri în edit
    useEffect(() => {
       if (view !== "form") return;
       if (!editing?.id) return;
 
-      // reset
+      setQTab("search");
       setQSearch("");
       setBusyQuestionId(null);
+      setListLimit(QUESTIONS_PAGE_SIZE);
 
-      setScanRes([]);
-      setScanHasMore(false);
-      setScanLoading(false);
-      setScanError("");
-      setScanScanned(0);
+      loadAllQuestionsOnce();
+   }, [view, editing?.id, loadAllQuestionsOnce]);
 
-      setBrowseRes([]);
-      setBrowsePage(1);
-      setBrowseHasMore(false);
-      setBrowseLoading(false);
-      setBrowseError("");
-
-      // ✅ la prima intrare: arătăm lista normală + load more
-      loadBrowsePage({ page: 1, append: false });
-   }, [view, editing?.id, loadBrowsePage]);
-
-   // debounce: dacă user scrie -> scan; dacă șterge -> browse rămâne
    useEffect(() => {
-      if (view !== "form") return;
-      if (!editing?.id) return;
+      setListLimit(QUESTIONS_PAGE_SIZE);
+   }, [qTab, qSearch]);
 
-      const t = setTimeout(() => {
-         startScan({ query: qSearch, targetCount: QUESTIONS_PAGE_SIZE });
-      }, 300);
+   // ===========================
+   // DERIVED LISTS
+   // ===========================
+   const addedQuestions = useMemo(() => {
+      if (!allReady || thisCatId == null) return [];
+      return (allQuestions || []).filter((qq) => {
+         const cid = qq?.categoryId == null ? null : Number(qq.categoryId);
+         return cid === thisCatId;
+      });
+   }, [allReady, allQuestions, thisCatId]);
 
-      return () => clearTimeout(t);
-   }, [view, editing?.id, qSearch, startScan]);
+   const candidateQuestions = useMemo(() => {
+      if (!allReady || thisCatId == null) return [];
+      return (allQuestions || []).filter((qq) => {
+         const cid = qq?.categoryId == null ? null : Number(qq.categoryId);
+         return cid !== thisCatId; // exclude deja adăugate
+      });
+   }, [allReady, allQuestions, thisCatId]);
 
+   const searchTokens = useMemo(() => tokenizeQuery(qSearch), [qSearch]);
+   const canSearch = useMemo(
+      () => hasUsableTokens(searchTokens),
+      [searchTokens]
+   );
+
+   // ✅ local search (DOAR text RO/RU) + match source
+   const localSearchResultsWithMeta = useMemo(() => {
+      if (!allReady) return [];
+      if (!canSearch) return [];
+
+      const cache = indexCacheRef.current;
+      const out = [];
+
+      for (const qq of candidateQuestions) {
+         const idKey = String(qq?.id ?? "");
+         if (!idKey) continue;
+
+         let idx = cache.get(idKey);
+         if (!idx) {
+            idx = buildQuestionSearchIndex(qq);
+            cache.set(idKey, idx);
+         }
+
+         const res = matchQuestionTextSmart(idx, searchTokens);
+         if (res.matches) out.push({ q: qq, matchSource: res.source });
+      }
+
+      return out;
+   }, [allReady, candidateQuestions, searchTokens, canSearch]);
+
+   const currentCategoryFromList = useMemo(() => {
+      if (!thisCatId) return editing;
+      return (items || []).find((x) => Number(x?.id) === thisCatId) || editing;
+   }, [items, editing, thisCatId]);
+
+   const addedCount = useMemo(() => {
+      return getCount(currentCategoryFromList) || (addedQuestions || []).length;
+   }, [currentCategoryFromList, addedQuestions]);
+
+   // ===========================
+   // TOGGLE QUESTION CATEGORY
+   // ===========================
    const toggleQuestionCategory = async (qItem) => {
-      if (!editing?.id || !qItem?.id) return;
+      if (thisCatId == null || !qItem?.id) return;
 
       const currentCatId =
          qItem?.categoryId == null ? null : Number(qItem.categoryId);
-      const targetCatId = Number(editing.id);
-
-      const isInThisCategory = currentCatId === targetCatId;
-      const nextCategoryId = isInThisCategory ? null : targetCatId;
+      const isInThisCategory = currentCatId === thisCatId;
+      const nextCategoryId = isInThisCategory ? null : thisCatId;
 
       const qid = Number(qItem.id);
       setBusyQuestionId(String(qid));
@@ -645,17 +723,16 @@ export default function QuestionCategoriesPopup({ onClose }) {
          const payload = buildQuestionUpdatePayload(qItem, nextCategoryId);
          await updateQuestion(qid, payload);
 
-         // ✅ update în ambele liste (browse + scan)
-         setBrowseRes((prev) =>
+         setAllQuestions((prev) =>
             (prev || []).map((x) =>
                Number(x?.id) === qid ? { ...x, categoryId: nextCategoryId } : x
             )
          );
-         setScanRes((prev) =>
-            (prev || []).map((x) =>
-               Number(x?.id) === qid ? { ...x, categoryId: nextCategoryId } : x
-            )
-         );
+
+         // cache index invalidation pentru item-ul schimbat
+         try {
+            indexCacheRef.current.delete(String(qid));
+         } catch {}
 
          pushAlert(
             "success",
@@ -663,7 +740,8 @@ export default function QuestionCategoriesPopup({ onClose }) {
                ? "Întrebarea a fost scoasă."
                : "Întrebarea a fost adăugată."
          );
-         await load();
+
+         await loadCategories();
       } catch (e) {
          pushAlert("error", e?.message || "Nu am putut salva modificarea.");
       } finally {
@@ -671,6 +749,9 @@ export default function QuestionCategoriesPopup({ onClose }) {
       }
    };
 
+   /* ===========================
+     RENDER: CATEGORIES LIST
+  =========================== */
    const renderList = () => (
       <>
          <div className="popupui__search-header">
@@ -698,12 +779,12 @@ export default function QuestionCategoriesPopup({ onClose }) {
                   <div className="popupui__history-placeholder">
                      Se încarcă…
                   </div>
-               ) : filtered.length === 0 ? (
+               ) : filteredCategories.length === 0 ? (
                   <div className="popupui__history-placeholder">
                      Nu există categorii.
                   </div>
                ) : (
-                  filtered.map((c) => {
+                  filteredCategories.map((c) => {
                      const ro = c?.nameRo || "(fără RO)";
                      const ru = c?.nameRu || "(fără RU)";
                      const count = getCount(c);
@@ -762,89 +843,175 @@ export default function QuestionCategoriesPopup({ onClose }) {
       </>
    );
 
+   /* ===========================
+     RENDER: INLINE QUESTIONS
+  =========================== */
    const renderInlineQuestions = () => {
-      if (!editing?.id) return null;
+      if (thisCatId == null) return null;
+
+      if (!allReady) {
+         return (
+            <>
+               <div className="popupui__search-header">
+                  <input
+                     type="text"
+                     className="popupui__search-input"
+                     placeholder="Căutare locală (după indexare completă)"
+                     value={qSearch}
+                     onChange={(e) => setQSearch(e.target.value)}
+                     disabled
+                  />
+
+                  <button className="popupui__btn popupui__btn--save" disabled>
+                     Caută
+                  </button>
+
+                  <button
+                     className="popupui__btn popupui__btn--normal"
+                     disabled
+                  >
+                     Adăugate ({addedCount})
+                  </button>
+
+                  <button
+                     className="popupui__btn popupui__btn--normal"
+                     onClick={loadAllQuestionsOnce}
+                     disabled={allLoading}
+                     title="Reîncarcă lista completă"
+                  >
+                     {allLoading ? "Se încarcă…" : "Reîncarcă"}
+                  </button>
+               </div>
+
+               <div className="popupui__history-line">
+                  {allError ? (
+                     <span style={{ color: "var(--danger, #ff4d4f)" }}>
+                        {allError}
+                     </span>
+                  ) : (
+                     <>
+                        Se încarcă lista completă… scanate: <b>{allScanned}</b>
+                        {allLoading ? " • încărcare în curs…" : ""}
+                     </>
+                  )}
+               </div>
+
+               <div className="popupui__search-list-wrapper">
+                  <ul className="popupui__search-list">
+                     <li className="popupui__column-item">
+                        <div className="popupui__column-item-top">
+                           <p>
+                              {allError
+                                 ? "Nu pot indexa întrebările. Apasă Reîncarcă."
+                                 : `După indexare, poți căuta pe segmente (min ${MIN_TOKEN_LEN} caractere/token).`}
+                           </p>
+                        </div>
+                     </li>
+                  </ul>
+               </div>
+            </>
+         );
+      }
 
       const queryTrim = String(qSearch || "").trim();
-      const isSearchMode = !!queryTrim;
+      const isSearchTab = qTab === "search";
+      const isAddedTab = qTab === "added";
 
-      const activeRes = isSearchMode ? scanRes : browseRes;
-      const activeLoading = isSearchMode ? scanLoading : browseLoading;
-      const activeError = isSearchMode ? scanError : browseError;
-      const activeHasMore = isSearchMode ? scanHasMore : browseHasMore;
+      let activeFullList = [];
+      let modeLabel = "";
 
-      const thisCatId = Number(editing.id);
+      if (isAddedTab) {
+         activeFullList = addedQuestions.map((x) => ({
+            q: x,
+            matchSource: "",
+         }));
+         modeLabel = `Adăugate: ${activeFullList.length}`;
+      } else {
+         if (queryTrim) {
+            if (!canSearch) {
+               activeFullList = [];
+               modeLabel = `Scrie minim ${MIN_TOKEN_LEN} caractere pentru căutare.`;
+            } else {
+               activeFullList = localSearchResultsWithMeta;
+               modeLabel = `Caut: "${queryTrim}" • găsite: ${activeFullList.length}`;
+            }
+         } else {
+            activeFullList = candidateQuestions.map((x) => ({
+               q: x,
+               matchSource: "",
+            }));
+            modeLabel = `Candidați (neadăugați): ${activeFullList.length}`;
+         }
+      }
+
+      const visible = activeFullList.slice(0, listLimit);
+      const hasMore = activeFullList.length > visible.length;
 
       return (
          <>
             <div className="popupui__search-header">
-               <input
-                  type="text"
-                  className="popupui__search-input"
-                  placeholder="Caută întrebare (text / ID) — dacă scrii, caută prin toate"
-                  value={qSearch}
-                  onChange={(e) => setQSearch(e.target.value)}
-               />
+               {isSearchTab ? (
+                  <input
+                     type="text"
+                     className="popupui__search-input"
+                     placeholder={`Caută întrebare (min ${MIN_TOKEN_LEN} litere/token; 2 litere=început de cuvânt, 3+=segment)`}
+                     value={qSearch}
+                     onChange={(e) => setQSearch(e.target.value)}
+                  />
+               ) : (
+                  <div
+                     className="popupui__search-input"
+                     style={{ opacity: 0.8 }}
+                  >
+                     Întrebări adăugate în această categorie
+                  </div>
+               )}
 
                <button
-                  className="popupui__btn popupui__btn--normal"
-                  onClick={() => {
-                     if (isSearchMode) {
-                        startScan({
-                           query: qSearch,
-                           targetCount: QUESTIONS_PAGE_SIZE,
-                        });
-                     } else {
-                        loadBrowsePage({ page: 1, append: false });
-                     }
-                  }}
-                  disabled={activeLoading}
-                  title="Reîncarcă"
+                  className={
+                     "popupui__btn " +
+                     (qTab === "search"
+                        ? "popupui__btn--save"
+                        : "popupui__btn--normal")
+                  }
+                  onClick={() => setQTab("search")}
                >
-                  Reîncarcă
+                  Caută
+               </button>
+
+               <button
+                  className={
+                     "popupui__btn " +
+                     (qTab === "added"
+                        ? "popupui__btn--save"
+                        : "popupui__btn--normal")
+                  }
+                  onClick={() => setQTab("added")}
+               >
+                  Adăugate
                </button>
             </div>
 
-            <div className="popupui__history-line">
-               {isSearchMode ? (
-                  <>
-                     Caut: <b>{queryTrim}</b> • găsite:{" "}
-                     <b>{(scanRes || []).length}</b> • scanate:{" "}
-                     <b>{scanScanned}</b>
-                     {scanLoading ? " • se caută…" : ""}
-                  </>
-               ) : (
-                  <>
-                     Afișate: <b>{(browseRes || []).length} </b>
-                     {" • "}pagina:
-                     <b>{browsePage}</b>
-                     {browseLoading ? " • se încarcă…" : ""}
-                  </>
-               )}
-            </div>
+            <div className="popupui__history-line">{modeLabel}</div>
 
             <div className="popupui__search-list-wrapper">
                <ul className="popupui__search-list">
-                  {activeError ? (
+                  {visible.length === 0 ? (
                      <li className="popupui__column-item">
                         <div className="popupui__column-item-top">
-                           <p>{activeError}</p>
-                        </div>
-                     </li>
-                  ) : activeLoading && (activeRes || []).length === 0 ? (
-                     <li className="popupui__column-item">
-                        <div className="popupui__column-item-top">
-                           <p>Se încarcă…</p>
-                        </div>
-                     </li>
-                  ) : (activeRes || []).length === 0 ? (
-                     <li className="popupui__column-item">
-                        <div className="popupui__column-item-top">
-                           <p>Nu există rezultate.</p>
+                           <p>
+                              {isAddedTab
+                                 ? "Nu există întrebări adăugate."
+                                 : queryTrim
+                                 ? canSearch
+                                    ? "Nu există rezultate."
+                                    : `Scrie minim ${MIN_TOKEN_LEN} caractere.`
+                                 : "Nu există candidați."}
+                           </p>
                         </div>
                      </li>
                   ) : (
-                     (activeRes || []).map((qq) => {
+                     visible.map(({ q: qq, matchSource }) => {
                         const qid = Number(qq?.id);
                         const isBusy = String(busyQuestionId) === String(qid);
 
@@ -869,18 +1036,71 @@ export default function QuestionCategoriesPopup({ onClose }) {
                            >
                               <div className="popupui__column-item-top">
                                  <h3>
-                                    {isSearchMode
-                                       ? highlightText(title, qSearch)
+                                    {isSearchTab && queryTrim
+                                       ? highlightTokens(title, searchTokens)
                                        : title}
                                  </h3>
-                                 <p>
-                                    ID: {qid}
-                                    {qCatId == null
-                                       ? " • fără categorie"
-                                       : isInThisCategory
-                                       ? ` • în categoria #${thisCatId}`
-                                       : ` • în categoria #${qCatId}`}
-                                 </p>
+
+                                 {/*<div>
+                                    <p>
+                                       ID: {qid}
+                                       {isAddedTab
+                                          ? ` • în categoria #${thisCatId}`
+                                          : qCatId == null
+                                          ? " • fără categorie"
+                                          : ` • în categoria #${qCatId}`}
+                                    </p>
+
+                                    {isSearchTab && queryTrim && canSearch ? (
+                                       <div
+                                          style={{
+                                             opacity: 0.8,
+                                             fontSize: 12,
+                                             marginTop: 4,
+                                          }}
+                                       >
+                                          Debug match:{" "}
+                                          <b>{matchSource || "—"}</b>
+                                          {matchSource === "RO" ? (
+                                             <>
+                                                {" "}
+                                                • "
+                                                {findTokenSnippetTokens(
+                                                   pickLangAny(qq?.text, "ro"),
+                                                   searchTokens
+                                                )}
+                                                "
+                                             </>
+                                          ) : matchSource === "RU" ? (
+                                             <>
+                                                {" "}
+                                                • "
+                                                {findTokenSnippetTokens(
+                                                   pickLangAny(qq?.text, "ru"),
+                                                   searchTokens
+                                                )}
+                                                "
+                                             </>
+                                          ) : matchSource === "MIX" ? (
+                                             <>
+                                                {" "}
+                                                • (token-uri în RO+RU) • "
+                                                {findTokenSnippetTokens(
+                                                   `${pickLangAny(
+                                                      qq?.text,
+                                                      "ro"
+                                                   )} ${pickLangAny(
+                                                      qq?.text,
+                                                      "ru"
+                                                   )}`,
+                                                   searchTokens
+                                                )}
+                                                "
+                                             </>
+                                          ) : null}
+                                       </div>
+                                    ) : null}
+                                 </div>*/}
                               </div>
 
                               <div
@@ -909,8 +1129,7 @@ export default function QuestionCategoriesPopup({ onClose }) {
                      })
                   )}
 
-                  {/* ✅ buton la final: browse -> load next page; search -> continue scan */}
-                  {activeHasMore && !activeError && (
+                  {hasMore && (
                      <li
                         className="popupui__column-item"
                         style={{
@@ -920,19 +1139,11 @@ export default function QuestionCategoriesPopup({ onClose }) {
                      >
                         <button
                            className="popupui__btn popupui__btn--normal"
-                           disabled={activeLoading}
-                           onClick={() => {
-                              if (isSearchMode) {
-                                 continueScan();
-                              } else {
-                                 loadBrowsePage({
-                                    page: browsePage + 1,
-                                    append: true,
-                                 });
-                              }
-                           }}
+                           onClick={() =>
+                              setListLimit((p) => p + QUESTIONS_PAGE_SIZE)
+                           }
                         >
-                           {activeLoading ? "Se încarcă…" : "Încarcă mai multe"}
+                           Încarcă mai multe
                         </button>
                      </li>
                   )}
@@ -942,6 +1153,9 @@ export default function QuestionCategoriesPopup({ onClose }) {
       );
    };
 
+   /* ===========================
+     RENDER: FORM
+  =========================== */
    const renderForm = () => {
       const isEdit = editing?.id != null;
 

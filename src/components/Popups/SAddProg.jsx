@@ -1,21 +1,25 @@
 // src/components/Popups/SAddProg.jsx
-import React, { useState, useContext, useEffect, useMemo } from "react";
+import React, {
+   useState,
+   useContext,
+   useEffect,
+   useMemo,
+   useCallback,
+   useRef,
+} from "react";
 import DatePicker, { registerLocale } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import ro from "date-fns/locale/ro";
+
 import addIcon from "../../assets/svg/add.svg";
 import arrowIcon from "../../assets/svg/arrow.svg";
 import trashIcon from "../../assets/svg/trash.svg";
 import { ReactSVG } from "react-svg";
-import {
-   createReservations,
-   getBusyForInstructor,
-   getBusyForInstructorsGroup,
-} from "../../api/reservationsService";
-import {
-   getInstructorBlackouts,
-   getInstructorsGroupBlackouts,
-} from "../../api/instructorsService";
+
+import * as ReservationsAPI from "../../api/reservationsService";
+import * as InstructorsAPI from "../../api/instructorsService";
+import * as UsersAPI from "../../api/usersService";
+
 import { UserContext } from "../../UserContext";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -25,19 +29,40 @@ import {
 import AlertPills from "../Utils/AlertPills";
 import { closePopup as closePopupStore } from "../Utils/popupStore";
 
-/* ===== Locale RO ===== */
 registerLocale("ro", ro);
 
-/* ============================================================================
-   TIMEZONE: totul pe ora Moldovei (Europe/Chisinau) pentru UI și ocupare
-   IMPORTANT pentru compatibilitate:
-   - BUSY_KEYS_MODE = 'local-match'  -> backend salvează „ora locală” prin hack
-   - BUSY_KEYS_MODE = 'utc'          -> backend salvează momentul corect UTC
-============================================================================ */
 const MOLDOVA_TZ = "Europe/Chisinau";
-const BUSY_KEYS_MODE = "local-match"; // <- pune 'utc' dacă trimiți UTC real
 
-/** 'YYYY-MM-DD' calculat în TZ dat */
+/**
+ * IMPORTANT:
+ * - 'local-match' = backend-ul stochează ora “locală” prin hack
+ * - 'utc' = backend-ul stochează UTC corect
+ */
+const BUSY_KEYS_MODE = "local-match";
+
+// regula ta: la group, dacă used + blocked >= capacity => slot full
+const GROUP_SLOT_LIMIT = 3;
+
+// limită totală lecții în sistem
+const MAX_TOTAL_LESSONS = 30;
+
+// LIVE refresh interval (ms)
+const LIVE_REFRESH_MS = 15 * 60_000;
+
+const oreDisponibile = [
+   { eticheta: "07:00", oraStart: "07:00" },
+   { eticheta: "08:30", oraStart: "08:30" },
+   { eticheta: "10:00", oraStart: "10:00" },
+   { eticheta: "11:30", oraStart: "11:30" },
+   { eticheta: "13:30", oraStart: "13:30" },
+   { eticheta: "15:00", oraStart: "15:00" },
+   { eticheta: "16:30", oraStart: "16:30" },
+   { eticheta: "18:00", oraStart: "18:00" },
+];
+const SLOT_LABELS = new Set(oreDisponibile.map((o) => o.oraStart));
+
+/* ================= helpers date/time ================= */
+
 function localDateStrTZ(date, tz = MOLDOVA_TZ) {
    const fmt = new Intl.DateTimeFormat("en-GB", {
       timeZone: tz,
@@ -52,16 +77,11 @@ function localDateStrTZ(date, tz = MOLDOVA_TZ) {
    return `${year}-${month}-${day}`;
 }
 
-/** 'HH:mm' pentru un ISO, afișat în TZ dat */
-function timeHHMMInTZ(iso, tz = MOLDOVA_TZ) {
-   const d = new Date(iso);
-   const fmt = new Intl.DateTimeFormat("ro-RO", {
-      timeZone: tz,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-   });
-   return fmt.format(d);
+// past + today (Moldova) => disabled
+function isPastOrTodayInMoldova(date) {
+   const d = localDateStrTZ(date, MOLDOVA_TZ);
+   const today = localDateStrTZ(new Date(), MOLDOVA_TZ);
+   return d <= today;
 }
 
 function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
@@ -86,7 +106,7 @@ function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
    return (asUTC - tsMs) / 60000;
 }
 
-/** Moldova (zi + "HH:mm") -> ISO UTC (…Z), stabil la DST */
+// Moldova day + HH:mm -> ISO UTC (...Z)
 function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
    const [hh, mm] = (timeStrHHMM || "00:00").split(":").map(Number);
    const utcGuess = Date.UTC(
@@ -103,7 +123,40 @@ function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
    return new Date(fixedUtcMs).toISOString();
 }
 
-/** HACK: construiește "YYYY-MM-DDTHH:mm:+02/+03" care devine 07:00Z în DB */
+// localKey: "YYYY-MM-DD|HH:mm" în Moldova
+function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
+   const fmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+   });
+   const parts = fmt.formatToParts(new Date(tsMs));
+   const Y = parts.find((p) => p.type === "year").value;
+   const Mo = parts.find((p) => p.type === "month").value;
+   const Da = parts.find((p) => p.type === "day").value;
+   const HH = parts.find((p) => p.type === "hour").value;
+   const MM = parts.find((p) => p.type === "minute").value;
+   return `${Y}-${Mo}-${Da}|${HH}:${MM}`;
+}
+
+// cheia corectă din ce vine din DB (ține cont de "local-match")
+function busyLocalKeyFromStored(st) {
+   const d = new Date(st);
+   if (BUSY_KEYS_MODE === "local-match") {
+      const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
+      const base = new Date(d.getTime() - offMin * 60000);
+      const key = localKeyFromTs(base.getTime(), MOLDOVA_TZ);
+      const hhmm = key.slice(-5);
+      if (SLOT_LABELS.has(hhmm)) return key;
+   }
+   return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
+}
+
+// HACK: păstrează “ora locală” în DB (compat cu backend-ul)
 function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    const base = new Date(isoUtcFromMoldova);
    const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
@@ -134,22 +187,9 @@ function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    return `${Y}-${Mo}-${Da}T${HH}:${MM}:00${sign}${offHH}:${offMM}`;
 }
 
-/* ————— Utilitare simple ————— */
-const oreDisponibile = [
-   { eticheta: "07:00", oraStart: "07:00" },
-   { eticheta: "08:30", oraStart: "08:30" },
-   { eticheta: "10:00", oraStart: "10:00" },
-   { eticheta: "11:30", oraStart: "11:30" },
-   { eticheta: "13:30", oraStart: "13:30" },
-   { eticheta: "15:00", oraStart: "15:00" },
-   { eticheta: "16:30", oraStart: "16:30" },
-   { eticheta: "18:00", oraStart: "18:00" },
-];
-const SLOT_LABELS = new Set(oreDisponibile.map((o) => o.oraStart));
+/* ================= formatting ================= */
 
-const SLOT_MINUTES = 90;
 const capRO = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
-const localDateStr = (d) => localDateStrTZ(d, MOLDOVA_TZ);
 
 const formatDateRO = (iso) => {
    const d = new Date(iso);
@@ -161,6 +201,7 @@ const formatDateRO = (iso) => {
    });
    return capRO(str);
 };
+
 const formatTimeRO = (iso) => {
    const d = new Date(iso);
    return d.toLocaleTimeString("ro-RO", {
@@ -171,528 +212,566 @@ const formatTimeRO = (iso) => {
    });
 };
 
-const asStr = (v) => (v == null ? "" : String(v));
-const asStrLower = (v) => asStr(v).trim().toLowerCase();
 const addDays = (d, n) => {
    const x = new Date(d);
    x.setDate(x.getDate() + n);
    return x;
 };
-const nextNDays = (n, fromDate = new Date()) => {
-   const out = [];
-   const base = new Date(
-      fromDate.getFullYear(),
-      fromDate.getMonth(),
-      fromDate.getDate(),
-      0,
-      0,
-      0,
-      0
-   );
-   for (let i = 0; i < n; i++) {
-      const d = new Date(base);
-      d.setDate(base.getDate() + i);
-      out.push(localDateStr(d)); // în Moldova
-   }
-   return out;
+
+const addMonths = (d, n) => {
+   const x = new Date(d);
+   x.setMonth(x.getMonth() + n);
+   return x;
 };
 
-/** Date local (00:00) din "YYYY-MM-DD" pentru Moldova */
-const localDateObjFromStr = (s) => {
-   const [y, m, d] = s.split("-").map(Number);
-   return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-};
+const asStr = (v) => (v == null ? "" : String(v));
+const asStrLower = (v) => asStr(v).trim().toLowerCase();
 
-/* === Chei locale pentru ocupare (fără decalaj) ============================ */
-function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
-   const fmt = new Intl.DateTimeFormat("en-GB", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-   });
-   const parts = fmt.formatToParts(new Date(tsMs));
-   const Y = parts.find((p) => p.type === "year").value;
-   const Mo = parts.find((p) => p.type === "month").value;
-   const Da = parts.find((p) => p.type === "day").value;
-   const HH = parts.find((p) => p.type === "hour").value;
-   const MM = parts.find((p) => p.type === "minute").value;
-   return `${Y}-${Mo}-${Da}|${HH}:${MM}`;
-}
-const localKeyForIso = (iso) =>
-   localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
-const localKeyForDateAndTime = (localDateObj, hhmm) =>
-   `${localDateStr(localDateObj)}|${hhmm}`;
-
-/** Derivă cheia locală din ceea ce vine din DB pentru BUSY */
-function busyLocalKeyFromStored(st) {
-   const d = new Date(st);
-   if (BUSY_KEYS_MODE === "local-match") {
-      const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
-      const base = new Date(d.getTime() - offMin * 60000);
-      const key = localKeyFromTs(base.getTime(), MOLDOVA_TZ);
-      const hhmm = key.slice(-5);
-      if (SLOT_LABELS.has(hhmm)) return key;
-      return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
-   }
-   return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
-}
-
-/* ——— Extractoare diverse ——— */
 const getStartFromReservation = (r) =>
-   r?.startTime ??
-   r?.start ??
-   r?.start_time ??
-   r?.dateTime ??
-   r?.datetime ??
-   r?.date ??
-   r?.begin ??
-   null;
+   r?.startTime ?? r?.start ?? r?.dateTime ?? r?.datetime ?? r?.begin ?? null;
 
-const getDurationMin = (r) =>
-   r?.durationMinutes ??
-   r?.slotMinutes ??
-   r?.lengthMinutes ??
-   r?.duration ??
-   SLOT_MINUTES;
+function sortIsoAsc(arr) {
+   return (Array.isArray(arr) ? arr : [])
+      .slice()
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
 
-const getEndFromReservation = (r) => {
-   const st = getStartFromReservation(r);
-   if (!st) return null;
-   const start = new Date(st);
-   const end = new Date(start.getTime() + getDurationMin(r) * 60000);
-   return end.toISOString();
-};
+/* ================= busy item picking (CRITICAL FIX) ================= */
 
-/** blackout: câmpuri pentru data/ora */
-const getBlackoutDT = (b) => {
-   if (typeof b === "string") return b;
-   const t = String(b?.type || "").toUpperCase();
-   if (t === "REPEAT") {
-      return b?.startDateTime || b?.dateTime || b?.datetime || null;
+function normalizeBusyList(raw) {
+   const data = raw?.data ?? raw;
+   if (Array.isArray(data)) return data;
+   if (data && typeof data === "object") return [data];
+   return [];
+}
+
+function strictMatchBusyItem(list, wantGroup, entityId) {
+   const arr = Array.isArray(list) ? list : [];
+   if (!arr.length) return null;
+
+   if (wantGroup) {
+      return (
+         arr.find(
+            (x) =>
+               String(x?.groupId ?? x?.instructorsGroupId ?? "") ===
+               String(entityId)
+         ) || null
+      );
    }
-   return (
-      b?.dateTime ?? b?.startTime ?? b?.start ?? b?.datetime ?? b?.date ?? null
-   );
-};
 
-/** grilă completă (ISO corect), dar vom folosi „chei locale” pentru busy/free */
-function buildFullGridISO(daysWindow = 120) {
-   const startFrom = addDays(new Date(), 1);
-   const daysArr = nextNDays(daysWindow, startFrom); // "YYYY-MM-DD" în Moldova
-   const out = [];
-   for (const day of daysArr) {
-      const dObj = localDateObjFromStr(day);
-      for (const t of oreDisponibile) {
-         out.push(toUtcIsoFromMoldova(dObj, t.oraStart));
+   return (
+      arr.find((x) => String(x?.instructorId ?? "") === String(entityId)) ||
+      arr.find(
+         (x) =>
+            Array.isArray(x?.instructorsIds) &&
+            x.instructorsIds.length === 1 &&
+            String(x.instructorsIds[0]) === String(entityId)
+      ) ||
+      null
+   );
+}
+
+function pickBusyItemFromDirectEndpoint(raw, wantGroup, entityId) {
+   const list = normalizeBusyList(raw);
+   if (!list.length) return null;
+   return strictMatchBusyItem(list, wantGroup, entityId) || list[0];
+}
+
+function pickBusyItemFromFetchBusy(raw, wantGroup, entityId) {
+   const list = normalizeBusyList(raw);
+   return strictMatchBusyItem(list, wantGroup, entityId);
+}
+
+/* ================= blackouts helpers ================= */
+
+function normalizeBlackoutsResponse(res) {
+   const raw = res?.data ?? res;
+   if (Array.isArray(raw)) return raw;
+   if (raw && Array.isArray(raw.blackouts)) return raw.blackouts;
+   if (raw && raw.data && Array.isArray(raw.data)) return raw.data;
+   if (raw && raw.data && Array.isArray(raw.data.blackouts))
+      return raw.data.blackouts;
+   if (raw && Array.isArray(raw.items)) return raw.items;
+   return [];
+}
+
+async function fetchInstructorBlackoutsSafe(instructorId, range) {
+   const fn = InstructorsAPI?.getInstructorBlackouts;
+   if (typeof fn !== "function") return { data: [] };
+   try {
+      return await fn({ instructorId, ...range });
+   } catch (e1) {
+      try {
+         return await fn(instructorId, range);
+      } catch (e2) {
+         return await fn(instructorId);
       }
    }
+}
+
+/* ================= REPEAT -> SINGLE expand ================= */
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function isRepeatType(b) {
+   const t = String(b?.type || "").toUpperCase();
+   return t === "REPEAT" || t.includes("REPEAT");
+}
+
+function pickBlackoutStartTime(b) {
+   if (!b) return null;
+   if (typeof b === "string") return b;
+   return (
+      b?.startTime ??
+      b?.start ??
+      b?.dateTime ??
+      b?.datetime ??
+      b?.from ??
+      b?.begin ??
+      null
+   );
+}
+
+function expandBlackoutToStartTimes(b) {
+   if (!b) return [];
+   if (typeof b === "string") return [b];
+
+   const singleStart =
+      pickBlackoutStartTime(b) || b?.startDateTime || b?.dateTime || null;
+   if (!singleStart) return [];
+
+   if (!isRepeatType(b)) return [singleStart];
+
+   const startIso = b?.startDateTime || singleStart;
+   const endIso = b?.endDateTime || null;
+
+   const stepDaysRaw = Number(b?.repeatEveryDays);
+   const stepDays =
+      Number.isFinite(stepDaysRaw) && stepDaysRaw > 0 ? stepDaysRaw : 7;
+
+   if (!endIso) return [startIso];
+
+   const startMs = new Date(startIso).getTime();
+   const endMs = new Date(endIso).getTime();
+   if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return [startIso];
+   if (endMs < startMs) return [startIso];
+
+   const stepMs = stepDays * MS_PER_DAY;
+   const out = [];
+   const HARD_LIMIT = 5000;
+
+   for (let ms = startMs; ms <= endMs; ms += stepMs) {
+      out.push(new Date(ms).toISOString());
+      if (out.length >= HARD_LIMIT) break;
+   }
    return out;
 }
-const uniq = (arr) => Array.from(new Set(arr));
 
-/* ===== Helpers „ancoră dominantă” (după ultimele 15 rezervări) ===== */
-const keyForReservation = (r) => {
-   const gid = r?.instructorsGroupId ?? r?.groupId ?? r?.group?.id ?? null;
-   const iid =
-      r?.instructorId ??
-      r?.instructor?.id ??
+/* ================== maps builders (busy/blocked) ================== */
+
+function buildBusyCountMapFromReservations(reservations = []) {
+   const setMap = new Map(); // key -> Set(iid)
+   const extraCountMap = new Map(); // key -> count
+   for (const r of reservations || []) {
+      const st = getStartFromReservation(r);
+      if (!st) continue;
+      const key = busyLocalKeyFromStored(st);
+      const hhmm = key.slice(-5);
+      if (!SLOT_LABELS.has(hhmm)) continue;
+
+      const iid = r?.instructorId ?? r?.instructor?.id ?? null;
+      if (iid != null) {
+         const s = setMap.get(key) || new Set();
+         s.add(String(iid));
+         setMap.set(key, s);
+      } else {
+         extraCountMap.set(key, (extraCountMap.get(key) || 0) + 1);
+      }
+   }
+
+   const out = new Map();
+   for (const [key, s] of setMap.entries()) out.set(key, s.size);
+   for (const [key, c] of extraCountMap.entries())
+      out.set(key, (out.get(key) || 0) + c);
+   return out;
+}
+
+async function buildBlockedCountMapFromInstructorIds(
+   instructorIds,
+   range,
+   minDay,
+   maxDay
+) {
+   const blockedSetByKey = new Map(); // key -> Set(instructorId)
+
+   await Promise.all(
+      (instructorIds || []).map(async (iid) => {
+         try {
+            const resB = await fetchInstructorBlackoutsSafe(iid, range);
+            const blackouts = normalizeBlackoutsResponse(resB);
+
+            for (const b of blackouts) {
+               const occurrences = expandBlackoutToStartTimes(b);
+               for (const st of occurrences) {
+                  if (!st) continue;
+
+                  const key = busyLocalKeyFromStored(st);
+                  const day = key.slice(0, 10);
+                  const hhmm = key.slice(-5);
+
+                  if (day < minDay || day > maxDay) continue;
+                  if (!SLOT_LABELS.has(hhmm)) continue;
+
+                  const s = blockedSetByKey.get(key) || new Set();
+                  s.add(String(iid));
+                  blockedSetByKey.set(key, s);
+               }
+            }
+         } catch {
+            // ignore per instructor
+         }
+      })
+   );
+
+   const blockedMap = new Map();
+   for (const [key, s] of blockedSetByKey.entries())
+      blockedMap.set(key, s.size);
+   return blockedMap;
+}
+
+/* ================== AUTO-ANCHOR (ca în OldSAddProg) ================== */
+
+function extractEntityFromReservation(r) {
+   const gid =
+      r?.instructorsGroupId ??
+      r?.instructors_group_id ??
+      r?.groupId ??
+      r?.group?.id ??
+      r?.instructorsGroup?.id ??
       null;
+
+   const iid = r?.instructorId ?? r?.instructor?.id ?? null;
+
    if (gid != null) return { type: "group", id: String(gid) };
    if (iid != null) return { type: "instructor", id: String(iid) };
    return { type: null, id: null };
-};
+}
 
-function findDominantAnchor(resList = []) {
-   const withStart = (resList || [])
+function inferSectorCutieFromReservation(r) {
+   const sector = r?.sector ? String(r.sector) : null;
+
+   const gbRaw =
+      r?.gearbox ?? r?.gearBox ?? r?.gear_box ?? r?.transmission ?? null;
+
+   let cutie = null;
+   if (gbRaw != null) {
+      const v = String(gbRaw).toLowerCase();
+      cutie = v.includes("auto") ? "automat" : "manual";
+   }
+   return { sector, cutie };
+}
+
+function findDominantAnchor(resArr) {
+   const arr = Array.isArray(resArr) ? resArr : [];
+   if (!arr.length) return null;
+
+   const withStart = arr
       .map((r) => ({ r, st: getStartFromReservation(r) }))
-      .filter((x) => !!x.st)
-      .map((x) => ({ ...x, iso: new Date(x.st).toISOString() }))
-      .sort((a, b) => (a.iso < b.iso ? 1 : a.iso > b.iso ? -1 : 0));
+      .filter((x) => x.st)
+      .sort((a, b) => new Date(b.st).getTime() - new Date(a.st).getTime());
 
    const recent = withStart.slice(0, 15);
    const n = recent.length;
-   if (n === 0) return null;
+   if (!n) return null;
 
-   const counts = new Map();
-   const keyFor = (r) => {
-      const gid = r?.instructorsGroupId ?? r?.groupId ?? r?.group?.id ?? null;
-      const iid =
-         r?.instructorId ??
-         r?.instructor?.id ??
-         null;
-      if (gid != null) return { type: "group", id: String(gid) };
-      if (iid != null) return { type: "instructor", id: String(iid) };
-      return { type: null, id: null };
-   };
-
+   const counts = new Map(); // key -> {type,id,count,sample}
    for (const { r } of recent) {
-      const k = keyFor(r);
-      if (!k.type || !k.id) continue;
-      const key = `${k.type}:${k.id}`;
-      const cur = counts.get(key) || { ...k, count: 0, sample: r };
+      const ent = extractEntityFromReservation(r);
+      if (!ent.type || !ent.id) continue;
+      const key = `${ent.type}:${ent.id}`;
+      const cur = counts.get(key) || { ...ent, count: 0, sample: r };
       cur.count += 1;
       if (!counts.has(key)) cur.sample = r;
       counts.set(key, cur);
    }
-
-   if (counts.size === 0) return null;
+   if (!counts.size) return null;
 
    let best = null;
    for (const v of counts.values()) if (!best || v.count > best.count) best = v;
+
    const majority = best.count > Math.floor(n / 2);
 
    let chosen = best;
    if (!majority) {
-      const first = recent[0]?.r;
-      const fk = first ? keyFor(first) : null;
-      if (fk?.type && fk?.id) {
-         const key = `${fk.type}:${fk.id}`;
-         chosen = counts.get(key) || { ...fk, count: 1, sample: first };
+      const firstR = recent[0]?.r;
+      const ent = firstR ? extractEntityFromReservation(firstR) : null;
+      if (ent?.type && ent?.id) {
+         const key = `${ent.type}:${ent.id}`;
+         chosen = counts.get(key) || { ...ent, count: 1, sample: firstR };
       }
    }
 
-   const same = chosen.sample;
-   const sectorRaw = same?.sector ?? "Botanica";
+   const inf = inferSectorCutieFromReservation(chosen.sample);
    const sector =
-      String(sectorRaw).toLowerCase() === "ciocana" ? "Ciocana" : "Botanica";
-   const gearboxRaw = same?.gearbox ?? "Manual";
-   const gearbox = String(gearboxRaw).toLowerCase().includes("auto")
-      ? "automat"
-      : "manual";
+      String(inf?.sector || "").toLowerCase() === "ciocana"
+         ? "Ciocana"
+         : inf?.sector
+         ? String(inf.sector)
+         : "Botanica";
+
+   const cutie = inf?.cutie || "manual";
 
    return {
-      tip: chosen.type === "group" ? "group" : "single",
-      entityId: chosen.id,
+      type: chosen.type, // "group" | "instructor"
+      id: chosen.id,
       sector,
-      gearbox,
+      cutie,
    };
 }
 
-/* ===================== BLACKOUTS: REPEAT expander ======================= */
-function expandRepeatLocalKeys(blackout, allowedKeysSet) {
-   const out = [];
-   const t = String(blackout?.type || "").toUpperCase();
-   if (t !== "REPEAT") return out;
+/* ================= Component ================= */
 
-   const stepDays = Math.max(1, Number(blackout?.repeatEveryDays || 1));
-   const first = blackout?.startDateTime || blackout?.dateTime;
-   const last = blackout?.endDateTime || first;
-   if (!first || !last) return out;
+export default function SAddProg({ onClose }) {
+   const dispatch = useDispatch();
+   const { user } = useContext(UserContext);
 
-   let cur = new Date(first).getTime();
-   const lastMs = new Date(last).getTime();
-   while (cur <= lastMs) {
-      const key = busyLocalKeyFromStored(new Date(cur).toISOString());
-      if (!allowedKeysSet || allowedKeysSet.has(key)) out.push(key);
-      cur += stepDays * 24 * 60 * 60 * 1000;
-   }
-   return out;
-}
-
-/* ===================== Busy map pe SET-uri de instructori ================== */
-async function mergeBlackoutsIntoStartSets(
-   entityType,
-   entityId,
-   startBusyLocal,
-   allowedKeysSet,
-   allInstructorIdsSet
-) {
-   const map = new Map(startBusyLocal);
-   try {
-      const blacks =
-         entityType === "group"
-            ? await getInstructorsGroupBlackouts(entityId)
-            : await getInstructorBlackouts(entityId);
-
-      const items = Array.isArray(blacks)
-         ? blacks
-         : Array.isArray(blacks?.items)
-         ? blacks.items
-         : [];
-
-      for (const b of items) {
-         const t = String(b?.type || "").toUpperCase();
-         const instructId =
-            b?.instructorId ??
-            b?.instructor?.id ??
-            null;
-
-         if (t === "REPEAT") {
-            const keys = expandRepeatLocalKeys(b, allowedKeysSet);
-            for (const key of keys) {
-               const set = map.get(key) || new Set();
-               if (entityType === "group") {
-                  if (instructId != null) set.add(Number(instructId));
-                  else set.add("__ALL__");
-               } else {
-                  set.add(Number(instructId ?? entityId));
-               }
-               map.set(key, set);
-            }
-         } else {
-            const dt = getBlackoutDT(b);
-            if (!dt) continue;
-            const key = busyLocalKeyFromStored(dt);
-            if (allowedKeysSet && !allowedKeysSet.has(key)) continue;
-
-            const set = map.get(key) || new Set();
-            if (entityType === "group") {
-               if (instructId != null) set.add(Number(instructId));
-               else set.add("__ALL__");
-            } else {
-               set.add(Number(instructId ?? entityId));
-            }
-            map.set(key, set);
-         }
-      }
-   } catch {
-      // dacă endpoint-ul pică, rămânem doar cu rezervările
-   }
-   return map;
-}
-
-async function fetchBusyForEntity(entityType, entityId, allowedKeysSet) {
-   if (!entityType || !entityId) {
-      return {
-         startBusyLocal: new Map(),
-         capacity: 1,
-         allInstructorIdsSet: new Set(),
-      };
-   }
-
-   // Busy din rezervări
-   const raw =
-      entityType === "group"
-         ? await getBusyForInstructorsGroup(entityId)
-         : await getBusyForInstructor(entityId);
-
-   const items = Array.isArray(raw) ? raw : [raw];
-   const startBusyLocal = new Map();
-   const allInstructorIdsSet = new Set();
-
-   for (const item of items) {
-      const reservations = Array.isArray(item?.reservations)
-         ? item.reservations
-         : [];
-
-      if (Array.isArray(item?.instructorsIds)) {
-         for (const iid of item.instructorsIds) {
-            if (iid != null) allInstructorIdsSet.add(Number(iid));
-         }
-      }
-
-      for (const r of reservations) {
-         const st = getStartFromReservation(r);
-         if (!st) continue;
-         const key = busyLocalKeyFromStored(st);
-         if (allowedKeysSet && !allowedKeysSet.has(key)) continue;
-
-         const set = startBusyLocal.get(key) || new Set();
-         const rInstr =
-            r?.instructorId ??
-            r?.instructor?.id ??
-            (entityType === "instructor" ? Number(entityId) : null);
-
-         if (rInstr != null) set.add(Number(rInstr));
-         startBusyLocal.set(key, set);
-      }
-   }
-
-   let capacity = 1;
-   if (entityType === "group") {
-      const capCandidates = [
-         allInstructorIdsSet.size,
-         Number(raw?.instructorsIds?.length ?? 0),
-         Number(raw?.total_instructors),
-         Number(raw?.total_instrucors),
-         Number(raw?.totalInstructors),
-         Number(raw?.instructorsCount),
-         Number(raw?.capacity),
-      ].filter((x) => Number.isFinite(x) && x > 0);
-      capacity = Math.max(1, ...(capCandidates.length ? capCandidates : [1]));
-   }
-
-   const merged = await mergeBlackoutsIntoStartSets(
-      entityType,
-      entityId,
-      startBusyLocal,
-      allowedKeysSet,
-      allInstructorIdsSet
+   const { busyLoading, list: rezervariExistente } = useSelector(
+      (s) => s.reservations
    );
 
-   return { startBusyLocal: merged, capacity, allInstructorIdsSet };
-}
-
-// verificare strictă „ACEEAȘI ORĂ” pe CHEIE LOCALĂ cu seturi de instructori
-function isStartFullLocal(isoStart, startBusyLocal, capacity = 1) {
-   const key = localKeyForIso(isoStart);
-   const set = startBusyLocal?.get(key);
-   if (!set || set.size === 0) return false;
-   if (set.has("__ALL__")) return true;
-   const used = set.size;
-   return used >= capacity;
-}
-
-/**
- * Calculează disponibilitatea cu regula cerută:
- * - o oră este blocată dacă \#instructori ocupați (rezervări + single + repeat)
- *   >= capacitate (numărul de instructori selectați în grup)
- * - o zi este blocată dacă TOATE orele din acea zi sunt blocate
- */
-function calcAvailability({
-   fullGrid,
-   startBusyLocal,
-   capacity,
-   userBookedDaySet,
-}) {
-   const free = [];
-   const freeHoursByDay = new Map(); // day -> Set("HH:mm")
-   const blockedHoursByDay = new Map(); // day -> Set("HH:mm")
-
-   for (const iso of fullGrid) {
-      const key = localKeyForIso(iso); // YYYY-MM-DD|HH:mm (în Moldova)
-      const [day, hhmm] = key.split("|");
-
-      // dacă utilizatorul are deja o lecție în ziua asta, o tratăm ca indisponibilă
-      if (userBookedDaySet?.has(day)) {
-         const b = blockedHoursByDay.get(day) || new Set();
-         b.add(hhmm);
-         blockedHoursByDay.set(day, b);
-         continue;
-      }
-
-      const set = startBusyLocal.get(key);
-      const used = !set ? 0 : set.has("__ALL__") ? capacity : set.size;
-      const atCap = used >= capacity;
-
-      if (!atCap) {
-         free.push(iso);
-         const f = freeHoursByDay.get(day) || new Set();
-         f.add(hhmm);
-         freeHoursByDay.set(day, f);
-      } else {
-         const b = blockedHoursByDay.get(day) || new Set();
-         b.add(hhmm);
-         blockedHoursByDay.set(day, b);
-      }
-   }
-
-   const dayFullyBlocked = new Set();
-   for (const [day, bset] of blockedHoursByDay.entries()) {
-      if ((bset?.size || 0) >= oreDisponibile.length) dayFullyBlocked.add(day);
-   }
-
-   return { free, freeHoursByDay, dayFullyBlocked };
-}
-
-/* ————— Componentă ————— */
-export default function SAddProg({ onClose }) {
-   /* ALERT PILLS */
+   /* Alerts */
    const [messages, setMessages] = useState([]);
-   const [debugArmed, setDebugArmed] = useState(false);
-   const notify = (type, text, { force = false } = {}) => {
-      if (!force && !debugArmed) return;
+   const notify = useCallback((type, text) => {
       setMessages((prev) => [
          ...prev,
          { id: `${Date.now()}-${Math.random()}`, type, text },
       ]);
-   };
-   const dismissLast = () => setMessages((prev) => prev.slice(0, -1));
+   }, []);
+   const dismissLast = useCallback(
+      () => setMessages((prev) => prev.slice(0, -1)),
+      []
+   );
 
-   // ✅ Fallback sigur pentru închiderea popup-ului
-   const safeClose = React.useCallback(() => {
+   const safeClose = useCallback(() => {
       if (typeof onClose === "function") onClose();
       else closePopupStore();
    }, [onClose]);
 
-   /* Etapa 1: opțiuni */
-   const [numarLectii, setNumarLectii] = useState(15);
+   /* Setup */
+   const [numarLectii, setNumarLectii] = useState(15); // 15 / 30
    const [cutie, setCutie] = useState("manual");
    const [sector, setSector] = useState("Botanica");
-   const [tip, setTip] = useState("group");
-   const WINDOW_DAYS = 120;
-   const [anchor, setAnchor] = useState(null);
-   const [hardLock30, setHardLock30] = useState(false);
+   const [tip, setTip] = useState("group"); // group | single
+   // UI: tip = ce vede user (single/group)
+   // Backend: la Ciocana forțăm group, chiar dacă UI e "single"
+   const backendType = useMemo(() => {
+      return sector === "Ciocana" ? "group" : tip; // ✅ cheia
+   }, [sector, tip]);
+
+   const backendWantGroup = backendType === "group";
 
    useEffect(() => {
       if (sector === "Ciocana" && tip !== "single") setTip("single");
    }, [sector, tip]);
 
-   /* Etapa 2 */
    const [stage, setStage] = useState("setup"); // setup | pick
+   const [loading, setLoading] = useState(false);
+
+   // AUTO FLOW (anchor): dacă intră direct în pick
+   const [autoFlowActive, setAutoFlowActive] = useState(false);
+   const autoBootOnceRef = useRef(false);
+
+   // entitatea aleasă
    const [assignedGroupId, setAssignedGroupId] = useState(null);
    const [assignedInstructorId, setAssignedInstructorId] = useState(null);
-   const [freeSlotsForAssigned, setFreeSlotsForAssigned] = useState([]); // ISO UTC[]
-   const [selectedDates, setSelectedDates] = useState([]); // ISO UTC[]
-   const [rejectedDates, setRejectedDates] = useState([]); // ISO UTC[]
-   const [loading, setLoading] = useState(false);
+   const [activeInstructorIds, setActiveInstructorIds] = useState([]);
+   const [capacity, setCapacity] = useState(1);
+
+   // maps “server”
+   const [serverBusyCountByKey, setServerBusyCountByKey] = useState(
+      () => new Map()
+   );
+   const [serverBlockedCountByKey, setServerBlockedCountByKey] = useState(
+      () => new Map()
+   );
+
+   // user reservations (pt 1/zi + total 30)
+   const [userReservations, setUserReservations] = useState([]);
+   const [lectiiExistente, setLectiiExistente] = useState(0);
    const [initLoading, setInitLoading] = useState(true);
-   const [showList, setShowList] = useState(false);
-   const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
-   const makeKey = (iso, idx) => `${iso}__${idx}`;
 
-   // 👇 nou: hărți pentru logică de blocare pe zi/oră
-   const [dayFullyBlocked, setDayFullyBlocked] = useState(new Set()); // Set("YYYY-MM-DD")
-   const [freeHoursByDay, setFreeHoursByDay] = useState(new Map()); // Map(day -> Set("HH:mm"))
-
+   // pick
    const [data, setData] = useState(null);
    const [oraSelectata, setOraSelectata] = useState(null);
-   const [lectiiExistente, setLectiiExistente] = useState(0);
+   const [selectedDates, setSelectedDates] = useState([]); // ISO UTC[]
+   const [showList, setShowList] = useState(false);
 
-   const { user } = useContext(UserContext);
-   const dispatch = useDispatch();
-   const { list: rezervariExistente, busyLoading } = useSelector(
-      (s) => s.reservations
+   // conflicte
+   const [rejected, setRejected] = useState([]); // { iso, reason }[]
+   const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
+
+   // anti-spam submit
+   const submitGuardRef = useRef(false);
+
+   // live refresh
+   const [lastLiveRefreshAt, setLastLiveRefreshAt] = useState(null);
+   const refreshInFlightRef = useRef(false);
+   const [autoFillRunning, setAutoFillRunning] = useState(false);
+
+   const minSelectableDate = useMemo(() => addDays(new Date(), 1), []);
+   const maxSelectableDate = useMemo(() => addMonths(new Date(), 3), []);
+
+   const minDay = useMemo(
+      () => localDateStrTZ(minSelectableDate, MOLDOVA_TZ),
+      [minSelectableDate]
+   );
+   const maxDay = useMemo(
+      () => localDateStrTZ(maxSelectableDate, MOLDOVA_TZ),
+      [maxSelectableDate]
    );
 
-   const dropFromFreeSlots = React.useCallback((isos) => {
-      if (!Array.isArray(isos) || !isos.length) return;
-      const toDrop = new Set(isos.map((x) => new Date(x).toISOString()));
-      setFreeSlotsForAssigned((prev) =>
-         prev.filter((iso) => !toDrop.has(new Date(iso).toISOString()))
+   // total limit
+   const hardLock30 = lectiiExistente >= MAX_TOTAL_LESSONS;
+   const remainingTo30 = useMemo(
+      () => Math.max(0, MAX_TOTAL_LESSONS - lectiiExistente),
+      [lectiiExistente]
+   );
+
+   // pachet efectiv
+   const requiredSubmitCount = useMemo(
+      () => Math.min(Number(numarLectii) || 0, remainingTo30),
+      [numarLectii, remainingTo30]
+   );
+
+   // ✅ AUTO anchor ca în OldSAddProg
+   const autoAnchor = useMemo(
+      () => findDominantAnchor(userReservations),
+      [userReservations]
+   );
+
+   const autoEligible = useMemo(() => {
+      return (
+         autoAnchor?.type &&
+         autoAnchor?.id &&
+         Number(lectiiExistente) > 0 &&
+         Number(lectiiExistente) < MAX_TOTAL_LESSONS
       );
-   }, []);
+   }, [autoAnchor, lectiiExistente]);
 
-   /* ——— Sets bazate pe CHEI LOCALE ——— */
-   const freeLocalKeySet = useMemo(
-      () => new Set(freeSlotsForAssigned.map((iso) => localKeyForIso(iso))),
-      [freeSlotsForAssigned]
-   );
-   const selectedLocalKeySet = useMemo(
-      () => new Set(selectedDates.map((iso) => localKeyForIso(iso))),
-      [selectedDates]
-   );
-
-   // derivăm rapid harta (număr) de ore libere per zi din freeHoursByDay
-   const freeByDay = useMemo(() => {
-      const map = new Map();
-      for (const [day, set] of freeHoursByDay.entries()) map.set(day, set.size);
-      return map;
-   }, [freeHoursByDay]);
-
-   const dayLocal = data ? localDateStr(data) : null;
-
-   const freeTimesForDay = useMemo(() => {
-      if (!data) return new Set();
-      // folosim harta calculată (mai sigur decât derivarea din freeLocalKeySet)
-      return new Set(freeHoursByDay.get(localDateStr(data)) || []);
-   }, [data, freeHoursByDay]);
-
-   const selectedTimesForDay = useMemo(() => {
-      if (!data) return new Set();
+   // zile ocupate din DB (1/zi)
+   const existingBookedDaySet = useMemo(() => {
       const set = new Set();
-      for (const o of oreDisponibile) {
-         const key = localKeyForDateAndTime(data, o.oraStart);
-         if (selectedLocalKeySet.has(key)) set.add(o.oraStart);
+      for (const r of userReservations || []) {
+         const st = getStartFromReservation(r);
+         if (!st) continue;
+         set.add(localDateStrTZ(new Date(st), MOLDOVA_TZ));
       }
       return set;
-   }, [data, selectedLocalKeySet]);
+   }, [userReservations]);
 
-   /* La montare: istoric + „ancoră” */
+   // zile selectate în popup (1/zi)
+   const selectedBookedDaySet = useMemo(() => {
+      const set = new Set();
+      for (const iso of selectedDates || []) {
+         set.add(localDateStrTZ(new Date(iso), MOLDOVA_TZ));
+      }
+      return set;
+   }, [selectedDates]);
+
+   // union (DB + popup)
+   const bookedDaySet = useMemo(() => {
+      const set = new Set(existingBookedDaySet);
+      for (const d of selectedBookedDaySet) set.add(d);
+      return set;
+   }, [existingBookedDaySet, selectedBookedDaySet]);
+
+   // selected key set
+   const selectedKeySet = useMemo(() => {
+      const set = new Set();
+      for (const iso of selectedDates)
+         set.add(localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ));
+      return set;
+   }, [selectedDates]);
+
+   // selectedCountByKey
+   const selectedCountByKey = useMemo(() => {
+      const map = new Map();
+      for (const iso of selectedDates) {
+         const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+         map.set(key, (map.get(key) || 0) + 1);
+      }
+      return map;
+   }, [selectedDates]);
+
+   // meta per slot
+   const getSlotMeta = useCallback(
+      (key) => {
+         const usedServer = key ? serverBusyCountByKey.get(key) || 0 : 0;
+         const usedSelected = key ? selectedCountByKey.get(key) || 0 : 0;
+         const used = usedServer + usedSelected;
+
+         const blocked = key ? serverBlockedCountByKey.get(key) || 0 : 0;
+         const total = capacity || 1;
+         const sum = used + blocked;
+
+         const full = sum >= total;
+         const effectiveCap = Math.max(0, total - blocked);
+
+         return {
+            used,
+            usedServer,
+            usedSelected,
+            blocked,
+            total,
+            effectiveCap,
+            full,
+            sum,
+         };
+      },
+      [
+         serverBusyCountByKey,
+         serverBlockedCountByKey,
+         selectedCountByKey,
+         capacity,
+      ]
+   );
+
+   // full-day set: dacă TOATE sloturile sunt full
+   const fullyBlockedDaySet = useMemo(() => {
+      const set = new Set();
+      const total = capacity || 1;
+
+      const dayToFullSlots = new Map();
+      const keys = new Set([
+         ...serverBusyCountByKey.keys(),
+         ...serverBlockedCountByKey.keys(),
+         ...selectedCountByKey.keys(),
+      ]);
+
+      for (const key of keys) {
+         const usedServer = serverBusyCountByKey.get(key) || 0;
+         const usedSelected = selectedCountByKey.get(key) || 0;
+         const blocked = serverBlockedCountByKey.get(key) || 0;
+         const sum = usedServer + usedSelected + blocked;
+
+         if (sum >= total) {
+            const day = key.slice(0, 10);
+            dayToFullSlots.set(day, (dayToFullSlots.get(day) || 0) + 1);
+         }
+      }
+
+      for (const [day, count] of dayToFullSlots.entries()) {
+         if (count >= oreDisponibile.length) set.add(day);
+      }
+      return set;
+   }, [
+      serverBusyCountByKey,
+      serverBlockedCountByKey,
+      selectedCountByKey,
+      capacity,
+   ]);
+
+   // init: încarcă rezervările userului
    useEffect(() => {
       let alive = true;
       (async () => {
@@ -701,542 +780,940 @@ export default function SAddProg({ onClose }) {
 
             const existing = await dispatch(fetchUserReservations(user.id))
                .unwrap()
-               .catch(() => []);
+               .catch(() => rezervariExistente || []);
+
             if (!alive) return;
 
-            const count = existing?.length || 0;
-            setLectiiExistente(count);
-
-            if (count >= 30) {
-               setHardLock30(true);
-               setStage("setup");
-               return;
-            }
-
-            const dom = findDominantAnchor(existing);
-            if (dom) {
-               setAnchor(dom);
-               if (dom.tip === "group") {
-                  setAssignedGroupId(String(dom.entityId));
-                  setAssignedInstructorId(null);
-               } else {
-                  setAssignedInstructorId(String(dom.entityId));
-                  setAssignedGroupId(null);
-               }
-
-               const fullGrid = buildFullGridISO(WINDOW_DAYS);
-               const allowedKeys = new Set(
-                  fullGrid.map((iso) => localKeyForIso(iso))
-               );
-
-               const userBookedDaySet = new Set();
-               for (const r of existing || []) {
-                  const st = getStartFromReservation(r);
-                  if (st) userBookedDaySet.add(localDateStr(new Date(st)));
-               }
-               for (const iso of selectedDates) {
-                  userBookedDaySet.add(localDateStr(new Date(iso)));
-               }
-
-               const { startBusyLocal, capacity } = await fetchBusyForEntity(
-                  dom.tip,
-                  dom.entityId,
-                  allowedKeys
-               );
-
-               const { free, freeHoursByDay, dayFullyBlocked } =
-                  calcAvailability({
-                     fullGrid,
-                     startBusyLocal,
-                     capacity,
-                     userBookedDaySet,
-                  });
-
-               setFreeSlotsForAssigned(free);
-               setFreeHoursByDay(freeHoursByDay);
-               setDayFullyBlocked(dayFullyBlocked);
-               setStage("pick");
-            } else {
-               setStage("setup");
-               setAnchor(null);
-            }
+            const arr = Array.isArray(existing) ? existing : [];
+            setUserReservations(arr);
+            setLectiiExistente(arr.length);
          } finally {
             if (alive) setInitLoading(false);
          }
       })();
+
       return () => {
          alive = false;
       };
    }, [user?.id, dispatch]); // eslint-disable-line
 
-   // reset UI dacă nu avem ancoră
-   useEffect(() => {
-      if (anchor) return;
-      setStage("setup");
-      setAssignedGroupId(null);
-      setAssignedInstructorId(null);
-      setFreeSlotsForAssigned([]);
+   // reset pick state
+   const resetPickState = useCallback(() => {
       setSelectedDates([]);
-      setRejectedDates([]);
+      setRejected([]);
+      setShowList(false);
       setData(null);
       setOraSelectata(null);
-      setShowList(false);
-      setFreeHoursByDay(new Map());
-      setDayFullyBlocked(new Set());
-   }, [sector, anchor]);
+      setConfirmDeleteKey(null);
 
-   useEffect(() => {
-      if (!showList) setConfirmDeleteKey(null);
-   }, [showList]);
+      setServerBusyCountByKey(new Map());
+      setServerBlockedCountByKey(new Map());
+      setCapacity(1);
+      setActiveInstructorIds([]);
 
-   const isLocked = !!anchor;
+      setAssignedGroupId(null);
+      setAssignedInstructorId(null);
 
-   /* === Limite === */
-   const remainingTo30 = useMemo(
-      () => Math.max(0, 30 - lectiiExistente),
-      [lectiiExistente]
-   );
-   const requiredSubmitCount = useMemo(
-      () => Math.min(numarLectii, remainingTo30),
-      [numarLectii, remainingTo30]
-   );
-   const reachedMax30 = useMemo(
-      () => lectiiExistente + selectedDates.length >= 30,
-      [lectiiExistente, selectedDates.length]
-   );
-   const reachedPackLimit = useMemo(
-      () => selectedDates.length >= requiredSubmitCount,
-      [requiredSubmitCount, selectedDates.length]
-   );
+      setLastLiveRefreshAt(null);
+   }, []);
 
-   const bookedDaySet = useMemo(() => {
-      const set = new Set();
-      for (const iso of selectedDates) set.add(localDateStr(new Date(iso)));
-      for (const r of rezervariExistente || []) {
-         const st = getStartFromReservation(r);
-         if (st) set.add(localDateStr(new Date(st)));
-      }
-      return set;
-   }, [selectedDates, rezervariExistente]);
+   // ✅ Loader generic: încarcă disponibilitatea pentru ACELAȘI group/instructor (anchor)
+   const loadAvailabilityForAnchor = useCallback(
+      async (anchor, opts = {}) => {
+         const type = anchor?.type;
+         const entityId = anchor?.id;
+         if (!type || !entityId) throw new Error("Anchor invalid.");
 
-   const handleClickContinue = async () => {
-      setDebugArmed(true);
-      await continuaEtapa2();
-   };
+         const daysArg = Number(opts.days ?? 15);
+         const gearboxArg = String(opts.gearbox ?? cutie);
+         const sectorArg = String(opts.sector ?? sector);
 
-   /** încarcă grila liberă pe baza cheilor locale */
-   const continuaEtapa2 = async () => {
-      if (hardLock30 || lectiiExistente >= 30) {
-         notify("warn", "Ai deja 30 de lecții programate.");
-         return;
-      }
-      setLoading(true);
-      try {
-         // ← prima (și singura) declarare
-         const fullGrid = buildFullGridISO(WINDOW_DAYS);
-         const allowedKeys = new Set(
-            fullGrid.map((iso) => localKeyForIso(iso))
-         );
+         const wantGroup = type === "group";
 
-         const userBookedDaySet = new Set();
-         for (const r of rezervariExistente || []) {
-            const st = getStartFromReservation(r);
-            if (st) userBookedDaySet.add(localDateStr(new Date(st)));
-         }
-         for (const iso of selectedDates) {
-            userBookedDaySet.add(localDateStr(new Date(iso)));
-         }
-
-         if (anchor?.tip && anchor?.entityId) {
-            const { startBusyLocal, capacity } = await fetchBusyForEntity(
-               anchor.tip,
-               anchor.entityId,
-               allowedKeys
-            );
-            const { free, freeHoursByDay, dayFullyBlocked } = calcAvailability({
-               fullGrid,
-               startBusyLocal,
-               capacity,
-               userBookedDaySet,
-            });
-
-            if (!free.length) {
-               notify("warn", "Nu există sloturi libere pentru entitatea ta.");
-               return;
-            }
-            if (anchor.tip === "group") {
-               setAssignedGroupId(String(anchor.entityId));
-               setAssignedInstructorId(null);
-            } else {
-               setAssignedInstructorId(String(anchor.entityId));
-               setAssignedGroupId(null);
-            }
-            setFreeSlotsForAssigned(free);
-            setFreeHoursByDay(freeHoursByDay);
-            setDayFullyBlocked(dayFullyBlocked);
-            setStage("pick");
-            setShowList(false);
-            return;
-         }
-
-         const query = {
-            days: asStr(numarLectii),
-            gearbox: asStrLower(cutie),
-            sector: asStrLower(sector),
-            type: asStrLower(tip),
-         };
-         const res = await dispatch(fetchBusy(query)).unwrap();
-
-         // ——— Normalizăm candidații ———
-         const normalizeBusy = (raw) => {
-            const out = [];
-            const pushVariant = (
-               entityType,
-               entityId,
-               reservations,
-               instructorsIds
-            ) => {
-               const startBusyLocal = new Map();
-               const allIds = new Set(
-                  Array.isArray(instructorsIds)
-                     ? instructorsIds
-                          .filter((x) => x != null)
-                          .map((x) => Number(x))
-                     : []
-               );
-
-               for (const r of reservations || []) {
-                  const st = getStartFromReservation(r);
-                  if (!st) continue;
-                  const key = busyLocalKeyFromStored(st);
-                  if (allowedKeys.size && !allowedKeys.has(key)) continue;
-                  const set = startBusyLocal.get(key) || new Set();
-                  const rInstr =
-                     r?.instructorId ??
-                     r?.instructor?.id ??
-                     (entityType === "instructor" ? Number(entityId) : null);
-                  if (rInstr != null) set.add(Number(rInstr));
-                  startBusyLocal.set(key, set);
-               }
-
-               const capacity =
-                  entityType === "group" ? Math.max(1, allIds.size) : 1;
-
-               out.push({
-                  entityType,
-                  entityId: entityId != null ? String(entityId) : null,
-                  startBusyLocal,
-                  capacity,
-                  allInstructorIdsSet: allIds,
-               });
-            };
-
-            const list = Array.isArray(raw)
-               ? raw
-               : raw &&
-                 (Array.isArray(raw.reservations) ||
-                    raw.groupId != null ||
-                    raw.instructorId != null ||
-                    Array.isArray(raw.instructorsIds))
-               ? [raw]
-               : [];
-
-            for (const item of list) {
-               const reservations = Array.isArray(item?.reservations)
-                  ? item.reservations
-                  : [];
-               if (item?.groupId != null) {
-                  pushVariant(
-                     "group",
-                     item.groupId,
-                     reservations,
-                     item?.instructorsIds || []
-                  );
-                  continue;
-               }
-               if (item?.instructorId != null) {
-                  pushVariant(
-                     "instructor",
-                     item.instructorId,
-                     reservations,
-                     null
-                  );
-                  continue;
-               }
-               if (
-                  Array.isArray(item?.instructorsIds) &&
-                  item.instructorsIds.length === 1
-               ) {
-                  pushVariant(
-                     "instructor",
-                     item.instructorsIds[0],
-                     reservations,
-                     null
-                  );
-                  continue;
-               }
-            }
-            return out;
-         };
-
-         let list = normalizeBusy(res.data).filter((v) =>
-            tip === "group"
-               ? v.entityType === "group"
-               : v.entityType === "instructor"
-         );
-         if (!list.length) {
-            notify("error", "Nu am putut găsi tipul dorit în ocupații.");
-            return;
-         }
-
-         // Integrează blackouts
-         list = await Promise.all(
-            list.map(async (v) => ({
-               ...v,
-               startBusyLocal: await mergeBlackoutsIntoStartSets(
-                  v.entityType,
-                  v.entityId,
-                  v.startBusyLocal,
-                  allowedKeys,
-                  v.allInstructorIdsSet
-               ),
-            }))
-         );
-
-         // calculează disponibilitatea corectă (sumă pe instructori)
-         const scored = list
-            .map((v) => {
-               const { free, freeHoursByDay, dayFullyBlocked } =
-                  calcAvailability({
-                     fullGrid,
-                     startBusyLocal: v.startBusyLocal,
-                     capacity: v.capacity,
-                     userBookedDaySet,
-                  });
-               return { ...v, free, freeHoursByDay, dayFullyBlocked };
-            })
-            .sort((a, b) => b.free.length - a.free.length);
-
-         const best = scored[0];
-         if (!best?.free?.length) {
-            notify("warn", "Nu există sloturi libere în perioada vizată.");
-            return;
-         }
-         if (tip === "group") {
-            setAssignedGroupId(String(best.entityId));
+         // fixăm contextul UI
+         setTip(wantGroup ? "group" : "single");
+         if (wantGroup) {
+            setAssignedGroupId(String(entityId));
             setAssignedInstructorId(null);
          } else {
-            setAssignedInstructorId(String(best.entityId));
             setAssignedGroupId(null);
+            setAssignedInstructorId(String(entityId));
          }
-         setFreeSlotsForAssigned(best.free);
-         setFreeHoursByDay(best.freeHoursByDay);
-         setDayFullyBlocked(best.dayFullyBlocked);
+
+         const range = {
+            start: new Date(minSelectableDate).toISOString(),
+            end: new Date(maxSelectableDate).toISOString(),
+            from: minDay,
+            to: maxDay,
+            dateFrom: minDay,
+            dateTo: maxDay,
+         };
+
+         // 1) endpoint direct (by id)
+         let busyItem = null;
+
+         if (
+            wantGroup &&
+            typeof ReservationsAPI?.getBusyForInstructorsGroup === "function"
+         ) {
+            try {
+               const rawBusy = await ReservationsAPI.getBusyForInstructorsGroup(
+                  entityId
+               );
+               busyItem = pickBusyItemFromDirectEndpoint(
+                  rawBusy,
+                  true,
+                  entityId
+               );
+            } catch {
+               busyItem = null;
+            }
+         }
+
+         if (
+            !wantGroup &&
+            typeof ReservationsAPI?.getBusyForInstructor === "function"
+         ) {
+            try {
+               const rawBusy = await ReservationsAPI.getBusyForInstructor(
+                  entityId
+               );
+               busyItem = pickBusyItemFromDirectEndpoint(
+                  rawBusy,
+                  false,
+                  entityId
+               );
+            } catch {
+               busyItem = null;
+            }
+         }
+
+         // 2) fallback: fetchBusy (STRICT)
+         if (!busyItem) {
+            const query = {
+               days: asStr(daysArg),
+               gearbox: asStrLower(gearboxArg),
+               sector: asStrLower(sectorArg),
+               type: wantGroup ? "group" : "single",
+            };
+
+            const res = await dispatch(fetchBusy(query)).unwrap();
+            busyItem = pickBusyItemFromFetchBusy(
+               res?.data ?? res,
+               wantGroup,
+               entityId
+            );
+
+            if (!busyItem) {
+               throw new Error(
+                  wantGroup
+                     ? `Anchor group ${entityId} nu apare în busy (fallback).`
+                     : `Anchor instructor ${entityId} nu apare în busy (fallback).`
+               );
+            }
+         }
+
+         // Busy map
+         const reservations = Array.isArray(busyItem?.reservations)
+            ? busyItem.reservations
+            : [];
+         const busyMapAll = buildBusyCountMapFromReservations(reservations);
+
+         const busyMap = new Map();
+         for (const [key, count] of busyMapAll.entries()) {
+            const day = key.slice(0, 10);
+            const hhmm = key.slice(-5);
+            if (day < minDay || day > maxDay) continue;
+            if (!SLOT_LABELS.has(hhmm)) continue;
+            busyMap.set(key, count);
+         }
+         setServerBusyCountByKey(busyMap);
+
+         // Instructor IDs + capacity
+         let ids = [];
+         if (wantGroup) {
+            if (Array.isArray(busyItem?.instructorsIds)) {
+               ids = busyItem.instructorsIds
+                  .map((x) => Number(x))
+                  .filter((n) => Number.isInteger(n) && n > 0);
+            }
+
+            if (!ids.length) {
+               const s = new Set();
+               for (const r of reservations) {
+                  const iid = r?.instructorId ?? r?.instructor?.id ?? null;
+                  if (iid != null) s.add(Number(iid));
+               }
+               ids = Array.from(s).filter((n) => Number.isInteger(n) && n > 0);
+            }
+         } else {
+            ids = [Number(entityId)].filter(
+               (n) => Number.isInteger(n) && n > 0
+            );
+         }
+
+         setActiveInstructorIds(ids);
+
+         const capRaw = wantGroup ? Math.max(1, ids.length || 1) : 1;
+         const cap = wantGroup ? Math.min(GROUP_SLOT_LIMIT, capRaw) : 1;
+         setCapacity(cap);
+
+         // Blocked map
+         const blockedMap = await buildBlockedCountMapFromInstructorIds(
+            ids,
+            range,
+            minDay,
+            maxDay
+         );
+         setServerBlockedCountByKey(blockedMap);
+
+         setLastLiveRefreshAt(Date.now());
+      },
+      [
+         dispatch,
+         cutie,
+         sector,
+         minSelectableDate,
+         maxSelectableDate,
+         minDay,
+         maxDay,
+      ]
+   );
+
+   // ✅ AUTO START (anchor)
+   useEffect(() => {
+      if (initLoading) return;
+      if (autoBootOnceRef.current) return;
+      if (!autoEligible) return;
+      if (!autoAnchor) return;
+
+      autoBootOnceRef.current = true;
+
+      const inferredCutie = autoAnchor.cutie || "manual";
+      const inferredSector =
+         autoAnchor.type === "group"
+            ? "Botanica"
+            : autoAnchor.sector || "Botanica";
+
+      setCutie(inferredCutie);
+      setSector(inferredSector);
+      setNumarLectii(15);
+      setTip(autoAnchor.type === "group" ? "group" : "single");
+
+      (async () => {
+         setLoading(true);
+         try {
+            await loadAvailabilityForAnchor(autoAnchor, {
+               days: 15,
+               gearbox: inferredCutie,
+               sector: inferredSector,
+            });
+            setAutoFlowActive(true);
+            setStage("pick");
+            setShowList(false);
+         } catch (e) {
+            setAutoFlowActive(false);
+            setStage("setup");
+            notify(
+               "warn",
+               "Nu am putut porni automat cu aceleași setări (anchor). Poți continua manual."
+            );
+            if (e?.message) notify("alert", `Detalii: ${e.message}`);
+         } finally {
+            setLoading(false);
+         }
+      })();
+   }, [
+      initLoading,
+      autoEligible,
+      autoAnchor,
+      loadAvailabilityForAnchor,
+      notify,
+   ]);
+
+   // ====== flow manual (setup -> pick) ======
+   const pickEntityAndLoadAvailability = useCallback(async () => {
+      const query = {
+         days: asStr(numarLectii),
+         gearbox: asStrLower(cutie),
+         sector: asStrLower(sector),
+         type: asStrLower(backendType),
+      };
+
+      const res = await dispatch(fetchBusy(query)).unwrap();
+      const raw = res?.data;
+
+      const list = Array.isArray(raw)
+         ? raw
+         : raw &&
+           (raw.groupId != null ||
+              raw.instructorId != null ||
+              Array.isArray(raw.instructorsIds))
+         ? [raw]
+         : [];
+
+      const wantGroup = backendWantGroup;
+
+
+      const candidates = [];
+      for (const item of list) {
+         const reservations = Array.isArray(item?.reservations)
+            ? item.reservations
+            : [];
+         const gid = item?.groupId ?? item?.instructorsGroupId ?? null;
+         const iid = item?.instructorId ?? null;
+
+         if (wantGroup && gid != null) {
+            candidates.push({
+               entityType: "group",
+               id: String(gid),
+               item,
+               reservationsCount: reservations.length,
+            });
+         } else if (!wantGroup) {
+            if (iid != null) {
+               candidates.push({
+                  entityType: "instructor",
+                  id: String(iid),
+                  item,
+                  reservationsCount: reservations.length,
+               });
+            } else if (
+               Array.isArray(item?.instructorsIds) &&
+               item.instructorsIds.length === 1
+            ) {
+               candidates.push({
+                  entityType: "instructor",
+                  id: String(item.instructorsIds[0]),
+                  item,
+                  reservationsCount: reservations.length,
+               });
+            }
+         }
+      }
+
+      if (!candidates.length) {
+         throw new Error(
+            "Nu am găsit entitate (grup/instructor) pentru opțiuni."
+         );
+      }
+
+      candidates.sort((a, b) => a.reservationsCount - b.reservationsCount);
+      const best = candidates[0];
+
+      setAutoFlowActive(false); // manual
+
+      if (best.entityType === "group") {
+         setAssignedGroupId(best.id);
+         setAssignedInstructorId(null);
+      } else {
+         setAssignedInstructorId(best.id);
+         setAssignedGroupId(null);
+      }
+
+      const ids =
+         best.entityType === "group"
+            ? Array.isArray(best?.item?.instructorsIds)
+               ? best.item.instructorsIds
+                    .map((x) => Number(x))
+                    .filter((n) => Number.isInteger(n) && n > 0)
+               : []
+            : [Number(best.id)].filter((n) => Number.isInteger(n) && n > 0);
+
+      setActiveInstructorIds(ids);
+
+      const capRaw =
+         best.entityType === "group" ? Math.max(1, ids.length || 1) : 1;
+      const cap =
+         best.entityType === "group" ? Math.min(GROUP_SLOT_LIMIT, capRaw) : 1;
+      setCapacity(cap);
+
+      const reservations = Array.isArray(best?.item?.reservations)
+         ? best.item.reservations
+         : [];
+      const busyMapAll = buildBusyCountMapFromReservations(reservations);
+
+      const busyMap = new Map();
+      for (const [key, count] of busyMapAll.entries()) {
+         const day = key.slice(0, 10);
+         const hhmm = key.slice(-5);
+         if (day < minDay || day > maxDay) continue;
+         if (!SLOT_LABELS.has(hhmm)) continue;
+         busyMap.set(key, count);
+      }
+      setServerBusyCountByKey(busyMap);
+
+      const range = {
+         start: new Date(minSelectableDate).toISOString(),
+         end: new Date(maxSelectableDate).toISOString(),
+         from: minDay,
+         to: maxDay,
+         dateFrom: minDay,
+         dateTo: maxDay,
+      };
+      const blockedMap = await buildBlockedCountMapFromInstructorIds(
+         ids,
+         range,
+         minDay,
+         maxDay
+      );
+      setServerBlockedCountByKey(blockedMap);
+
+      setLastLiveRefreshAt(Date.now());
+   }, [
+      dispatch,
+      numarLectii,
+      cutie,
+      sector,
+      tip,
+      minSelectableDate,
+      maxSelectableDate,
+      minDay,
+      maxDay,
+   ]);
+
+   const handleContinue = async () => {
+      if (hardLock30 || remainingTo30 <= 0) {
+         notify(
+            "warn",
+            `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`
+         );
+         return;
+      }
+      if (Number(numarLectii) !== 15 && Number(numarLectii) !== 30) {
+         notify("warn", "Selectează pachetul (15 sau 30) ca să continui.");
+         return;
+      }
+
+      setLoading(true);
+      try {
+         await pickEntityAndLoadAvailability();
          setStage("pick");
          setShowList(false);
-      } catch (err) {
-         notify("error", "Nu am putut încărca disponibilitatea.");
-         if (err?.message) notify("debug", `Detalii: ${err.message}`);
+      } catch (e) {
+         notify(
+            "error",
+            "Nu am putut pregăti disponibilitatea (busy/blocări)."
+         );
+         if (e?.message) notify("alert", `Detalii: ${e.message}`);
       } finally {
          setLoading(false);
       }
    };
 
-   const adaugaProgramare = () => {
-      if (hardLock30 || lectiiExistente >= 30) {
-         notify("warn", "Ai deja 30 de lecții programate.", { force: true });
-         return;
+   // ====== Live refresh maps (PICK) ======
+   const fetchLiveMapsForAssigned = useCallback(async () => {
+      const type = assignedGroupId ? "group" : "instructor";
+      const chosenId = assignedGroupId || assignedInstructorId;
+      if (!chosenId) throw new Error("Nu există entitate aleasă.");
+
+      const range = {
+         start: new Date(minSelectableDate).toISOString(),
+         end: new Date(maxSelectableDate).toISOString(),
+         from: minDay,
+         to: maxDay,
+         dateFrom: minDay,
+         dateTo: maxDay,
+      };
+
+      let busyItem = null;
+
+      const fnGroup = ReservationsAPI?.getBusyForInstructorsGroup;
+      const fnInstr = ReservationsAPI?.getBusyForInstructor;
+
+      if (type === "group" && typeof fnGroup === "function") {
+         try {
+            const rawBusy = await fnGroup(chosenId);
+            busyItem = pickBusyItemFromDirectEndpoint(rawBusy, true, chosenId);
+         } catch {
+            busyItem = null;
+         }
       }
+      if (type === "instructor" && typeof fnInstr === "function") {
+         try {
+            const rawBusy = await fnInstr(chosenId);
+            busyItem = pickBusyItemFromDirectEndpoint(rawBusy, false, chosenId);
+         } catch {
+            busyItem = null;
+         }
+      }
+
+      if (!busyItem) {
+         const query = {
+            days: asStr(numarLectii),
+            gearbox: asStrLower(cutie),
+            sector: asStrLower(sector),
+            type: type === "group" ? "group" : "single",
+         };
+
+         const res = await dispatch(fetchBusy(query)).unwrap();
+         busyItem = pickBusyItemFromFetchBusy(
+            res?.data ?? res,
+            type === "group",
+            chosenId
+         );
+
+         if (!busyItem) {
+            throw new Error(
+               `Busy fallback nu conține entitatea aleasă (${type}:${chosenId}).`
+            );
+         }
+      }
+
+      const reservations = Array.isArray(busyItem?.reservations)
+         ? busyItem.reservations
+         : [];
+      const busyMapAll = buildBusyCountMapFromReservations(reservations);
+
+      const busyMap = new Map();
+      for (const [key, count] of busyMapAll.entries()) {
+         const day = key.slice(0, 10);
+         const hhmm = key.slice(-5);
+         if (day < minDay || day > maxDay) continue;
+         if (!SLOT_LABELS.has(hhmm)) continue;
+         busyMap.set(key, count);
+      }
+
+      let ids =
+         type === "group"
+            ? Array.isArray(busyItem?.instructorsIds)
+               ? busyItem.instructorsIds
+                    .map((x) => Number(x))
+                    .filter((n) => Number.isInteger(n) && n > 0)
+               : activeInstructorIds
+            : [Number(chosenId)].filter((n) => Number.isInteger(n) && n > 0);
+
+      ids = Array.isArray(ids) ? ids : [];
+      const capRaw = type === "group" ? Math.max(1, ids.length || 1) : 1;
+      const cap = type === "group" ? Math.min(GROUP_SLOT_LIMIT, capRaw) : 1;
+
+      const blockedMap = await buildBlockedCountMapFromInstructorIds(
+         ids,
+         range,
+         minDay,
+         maxDay
+      );
+
+      return { type, chosenId, ids, cap, busyMap, blockedMap };
+   }, [
+      assignedGroupId,
+      assignedInstructorId,
+      dispatch,
+      numarLectii,
+      cutie,
+      sector,
+      minSelectableDate,
+      maxSelectableDate,
+      minDay,
+      maxDay,
+      activeInstructorIds,
+   ]);
+
+   const doLiveRefresh = useCallback(
+      async (silent = true) => {
+         if (refreshInFlightRef.current) return;
+         if (loading || busyLoading || initLoading) return;
+         if (stage !== "pick") return;
+
+         const chosenId = assignedGroupId || assignedInstructorId;
+         if (!chosenId) return;
+
+         refreshInFlightRef.current = true;
+         try {
+            const live = await fetchLiveMapsForAssigned();
+            setCapacity(live.cap);
+            setActiveInstructorIds(live.ids);
+            setServerBusyCountByKey(live.busyMap);
+            setServerBlockedCountByKey(live.blockedMap);
+            setLastLiveRefreshAt(Date.now());
+         } catch (e) {
+            if (!silent) {
+               notify("warn", "Nu am putut face live refresh (busy/blocări).");
+               if (e?.message) notify("alert", `Detalii: ${e.message}`);
+            }
+         } finally {
+            refreshInFlightRef.current = false;
+         }
+      },
+      [
+         fetchLiveMapsForAssigned,
+         loading,
+         busyLoading,
+         initLoading,
+         stage,
+         assignedGroupId,
+         assignedInstructorId,
+         notify,
+      ]
+   );
+
+   //   useEffect(() => {
+   //      if (stage !== "pick") return;
+   //      const chosenId = assignedGroupId || assignedInstructorId;
+   //      if (!chosenId) return;
+   //
+   //      // refresh imediat la intrare în PICK
+   //      doLiveRefresh(true);
+   //
+   //      const id = setInterval(() => {
+   //         doLiveRefresh(true);
+   //      }, LIVE_REFRESH_MS);
+   //
+   //      return () => clearInterval(id);
+   //   }, [stage, assignedGroupId, assignedInstructorId, doLiveRefresh]);
+
+   // ====== Preflight live (sloturi luate între timp) ======
+   const preflightSelectedLive = useCallback(
+      async (datesISO, latestUserReservationsArr) => {
+         const { cap, busyMap, blockedMap } = await fetchLiveMapsForAssigned();
+
+         const bookedDays = new Set();
+         for (const r of latestUserReservationsArr || []) {
+            const st = getStartFromReservation(r);
+            if (st) bookedDays.add(localDateStrTZ(new Date(st), MOLDOVA_TZ));
+         }
+
+         const daysInBatch = new Set();
+         const ok = [];
+         const conflicts = [];
+
+         for (const iso of datesISO || []) {
+            const day = localDateStrTZ(new Date(iso), MOLDOVA_TZ);
+            const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+
+            if (bookedDays.has(day)) {
+               conflicts.push({
+                  iso,
+                  reason: "Ai deja o programare în această zi (din DB).",
+               });
+               continue;
+            }
+            if (daysInBatch.has(day)) {
+               conflicts.push({
+                  iso,
+                  reason: "Ai două lecții în aceeași zi (în selecția ta).",
+               });
+               continue;
+            }
+
+            const used = busyMap.get(key) || 0;
+            const blocked = blockedMap.get(key) || 0;
+            const full = used + blocked >= (cap || 1);
+
+            if (full) {
+               conflicts.push({
+                  iso,
+                  reason: "Slot ocupat / blocat între timp.",
+               });
+               continue;
+            }
+
+            ok.push(iso);
+            daysInBatch.add(day);
+         }
+
+         return { ok, conflicts };
+      },
+      [fetchLiveMapsForAssigned]
+   );
+
+   const mergeRejected = (prev, next) => {
+      const map = new Map();
+      for (const x of prev || []) map.set(x.iso, x.reason || "Conflict");
+      for (const x of next || []) map.set(x.iso, x.reason || "Conflict");
+      return Array.from(map.entries()).map(([iso, reason]) => ({
+         iso,
+         reason,
+      }));
+   };
+
+   // ====== adaugă programare (UI) ======
+   const reachedPackLimit = selectedDates.length >= requiredSubmitCount;
+
+   const adaugaProgramare = () => {
       if (!data || !oraSelectata) return;
 
-      const todayLocal = localDateStr(new Date());
-      const dayLocalStr = localDateStr(data);
-      if (dayLocalStr === todayLocal) {
-         notify("warn", "Nu poți programa pentru AZI.", { force: true });
-         return;
-      }
-
-      if (bookedDaySet.has(dayLocalStr)) {
-         notify("warn", "Ai deja o programare în această zi.", { force: true });
-         return;
-      }
-
-      if (reachedMax30) {
-         notify("warn", "Ai atins limita maximă de 30 lecții!", {
-            force: true,
-         });
-         return;
-      }
-      if (reachedPackLimit) {
+      if (hardLock30 || remainingTo30 <= 0) {
          notify(
             "warn",
-            `Ai atins limita pachetului curent (${requiredSubmitCount}).`,
-            {
-               force: true,
-            }
+            `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`
          );
+         return;
+      }
+
+      if (requiredSubmitCount <= 0) {
+         notify("warn", "Nu mai ai loc pentru lecții noi.");
+         return;
+      }
+
+      if (isPastOrTodayInMoldova(data)) {
+         notify("warn", "Nu poți programa pentru azi sau în trecut.");
+         return;
+      }
+
+      const dayLocalStr = localDateStrTZ(data, MOLDOVA_TZ);
+
+      if (bookedDaySet.has(dayLocalStr)) {
+         notify("warn", "Ai deja o programare în această zi. Alege altă zi.");
+         return;
+      }
+
+      if (fullyBlockedDaySet.has(dayLocalStr)) {
+         notify("warn", "Ziua este blocată complet. Alege altă zi.");
+         return;
+      }
+
+      if (reachedPackLimit) {
+         notify("warn", `Ai atins limita curentă (${requiredSubmitCount}).`);
          return;
       }
 
       const iso = toUtcIsoFromMoldova(data, oraSelectata.oraStart);
-      const key = localKeyForIso(iso);
-      if (!freeLocalKeySet.has(key)) {
+      const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+      if (selectedKeySet.has(key)) return;
+
+      const { full, used, blocked, sum, total } = getSlotMeta(key);
+      if (full) {
          notify(
-            "error",
-            "Slot indisponibil (ocupat sau retras). Alege altă oră.",
-            {
-               force: true,
-            }
+            "warn",
+            `Ora nu mai este disponibilă: rez ${used}, bl ${blocked} (sum ${sum}/${total}).`
          );
          return;
       }
-      if (selectedLocalKeySet.has(key)) return;
 
-      setRejectedDates((prev) => prev.filter((p) => localKeyForIso(p) !== key));
-      setSelectedDates((prev) => [...prev, iso]);
+      setSelectedDates((prev) => sortIsoAsc([...prev, iso]));
       notify(
          "success",
-         `Adăugat: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`,
-         {
-            force: true,
-         }
+         `Adăugat: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`
       );
+
       setData(null);
       setOraSelectata(null);
    };
 
-   /** preflight pe CHEI LOCALE: aceeași oră, capacitate, o lecție/zi */
-   const preflightConflicts = async (datesISO) => {
-      const entityType =
-         anchor?.tip || (assignedGroupId ? "group" : "instructor");
-      const entityId =
-         anchor?.entityId || assignedGroupId || assignedInstructorId;
-      if (!entityType || !entityId) return { free: datesISO, conflicts: [] };
-
-      const allowedKeys = new Set(datesISO.map((iso) => localKeyForIso(iso)));
-      const { startBusyLocal, capacity } = await fetchBusyForEntity(
-         entityType,
-         entityId,
-         allowedKeys
-      );
-      const cap = capacity || 1;
-
-      const userBookedDaySet = new Set();
-      for (const r of rezervariExistente || []) {
-         const st = getStartFromReservation(r);
-         if (st) userBookedDaySet.add(localDateStr(new Date(st)));
-      }
-      const daysInBatch = new Set();
-
-      const conflicts = [];
-      const free = [];
-      for (const iso of datesISO) {
-         const day = localDateStr(new Date(iso));
-         const key = localKeyForIso(iso);
-         if (userBookedDaySet.has(day) || daysInBatch.has(day)) {
-            conflicts.push(iso);
-            continue;
+   // ====== Auto-complete pachet (avansat) ======
+   const autoCompletePack = useCallback(
+      async ({ alsoClearConflicts = false } = {}) => {
+         if (autoFillRunning) return;
+         if (hardLock30 || requiredSubmitCount <= 0) {
+            notify("warn", "Nu mai ai loc pentru lecții noi.");
+            return;
          }
-         const set = startBusyLocal.get(key);
-         const used = set?.has("__ALL__") ? cap : set?.size || 0;
-         if (used >= cap) conflicts.push(iso);
-         else {
-            free.push(iso);
-            daysInBatch.add(day);
-         }
-      }
-      return { free, conflicts };
-   };
 
-   const stergeProgramare = (iso) => {
-      setSelectedDates((prev) => prev.filter((p) => p !== iso));
-      setRejectedDates((prev) => prev.filter((p) => p !== iso));
+         setAutoFillRunning(true);
+         try {
+            // ne asigurăm că avem hărți actuale
+            await doLiveRefresh(true);
+
+            const need = requiredSubmitCount - selectedDates.length;
+            if (need <= 0) {
+               notify("info", "Pachetul este deja complet.");
+               return;
+            }
+
+            const daysTaken = new Set(bookedDaySet);
+            const keysTaken = new Set(selectedKeySet);
+            const tmpSelCount = new Map(selectedCountByKey);
+
+            const additions = [];
+
+            // iterăm zilele (max ~92)
+            for (
+               let d = new Date(minSelectableDate);
+               d <= maxSelectableDate;
+               d = addDays(d, 1)
+            ) {
+               const dayStr = localDateStrTZ(d, MOLDOVA_TZ);
+               if (isPastOrTodayInMoldova(d)) continue;
+               if (daysTaken.has(dayStr)) continue; // 1/zi (DB + deja selectate)
+
+               // caută primul slot disponibil în ziua curentă
+               let found = null;
+
+               for (const ora of oreDisponibile) {
+                  const key = `${dayStr}|${ora.oraStart}`;
+                  if (keysTaken.has(key)) continue;
+
+                  const usedServer = serverBusyCountByKey.get(key) || 0;
+                  const usedTmp = tmpSelCount.get(key) || 0;
+                  const blocked = serverBlockedCountByKey.get(key) || 0;
+                  const total = capacity || 1;
+
+                  if (usedServer + usedTmp + blocked >= total) continue;
+
+                  const iso = toUtcIsoFromMoldova(d, ora.oraStart);
+                  found = { iso, key, dayStr };
+                  break;
+               }
+
+               if (found) {
+                  additions.push(found.iso);
+                  daysTaken.add(found.dayStr);
+                  keysTaken.add(found.key);
+                  tmpSelCount.set(
+                     found.key,
+                     (tmpSelCount.get(found.key) || 0) + 1
+                  );
+               }
+
+               if (additions.length >= need) break;
+            }
+
+            if (!additions.length) {
+               notify(
+                  "warn",
+                  "Nu am găsit suficiente sloturi libere pentru auto-complete în interval."
+               );
+               return;
+            }
+
+            if (alsoClearConflicts) {
+               setRejected([]);
+            }
+
+            setSelectedDates((prev) => sortIsoAsc([...prev, ...additions]));
+            notify(
+               "success",
+               `Auto-complete: am adăugat ${additions.length} lecții.`
+            );
+         } catch (e) {
+            notify("error", "Auto-complete a eșuat.");
+            if (e?.message) notify("alert", `Detalii: ${e.message}`);
+         } finally {
+            setAutoFillRunning(false);
+         }
+      },
+      [
+         autoFillRunning,
+         hardLock30,
+         requiredSubmitCount,
+         selectedDates.length,
+         bookedDaySet,
+         selectedKeySet,
+         selectedCountByKey,
+         minSelectableDate,
+         maxSelectableDate,
+         doLiveRefresh,
+         serverBusyCountByKey,
+         serverBlockedCountByKey,
+         capacity,
+         notify,
+      ]
+   );
+
+   // ====== șterge ======
+   const makeKey = (iso, idx) => `${iso}__${idx}`;
+
+   const stergeSelected = (iso) => {
+      setSelectedDates((prev) => prev.filter((x) => x !== iso));
       setConfirmDeleteKey(null);
-      notify("info", `Șters: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`, {
-         force: true,
-      });
+      notify("info", `Șters: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`);
    };
 
+   const stergeRejected = (iso) => {
+      setRejected((prev) => prev.filter((x) => x.iso !== iso));
+      setConfirmDeleteKey(null);
+   };
+
+   // ====== Trimitere ======
    const trimiteProgramari = async () => {
+      if (submitGuardRef.current) return;
+      submitGuardRef.current = true;
+
       setLoading(true);
       try {
-         let latest = [];
+         if (hardLock30 || remainingTo30 <= 0) {
+            notify(
+               "warn",
+               `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți trimite.`
+            );
+            return;
+         }
+
+         if (!selectedDates.length) {
+            notify("warn", "Selectează cel puțin o lecție.");
+            return;
+         }
+
+         // refresh user reservations (live)
+         let latest = userReservations;
          if (user?.id) {
             latest = await dispatch(fetchUserReservations(user.id))
                .unwrap()
-               .catch(() => rezervariExistente || []);
+               .catch(() => rezervariExistente || userReservations || []);
          }
-         const existingCount = Array.isArray(latest)
-            ? latest.length
-            : lectiiExistente;
-         if (existingCount >= 30) {
-            setHardLock30(true);
-            notify("warn", "Ai deja 30 de lecții programate.", { force: true });
+         const latestArr = Array.isArray(latest) ? latest : [];
+         setUserReservations(latestArr);
+         setLectiiExistente(latestArr.length);
+
+         const remain = Math.max(0, MAX_TOTAL_LESSONS - latestArr.length);
+         const mustSubmitExactly = Math.min(Number(numarLectii) || 0, remain);
+
+         if (mustSubmitExactly <= 0) {
+            notify(
+               "warn",
+               `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`
+            );
+            resetPickState();
+            setStage("setup");
             return;
          }
-
-         if (selectedDates.length === 0) {
-            notify("warn", "Selectează cel puțin o lecție.", { force: true });
-            return;
-         }
-
-         const remain = Math.max(0, 30 - existingCount);
-         const mustSubmitExactly = Math.min(numarLectii, remain);
 
          if (selectedDates.length !== mustSubmitExactly) {
             notify(
                "warn",
-               `Trebuie să selectezi exact ${mustSubmitExactly} lecții înainte de trimitere.`,
-               { force: true }
+               `Trebuie să selectezi exact ${mustSubmitExactly} lecții înainte de trimitere.`
             );
             setShowList(true);
             return;
          }
 
-         const type =
-            (anchor?.tip || (assignedGroupId ? "group" : "instructor")) ===
-            "group"
-               ? "group"
-               : "instructor";
-         const chosenId =
-            anchor?.entityId ||
-            (type === "group" ? assignedGroupId : assignedInstructorId);
+         const type = assignedGroupId ? "group" : "instructor";
+         const chosenId = assignedGroupId || assignedInstructorId;
          if (!chosenId) {
-            notify("error", "Nu am o entitate selectată (grup/instructor).", {
-               force: true,
-            });
+            notify(
+               "error",
+               "Nu am entitate aleasă (grup/instructor). Reia setup."
+            );
+            resetPickState();
+            setStage("setup");
             return;
          }
 
-         const { free: preflightFree, conflicts: preflightTaken } =
-            await preflightConflicts(selectedDates);
+         // preflight live: detectează race
+         const { ok, conflicts } = await preflightSelectedLive(
+            selectedDates,
+            latestArr
+         );
 
-         if (preflightTaken.length) {
-            dropFromFreeSlots(preflightTaken);
-            setRejectedDates((prev) => uniq([...prev, ...preflightTaken]));
-            setSelectedDates(preflightFree);
+         if (conflicts.length) {
+            setRejected((prev) => mergeRejected(prev, conflicts));
+            setSelectedDates(ok);
+            setShowList(true);
+
+            // update UI maps
+            await doLiveRefresh(true);
+
+            notify(
+               "warn",
+               `Unele sloturi s-au ocupat între timp (${conflicts.length}). Șterge conflictele și alege altele (sau Auto-complete).`
+            );
+            return;
+         }
+
+         if (ok.length !== mustSubmitExactly) {
+            setSelectedDates(ok);
             setShowList(true);
             notify(
                "warn",
-               `Am scos ${preflightTaken.length} sloturi nevalide.`,
-               {
-                  force: true,
-               }
-            );
-         }
-
-         if (preflightFree.length !== mustSubmitExactly) {
-            if (preflightFree.length === 0) return;
-            notify(
-               "error",
-               `După verificare au rămas ${preflightFree.length}/${mustSubmitExactly}. Ajustează selecția și reîncearcă.`,
-               { force: true }
+               `După verificare au rămas ${ok.length}/${mustSubmitExactly}. Ajustează selecția.`
             );
             return;
          }
 
          const normalizedGearbox =
             (cutie || "").toLowerCase() === "automat" ? "Automat" : "Manual";
+
          const topLevel =
             type === "group"
                ? { instructorsGroupId: Number(chosenId) }
@@ -1244,7 +1721,7 @@ export default function SAddProg({ onClose }) {
 
          const payload = {
             ...topLevel,
-            reservations: preflightFree.map((isoDate) => ({
+            reservations: ok.map((isoDate) => ({
                startTime:
                   BUSY_KEYS_MODE === "local-match"
                      ? isoForDbMatchLocalHour(isoDate)
@@ -1252,115 +1729,123 @@ export default function SAddProg({ onClose }) {
                sector: String(sector || "Botanica"),
                gearbox: normalizedGearbox,
                privateMessage: "",
-               color: "#FF5733",
+               color: "--black-t",
             })),
          };
 
-         try {
-            notify("info", "Trimit programările...", { force: true });
-            await createReservations(payload);
-            try {
-               await dispatch(fetchUserReservations(user.id)).unwrap();
-            } catch {}
-            notify("success", `Trimis ${preflightFree.length} programări.`, {
-               force: true,
-            });
-
-            // ✅ Închide popup-ul DOAR la succes
-            safeClose();
-            return;
-         } catch (e) {
-            // Re-verificare live
-            const allowedKeys = new Set(
-               preflightFree.map((iso) => localKeyForIso(iso))
+         notify("info", "Trimit programările...");
+         const createFn =
+            ReservationsAPI?.createReservations ||
+            ReservationsAPI?.createReservationsForUser;
+         if (typeof createFn !== "function") {
+            throw new Error(
+               "createReservations nu există în reservationsService."
             );
-            const { startBusyLocal: startBusy2, capacity: cap2 } =
-               await fetchBusyForEntity(type, chosenId, allowedKeys);
+         }
 
-            const nowConflicts = [];
-            const stillOk = [];
-            for (const iso of preflightFree) {
-               if (isStartFullLocal(iso, startBusy2, cap2))
-                  nowConflicts.push(iso);
-               else stillOk.push(iso);
+         await createFn(payload);
+
+         // set desired instructor doar dacă lipsește și tipul e instructor
+         try {
+            const existingDesired =
+               user?.desiredInstructorId ?? user?.desiredInstructor?.id ?? null;
+
+            if (type === "instructor" && existingDesired == null) {
+               await UsersAPI.setDesiredInstructor(Number(chosenId));
             }
+         } catch (e) {
+            console.warn("[desired-instructor] failed:", e);
+         }
 
-            if (nowConflicts.length) {
-               dropFromFreeSlots(nowConflicts);
-               setRejectedDates((prev) => uniq([...prev, ...nowConflicts]));
+         notify("success", `Trimis ${ok.length} programări.`);
+
+         try {
+            if (user?.id) {
+               const updated = await dispatch(
+                  fetchUserReservations(user.id)
+               ).unwrap();
+               const arr = Array.isArray(updated) ? updated : [];
+               setUserReservations(arr);
+               setLectiiExistente(arr.length);
+            }
+         } catch {}
+
+         resetPickState();
+         setStage("setup");
+         setAutoFlowActive(false);
+
+         safeClose();
+      } catch (e) {
+         notify("error", "A apărut o eroare la trimitere.");
+         if (e?.message) notify("alert", `Detalii: ${e.message}`);
+
+         // fallback: încearcă să detecteze conflictele după eroare
+         try {
+            await doLiveRefresh(true);
+            const latestArr = Array.isArray(userReservations)
+               ? userReservations
+               : [];
+            const { ok, conflicts } = await preflightSelectedLive(
+               selectedDates,
+               latestArr
+            );
+
+            if (conflicts.length) {
+               setRejected((prev) => mergeRejected(prev, conflicts));
+               setSelectedDates(ok);
+               setShowList(true);
                notify(
                   "warn",
-                  `Unele sloturi s-au ocupat între timp (${nowConflicts.length}).`,
-                  { force: true }
+                  `Am detectat sloturi ocupate între timp (${conflicts.length}). Le poți șterge și înlocui (sau Auto-complete).`
                );
             }
-
-            if (stillOk.length) {
-               if (stillOk.length !== mustSubmitExactly) {
-                  notify(
-                     "warn",
-                     `Au rămas ${stillOk.length}/${mustSubmitExactly}. Ajustează și reîncearcă.`,
-                     { force: true }
-                  );
-                  setSelectedDates(stillOk);
-                  setShowList(true);
-                  return;
-               }
-
-               const retryPayload = {
-                  ...topLevel,
-                  reservations: stillOk.map((isoDate) => ({
-                     startTime:
-                        BUSY_KEYS_MODE === "local-match"
-                           ? isoForDbMatchLocalHour(isoDate)
-                           : isoDate,
-                     sector: String(sector || "Botanica"),
-                     gearbox: normalizedGearbox,
-                     privateMessage: "",
-                     color: "#FF5733",
-                  })),
-               };
-
-               await createReservations(retryPayload);
-               try {
-                  await dispatch(fetchUserReservations(user.id)).unwrap();
-               } catch {}
-               notify("success", `Trimis ${stillOk.length} programări.`, {
-                  force: true,
-               });
-
-               // ✅ Închide popup-ul DOAR la succes (și aici)
-               safeClose();
-               return;
-            }
-         }
-      } catch (e) {
-         notify("error", "A apărut o eroare la trimitere.", { force: true });
-         if (e?.message)
-            notify("alert", `Detalii: ${e.message}`, { force: true });
+         } catch {}
       } finally {
          setLoading(false);
+         submitGuardRef.current = false;
       }
    };
 
-   const maxSelectableDate = useMemo(
-      () => addDays(new Date(), WINDOW_DAYS - 1),
-      [WINDOW_DAYS]
-   );
-
-   const showLoadingScreen =
-      initLoading ||
-      (isLocked && stage === "setup" && (loading || busyLoading));
-
    const handleBack = () => {
-      if (stage === "pick" && showList) setShowList(false);
-      else if (stage === "pick") setStage("setup");
-      else safeClose(); // ✅ fallback la store dacă nu avem onClose
+      // dacă e autoFlow și ești în pick, back = close (nu revenim la setup)
+      if (stage === "pick" && autoFlowActive) {
+         if (showList) {
+            setShowList(false);
+            return;
+         }
+         safeClose();
+         return;
+      }
+
+      if (stage === "pick" && showList) {
+         setShowList(false);
+         return;
+      }
+      if (stage === "pick") {
+         resetPickState();
+         setStage("setup");
+         return;
+      }
+      safeClose();
    };
+
+   const showLoadingScreen = initLoading || loading || busyLoading;
+
+   const dayLocal = data ? localDateStrTZ(data, MOLDOVA_TZ) : null;
+   const dayIsBooked = !!(dayLocal && bookedDaySet.has(dayLocal));
+   const dayIsFullyBlocked = !!(dayLocal && fullyBlockedDaySet.has(dayLocal));
+
+   const liveRefreshLabel = useMemo(() => {
+      if (!lastLiveRefreshAt) return "never";
+      const d = new Date(lastLiveRefreshAt);
+      return d.toLocaleTimeString("ro-RO", {
+         hour: "2-digit",
+         minute: "2-digit",
+      });
+   }, [lastLiveRefreshAt]);
 
    return (
       <>
-         {/* ALERT PILLS */}
          <AlertPills messages={messages} onDismiss={dismissLast} />
 
          <div className="popup-panel__header">
@@ -1368,19 +1853,18 @@ export default function SAddProg({ onClose }) {
          </div>
 
          <div className="popup-panel__content">
-            {hardLock30 ? (
+            {showLoadingScreen ? (
+               <div className="saddprogramari__loading">Se încarcă…</div>
+            ) : hardLock30 ? (
                <div className="saddprogramari__box">
                   <div className="saddprogramari__info">
-                     <b>Ai deja 30 de lecții programate.</b> Nu mai poți adăuga
-                     alte programări.
+                     <b>Ai deja {MAX_TOTAL_LESSONS} lecții programate.</b> Nu
+                     mai poți adăuga alte programări.
                   </div>
-               </div>
-            ) : showLoadingScreen ? (
-               <div className="saddprogramari__loading">
-                  Se încarcă disponibilitatea…
                </div>
             ) : stage === "setup" ? (
                <>
+                  {/* ====== SETUP MANUAL ====== */}
                   <div className="saddprogramari__selector row">
                      <h3 className="saddprogramari__title">
                         Selectează pachetul:
@@ -1389,37 +1873,45 @@ export default function SAddProg({ onClose }) {
                         className={`instructors-popup__radio-wrapper addprog ${
                            numarLectii === 15
                               ? "active-botanica"
-                              : numarLectii === 30
-                              ? "active-ciocana"
-                              : ""
+                              : "active-ciocana"
                         }`}
                      >
-                        <label>
+                        <label
+                           htmlFor="lectii-15"
+                           style={{ cursor: "pointer" }}
+                        >
                            <input
+                              id="lectii-15"
                               type="radio"
                               name="lectii"
-                              value="15"
-                              checked={numarLectii === 15}
-                              onChange={() => setNumarLectii(15)}
-                              disabled={isLocked || lectiiExistente >= 30}
+                              value={15}
+                              checked={Number(numarLectii) === 15}
+                              onChange={(e) =>
+                                 setNumarLectii(Number(e.target.value))
+                              }
                            />
                            15 lecții
                         </label>
-                        <label>
+
+                        <label
+                           htmlFor="lectii-30"
+                           style={{ cursor: "pointer" }}
+                        >
                            <input
+                              id="lectii-30"
                               type="radio"
                               name="lectii"
-                              value="30"
-                              checked={numarLectii === 30}
-                              onChange={() => setNumarLectii(30)}
-                              disabled={isLocked || lectiiExistente > 0}
+                              value={30}
+                              checked={Number(numarLectii) === 30}
+                              onChange={(e) =>
+                                 setNumarLectii(Number(e.target.value))
+                              }
                            />
                            30 lecții
                         </label>
                      </div>
                   </div>
 
-                  {/* Cutie */}
                   <div className="saddprogramari__selector row">
                      <h3 className="saddprogramari__title">
                         Selectează cutia de viteze:
@@ -1438,7 +1930,6 @@ export default function SAddProg({ onClose }) {
                               value="manual"
                               checked={cutie === "manual"}
                               onChange={(e) => setCutie(e.target.value)}
-                              disabled={isLocked}
                            />
                            Manual
                         </label>
@@ -1449,14 +1940,12 @@ export default function SAddProg({ onClose }) {
                               value="automat"
                               checked={cutie === "automat"}
                               onChange={(e) => setCutie(e.target.value)}
-                              disabled={isLocked}
                            />
                            Automat
                         </label>
                      </div>
                   </div>
 
-                  {/* Sector */}
                   <div className="saddprogramari__selector row">
                      <h3 className="saddprogramari__title">
                         Selectează sectorul:
@@ -1475,7 +1964,6 @@ export default function SAddProg({ onClose }) {
                               value="Botanica"
                               checked={sector === "Botanica"}
                               onChange={(e) => setSector(e.target.value)}
-                              disabled={isLocked}
                            />
                            Botanica
                         </label>
@@ -1486,14 +1974,12 @@ export default function SAddProg({ onClose }) {
                               value="Ciocana"
                               checked={sector === "Ciocana"}
                               onChange={(e) => setSector(e.target.value)}
-                              disabled={isLocked}
                            />
                            Ciocana
                         </label>
                      </div>
                   </div>
 
-                  {/* Tip */}
                   <div className="saddprogramari__selector row">
                      <h3 className="saddprogramari__title">Alegere tip:</h3>
                      <div
@@ -1510,7 +1996,7 @@ export default function SAddProg({ onClose }) {
                               value="group"
                               checked={tip === "group"}
                               onChange={(e) => setTip(e.target.value)}
-                              disabled={isLocked || sector === "Ciocana"}
+                              disabled={sector === "Ciocana"}
                            />
                            Mai mulți
                         </label>
@@ -1521,7 +2007,6 @@ export default function SAddProg({ onClose }) {
                               value="single"
                               checked={tip === "single"}
                               onChange={(e) => setTip(e.target.value)}
-                              disabled={isLocked}
                            />
                            Unul
                         </label>
@@ -1529,8 +2014,8 @@ export default function SAddProg({ onClose }) {
                   </div>
 
                   <button
-                     onClick={handleClickContinue}
-                     disabled={busyLoading || loading}
+                     onClick={handleContinue}
+                     disabled={busyLoading || loading || remainingTo30 <= 0}
                      className="saddprogramari__add-btn arrow"
                      type="button"
                   >
@@ -1542,15 +2027,23 @@ export default function SAddProg({ onClose }) {
                   </button>
                </>
             ) : (
-               // ====== STAGE: PICK ======
                <>
+                  {/* ====== PICK ====== */}
+                  {/*<div
+                     className="saddprogramari__muted-note"
+                     style={{ marginBottom: 8 }}
+                  >
+                     Live refresh: <b>{liveRefreshLabel}</b>
+                  </div>*/}
+
                   {!showList ? (
                      <>
-                        <div className="saddprogramari__selector ">
+                        <div className="saddprogramari__selector">
                            <div className="saddprogramari__calendar">
                               <h3 className="saddprogramari__title">
-                                 Selectează data și ora:
+                                 Selectează data și ora (3 luni):
                               </h3>
+
                               <DatePicker
                                  selected={data}
                                  onChange={(date) => {
@@ -1564,24 +2057,34 @@ export default function SAddProg({ onClose }) {
                                        .substring(0, 2)
                                        .replace(/^./, (c) => c.toUpperCase())
                                  }
-                                 minDate={addDays(new Date(), 1)}
+                                 minDate={minSelectableDate}
                                  maxDate={maxSelectableDate}
+                                 filterDate={(date) => {
+                                    if (isPastOrTodayInMoldova(date))
+                                       return false;
+
+                                    const day = localDateStrTZ(
+                                       date,
+                                       MOLDOVA_TZ
+                                    );
+                                    if (bookedDaySet.has(day)) return false;
+                                    if (fullyBlockedDaySet.has(day))
+                                       return false;
+
+                                    return true;
+                                 }}
                                  dayClassName={(date) => {
-                                    const day = localDateStr(date);
-                                    // ✅ Nu bloca nimic până nu avem o hartă calculată (evită false-pozitive când backendul întoarce gol)
-                                    if (
-                                       !freeHoursByDay ||
-                                       freeHoursByDay.size === 0
-                                    )
-                                       return "";
+                                    const day = localDateStrTZ(
+                                       date,
+                                       MOLDOVA_TZ
+                                    );
+                                    if (isPastOrTodayInMoldova(date))
+                                       return "saddprogramari__day--inactive";
                                     if (bookedDaySet.has(day))
                                        return "saddprogramari__day--inactive";
-                                    // 🔒 blochează ziua doar dacă TOATE orele sunt la capacitate
-                                    if (dayFullyBlocked.has(day))
+                                    if (fullyBlockedDaySet.has(day))
                                        return "saddprogramari__day--inactive";
-                                    return freeByDay.has(day)
-                                       ? ""
-                                       : "saddprogramari__day--inactive";
+                                    return "";
                                  }}
                               />
                            </div>
@@ -1590,29 +2093,74 @@ export default function SAddProg({ onClose }) {
                               <h3 className="saddprogramari__title">
                                  Selectează:
                               </h3>
+
                               <div className="saddprogramari__times-list">
                                  {!data && (
                                     <div className="saddprogramari__disclaimer">
                                        Te rog să selectezi mai întâi o zi!
                                     </div>
                                  )}
+
+                                 {data && dayIsBooked && (
+                                    <div className="saddprogramari__disclaimer">
+                                       Ai deja o programare în această zi. Alege
+                                       altă zi.
+                                    </div>
+                                 )}
+
+                                 {data && dayIsFullyBlocked && (
+                                    <div className="saddprogramari__disclaimer">
+                                       Ziua este blocată complet. Alege altă zi.
+                                    </div>
+                                 )}
+
                                  {oreDisponibile.map((ora) => {
-                                    const disabledDay = data
-                                       ? bookedDaySet.has(dayLocal)
-                                       : false;
-                                    const isFree = data
-                                       ? freeTimesForDay.has(ora.oraStart)
-                                       : false;
-                                    const alreadyPicked = data
-                                       ? selectedTimesForDay.has(ora.oraStart)
+                                    const key =
+                                       data && dayLocal
+                                          ? `${dayLocal}|${ora.oraStart}`
+                                          : null;
+
+                                    const { used, blocked, total, full, sum } =
+                                       key
+                                          ? getSlotMeta(key)
+                                          : {
+                                               used: 0,
+                                               blocked: 0,
+                                               total: capacity || 1,
+                                               full: false,
+                                               sum: 0,
+                                            };
+
+                                    const alreadyPicked = key
+                                       ? selectedKeySet.has(key)
                                        : false;
                                     const isSelected =
                                        oraSelectata?.eticheta === ora.eticheta;
+
                                     const disabled =
                                        !data ||
-                                       disabledDay ||
-                                       !isFree ||
-                                       alreadyPicked;
+                                       dayIsBooked ||
+                                       dayIsFullyBlocked ||
+                                       reachedPackLimit ||
+                                       alreadyPicked ||
+                                       full;
+
+                                    let title = "";
+                                    if (!data)
+                                       title = "Selectează o zi mai întâi";
+                                    else if (dayIsBooked)
+                                       title =
+                                          "Ai deja o programare în această zi";
+                                    else if (dayIsFullyBlocked)
+                                       title = "Zi blocată complet";
+                                    else if (alreadyPicked)
+                                       title = "Deja adăugat";
+                                    else if (full)
+                                       title = `Indisponibil: rez ${used}, bl ${blocked} (sum ${sum}/${total})`;
+                                    else if (reachedPackLimit)
+                                       title = `Ai atins limita (${requiredSubmitCount}).`;
+                                    else
+                                       title = `Disponibil: rez ${used}, bl ${blocked} (sum ${sum}/${total})`;
 
                                     return (
                                        <button
@@ -1628,15 +2176,7 @@ export default function SAddProg({ onClose }) {
                                                 ? "saddprogramari__time-btn--disabled"
                                                 : ""
                                           }`}
-                                          title={
-                                             disabledDay
-                                                ? "Ai deja o programare în această zi"
-                                                : alreadyPicked
-                                                ? "Deja adăugat"
-                                                : !isFree
-                                                ? "Ocupat / indisponibil"
-                                                : ""
-                                          }
+                                          title={title}
                                        >
                                           {ora.eticheta}
                                        </button>
@@ -1645,13 +2185,16 @@ export default function SAddProg({ onClose }) {
                               </div>
                            </div>
                         </div>
+
                         <div className="saddprogramari__add-btns">
                            <button
                               onClick={adaugaProgramare}
                               disabled={
                                  !data ||
                                  !oraSelectata ||
-                                 selectedDates.length >= requiredSubmitCount
+                                 reachedPackLimit ||
+                                 dayIsBooked ||
+                                 dayIsFullyBlocked
                               }
                               className="saddprogramari__add-btn"
                               type="button"
@@ -1669,13 +2212,31 @@ export default function SAddProg({ onClose }) {
                               onClick={() => setShowList(true)}
                               disabled={
                                  selectedDates.length === 0 &&
-                                 rejectedDates.length === 0
+                                 rejected.length === 0
                               }
                               title="Vezi lista"
                            >
                               <span>
-                                 Vezi lista (
-                                 {selectedDates.length + rejectedDates.length})
+                                 Lista ({selectedDates.length + rejected.length}
+                                 )
+                              </span>
+                           </button>
+
+                           <button
+                              type="button"
+                              className="saddprogramari__add-btn list"
+                              onClick={() =>
+                                 autoCompletePack({ alsoClearConflicts: false })
+                              }
+                              disabled={
+                                 autoFillRunning ||
+                                 requiredSubmitCount <= 0 ||
+                                 reachedPackLimit
+                              }
+                              title="Completează automat restul lecțiilor disponibile"
+                           >
+                              <span>
+                                 {autoFillRunning ? "Auto..." : "Auto"}
                               </span>
                            </button>
                         </div>
@@ -1687,32 +2248,52 @@ export default function SAddProg({ onClose }) {
                               <h3 className="saddprogramari__title saddprogramari__title--mt-12">
                                  Lecții selectate: {selectedDates.length} /{" "}
                                  {requiredSubmitCount}
-                                 {rejectedDates.length > 0 && (
+                                 {rejected.length > 0 && (
                                     <span className="saddprogramari__muted-note">
                                        {" "}
-                                       · conflicte: {rejectedDates.length}
+                                       · conflicte: {rejected.length}
                                     </span>
                                  )}
                               </h3>
-                              <button
-                                 type="button"
-                                 className="saddprogramari__ghost-btn"
-                                 onClick={() => setShowList(false)}
-                                 title="Înapoi la selecție"
-                              >
-                                 Înapoi la selecție
-                              </button>
+
+                              <div style={{ display: "flex", gap: 8 }}>
+                                 <button
+                                    type="button"
+                                    className="saddprogramari__ghost-btn"
+                                    onClick={() => setShowList(false)}
+                                    title="Înapoi la selecție"
+                                 >
+                                    Înapoi la selecție
+                                 </button>
+
+                                 <button
+                                    type="button"
+                                    className="saddprogramari__ghost-btn"
+                                    onClick={() =>
+                                       autoCompletePack({
+                                          alsoClearConflicts: true,
+                                       })
+                                    }
+                                    disabled={
+                                       autoFillRunning ||
+                                       requiredSubmitCount <= 0
+                                    }
+                                    title="Șterge conflictele și completează automat"
+                                 >
+                                    {autoFillRunning ? "Auto..." : "Auto-fix"}
+                                 </button>
+                              </div>
                            </div>
 
                            <div className="saddprogramari__added">
-                              {selectedDates.length + rejectedDates.length ===
-                              0 ? (
+                              {selectedDates.length + rejected.length === 0 ? (
                                  <div className="saddprogramari__disclaimer">
                                     Nu ai selectat încă nicio lecție.
                                  </div>
                               ) : (
                                  <ul className="saddprogramari__added-list">
-                                    {rejectedDates.map((iso, i) => {
+                                    {rejected.map((x, i) => {
+                                       const iso = x.iso;
                                        const key = makeKey(iso, i);
                                        const isConfirming =
                                           confirmDeleteKey === key;
@@ -1740,6 +2321,9 @@ export default function SAddProg({ onClose }) {
                                                          {formatTimeRO(iso)}
                                                       </span>
                                                    </div>
+                                                   <div className="saddprogramari__muted-note">
+                                                      {x.reason || "Conflict"}
+                                                   </div>
 
                                                    <ReactSVG
                                                       onClick={() =>
@@ -1747,21 +2331,10 @@ export default function SAddProg({ onClose }) {
                                                             key
                                                          )
                                                       }
-                                                      onKeyDown={(e) => {
-                                                         if (
-                                                            e.key === "Enter" ||
-                                                            e.key === " "
-                                                         ) {
-                                                            e.preventDefault();
-                                                            setConfirmDeleteKey(
-                                                               key
-                                                            );
-                                                         }
-                                                      }}
                                                       role="button"
                                                       tabIndex={0}
                                                       focusable="true"
-                                                      aria-label="Șterge programarea"
+                                                      aria-label="Șterge conflictul"
                                                       src={trashIcon}
                                                       className="saddprogramari__add-btn-icon delete"
                                                    />
@@ -1771,18 +2344,9 @@ export default function SAddProg({ onClose }) {
                                                    <button
                                                       type="button"
                                                       className="btn btn-danger"
-                                                      onClick={() => {
-                                                         setRejectedDates(
-                                                            (prev) =>
-                                                               prev.filter(
-                                                                  (p) =>
-                                                                     p !== iso
-                                                               )
-                                                         );
-                                                         setConfirmDeleteKey(
-                                                            null
-                                                         );
-                                                      }}
+                                                      onClick={() =>
+                                                         stergeRejected(iso)
+                                                      }
                                                    >
                                                       Șterge
                                                    </button>
@@ -1838,17 +2402,6 @@ export default function SAddProg({ onClose }) {
                                                             key
                                                          )
                                                       }
-                                                      onKeyDown={(e) => {
-                                                         if (
-                                                            e.key === "Enter" ||
-                                                            e.key === " "
-                                                         ) {
-                                                            e.preventDefault();
-                                                            setConfirmDeleteKey(
-                                                               key
-                                                            );
-                                                         }
-                                                      }}
                                                       role="button"
                                                       tabIndex={0}
                                                       focusable="true"
@@ -1863,7 +2416,7 @@ export default function SAddProg({ onClose }) {
                                                       type="button"
                                                       className="btn btn-danger"
                                                       onClick={() =>
-                                                         stergeProgramare(iso)
+                                                         stergeSelected(iso)
                                                       }
                                                    >
                                                       Șterge
@@ -1891,7 +2444,6 @@ export default function SAddProg({ onClose }) {
                      </>
                   )}
 
-                  {/* acțiuni comune etapei 2 */}
                   <div className="saddprogramari__add-btns">
                      <button
                         onClick={handleBack}
@@ -1904,11 +2456,13 @@ export default function SAddProg({ onClose }) {
                         />
                         <span>Înapoi</span>
                      </button>
+
                      <button
                         onClick={trimiteProgramari}
                         disabled={
                            selectedDates.length !== requiredSubmitCount ||
-                           loading
+                           loading ||
+                           requiredSubmitCount <= 0
                         }
                         className="saddprogramari__add-btn arrow"
                         type="button"
@@ -1916,7 +2470,7 @@ export default function SAddProg({ onClose }) {
                         <span>
                            {loading
                               ? "Se trimit..."
-                              : `Trimite ${selectedDates.length} programări`}
+                              : `Trimite ${selectedDates.length} prog.`}
                         </span>
                         <ReactSVG
                            src={arrowIcon}

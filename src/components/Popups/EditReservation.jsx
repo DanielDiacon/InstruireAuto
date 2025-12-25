@@ -60,6 +60,7 @@ function localDateStrTZ(date, tz = MOLDOVA_TZ) {
    const year = parts.find((p) => p.type === "year")?.value ?? "1970";
    return `${year}-${month}-${day}`;
 }
+
 function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
    const fmt = new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -81,6 +82,7 @@ function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
    const asUTC = Date.UTC(y, m - 1, d, H, M, S);
    return (asUTC - tsMs) / 60000;
 }
+
 function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
    const [hh, mm] = (timeStrHHMM || "00:00").split(":").map(Number);
    const utcGuess = Date.UTC(
@@ -96,6 +98,7 @@ function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
    const fixedUtcMs = utcGuess - offMin * 60000;
    return new Date(fixedUtcMs).toISOString();
 }
+
 function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    const base = new Date(isoUtcFromMoldova);
    const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
@@ -125,6 +128,7 @@ function isoForDbMatchLocalHour(isoUtcFromMoldova) {
 
    return `${Y}-${Mo}-${Da}T${HH}:${MM}:00${sign}${offHH}:${offMM}`;
 }
+
 function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
    const fmt = new Intl.DateTimeFormat("en-GB", {
       timeZone: tz,
@@ -143,10 +147,12 @@ function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
    const MM = parts.find((p) => p.type === "minute").value;
    return `${Y}-${Mo}-${Da}|${HH}:${MM}`;
 }
+
 const localKeyForIso = (iso) =>
    localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
 const localKeyForDateAndTime = (localDateObj, hhmm) =>
    `${localDateStrTZ(localDateObj, MOLDOVA_TZ)}|${hhmm}`;
+
 function busyLocalKeyFromStored(st) {
    const d = new Date(st);
    if (BUSY_KEYS_MODE === "local-match") {
@@ -156,6 +162,7 @@ function busyLocalKeyFromStored(st) {
    }
    return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
 }
+
 const nowHHMMInMoldova = () =>
    new Intl.DateTimeFormat("en-GB", {
       timeZone: MOLDOVA_TZ,
@@ -235,11 +242,6 @@ const fmtDateTimeRO = (iso) =>
    });
 
 const localDateStr = (d) => localDateStrTZ(d, MOLDOVA_TZ);
-const todayAt00 = () => {
-   const t = new Date();
-   t.setHours(0, 0, 0, 0);
-   return t;
-};
 
 const getStartFromReservation = (r) =>
    r?.startTime ??
@@ -250,19 +252,13 @@ const getStartFromReservation = (r) =>
    r?.date ??
    r?.begin ??
    null;
+
 const getDurationMin = (r) =>
    r?.durationMinutes ??
    r?.slotMinutes ??
    r?.lengthMinutes ??
    r?.duration ??
    SLOT_MINUTES;
-const getEndFromReservation = (r) => {
-   const st = getStartFromReservation(r);
-   if (!st) return null;
-   const start = new Date(st);
-   const end = new Date(start.getTime() + getDurationMin(r) * 60000);
-   return end.toISOString();
-};
 
 const localDateObjFromStr = (s) => {
    const [y, m, d] = s.split("-").map(Number);
@@ -490,6 +486,112 @@ const iconFor = (status) => {
 
 export default function ReservationEditPopup({ reservationId, onClose }) {
    const dispatch = useDispatch();
+   const rootRef = useRef(null);
+
+   const leftOnceRef = useRef(false);
+
+   // ✅ FIX: guard anti-close dublu + armare click-away după open
+   const closingRef = useRef(false);
+   const openArmedRef = useRef(false);
+
+   // ✅ pentru hydratare
+   const didHydrate = useRef(false);
+
+   // ✅ reset “one-shot” când se schimbă rezervarea (în caz de reuse fără unmount complet)
+   useEffect(() => {
+      closingRef.current = false;
+      openArmedRef.current = false;
+      didHydrate.current = false;
+      leftOnceRef.current = false;
+   }, [reservationId]);
+
+   const joinReservation = useCallback(() => {
+      const rid = String(reservationId ?? "").trim();
+      if (!rid) return;
+      const ws = typeof window !== "undefined" ? window.__reservationWS : null;
+      ws?.joinReservation?.(rid);
+   }, [reservationId]);
+
+   const leaveReservation = useCallback(() => {
+      if (leftOnceRef.current) return;
+      leftOnceRef.current = true;
+
+      const rid = String(reservationId ?? "").trim();
+      if (!rid) return;
+      const ws = typeof window !== "undefined" ? window.__reservationWS : null;
+      ws?.leaveReservation?.(rid);
+   }, [reservationId]);
+
+   // ✅ intri în edit => JOIN; ieși/unmount => LEAVE (garantat)
+   useEffect(() => {
+      leftOnceRef.current = false;
+      joinReservation();
+      return () => {
+         leaveReservation();
+      };
+   }, [joinReservation, leaveReservation]);
+
+   const closeSelf = useCallback(() => {
+      if (closingRef.current) return; // ✅ nu mai închide de 2 ori
+      closingRef.current = true;
+
+      leaveReservation(); // ✅ instant + broadcast + redraw
+
+      if (typeof onClose === "function") return onClose();
+
+      try {
+         closeSubPopupStore();
+      } catch {}
+      try {
+         closePopupStore();
+      } catch {}
+   }, [onClose, leaveReservation]);
+
+   // ✅ FIX: click-away armat după 2 frame-uri, ca să nu prindă click-ul care a deschis popup-ul
+   useEffect(() => {
+      let raf1 = 0;
+      let raf2 = 0;
+
+      raf1 = requestAnimationFrame(() => {
+         raf2 = requestAnimationFrame(() => {
+            openArmedRef.current = true;
+         });
+      });
+
+      const isInside = (e) => {
+         const root = rootRef.current;
+         if (!root) return false;
+
+         const path =
+            typeof e.composedPath === "function" ? e.composedPath() : null;
+         if (path && path.includes(root)) return true;
+
+         const target = e.target;
+         return target instanceof Node ? root.contains(target) : false;
+      };
+
+      const onPointerDown = (e) => {
+         if (!openArmedRef.current) return;
+         if (typeof e.button === "number" && e.button !== 0) return;
+
+         if (isInside(e)) return; // click în interior -> nu închidem
+         closeSelf();
+      };
+
+      const onKeyDown = (e) => {
+         if (e.key === "Escape") closeSelf();
+      };
+
+      document.addEventListener("pointerdown", onPointerDown, true);
+      document.addEventListener("keydown", onKeyDown, true);
+
+      return () => {
+         cancelAnimationFrame(raf1);
+         cancelAnimationFrame(raf2);
+         document.removeEventListener("pointerdown", onPointerDown, true);
+         document.removeEventListener("keydown", onKeyDown, true);
+      };
+   }, [closeSelf]);
 
    const [alerts, setAlerts] = useState([]);
    const pushAlert = (type, text) =>
@@ -528,18 +630,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       }
    };
 
-   const closeSelf = useCallback(() => {
-      if (typeof onClose === "function") {
-         return onClose();
-      }
-      try {
-         closeSubPopupStore();
-      } catch {}
-      try {
-         closePopupStore();
-      } catch {}
-   }, [onClose]);
-
    const reservations = useSelector((s) => s.reservations?.list || []);
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
@@ -570,8 +660,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       () => (studentsAll || []).filter(hasUserRole),
       [studentsAll]
    );
-
-   const didHydrate = useRef(false);
 
    const [selectedDate, setSelectedDate] = useState(() => {
       const d = new Date();
@@ -608,6 +696,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       const lk = existing.startTime
          ? busyLocalKeyFromStored(existing.startTime)
          : localKeyFromTs(Date.now(), MOLDOVA_TZ);
+
       const [dayStr, hhmm] = lk.split("|");
       setSelectedDate(localDateObjFromStr(dayStr));
       setSelectedTime(oreDisponibile.find((o) => o.oraStart === hhmm) || null);
@@ -802,9 +891,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       try {
          await (dispatch(removeReservation(existing.id)).unwrap?.() ??
             dispatch(removeReservation(existing.id)));
-      } catch (e) {
-         // opțional alertă
-      }
+      } catch (e) {}
    };
 
    const onSave = async () => {
@@ -946,15 +1033,17 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             : {}),
       };
 
-      const focusPayload =
-         changingTime && selectedIsoForBackend
-            ? {
-                 type: "focus-reservation",
-                 reservationId: existing.id,
-                 newStartTime: selectedIsoForBackend,
-                 forceReload: false,
-              }
-            : null;
+      // ✅ Trimitem focus-reservation mereu după Save
+      const focusPayload = {
+         type: "focus-reservation",
+         reservationId: existing.id,
+         newStartTime: changingTime
+            ? selectedIsoForBackend
+            : existing?.startTime
+            ? String(existing.startTime)
+            : null,
+         forceReload: false,
+      };
 
       closeSelf();
 
@@ -964,12 +1053,8 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          ).unwrap?.() ??
             dispatch(updateReservation({ id: existing.id, data: payload })));
 
-         if (focusPayload) {
-            triggerCalendarRefresh(focusPayload);
-         }
-      } catch (e) {
-         // opțional alertă
-      }
+         triggerCalendarRefresh(focusPayload);
+      } catch (e) {}
    };
 
    const [historyLoading, setHistoryLoading] = useState(false);
@@ -1011,6 +1096,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             h.createdAt ||
             h.updatedAt ||
             existing?.startTime;
+
          const resolvers = makeResolvers(studentsAll, instructors, h);
          const changes = buildChangesFromHistoryItem(h, resolvers);
          const who = h.changedByUser
@@ -1032,8 +1118,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          };
       });
    }, [historyItems, studentsAll, instructors, existing, reservationId]);
-
-   /* ===================== RENDER HELPERS ===================== */
 
    if (!existing) {
       return (
@@ -1057,6 +1141,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       if (existingDayKey && key === existingDayKey) return true;
       return true;
    };
+
    const renderHistoryList = () => (
       <div className="popupui__history">
          <div className="popupui__history-header">
@@ -1257,9 +1342,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
       return (
          <>
-            {/* Calendar + Ore */}
             <div className="popupui__selector">
-               {/* Calendar */}
                <div className="popupui__field popupui__field--calendar">
                   <h3 className="popupui__field-label">Selectează data:</h3>
                   <DatePicker
@@ -1292,7 +1375,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                   />
                </div>
 
-               {/* Ore */}
                <div className="popupui__field popupui__field--times">
                   <h3 className="popupui__field-label">Selectează ora:</h3>
                   <div className="popupui__times-list">
@@ -1317,7 +1399,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                         const isTodayLocal =
                            selectedDate &&
                            localDateStr(selectedDate) === nowDayLocal;
-
                         const pastToday =
                            isTodayLocal && ora.oraStart <= nowHHMM;
 
@@ -1367,7 +1448,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                </div>
             </div>
 
-            {/* Elev + Instructor */}
             <div className="popupui__form-row popupui__form-row--spaced">
                <div className="popupui__field popupui__field--clickable">
                   <span className="popupui__field-label">Elev</span>
@@ -1447,7 +1527,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                </div>
             </div>
 
-            {/* Sector + Cutie */}
             <div className="popupui__form-row popupui__form-row--compact">
                <div className="popupui__field popupui__field--clickable popupui__field--grow-1">
                   <span className="popupui__field-label">Sector</span>
@@ -1478,7 +1557,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                </div>
             </div>
 
-            {/* Notiță + Tichete */}
             <div className="popupui__form-row popupui__form-row--gap">
                <div className="popupui__field ">
                   <span className="popupui__field-label">Notiță</span>
@@ -1564,7 +1642,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                </div>
             </div>
 
-            {/* Culoare */}
             <div className="popupui__field popupui__field--stacked">
                <span className="popupui__field-label">Culoare</span>
 
@@ -1612,7 +1689,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                )}
             </div>
 
-            {/* Butoane footer */}
             <div className="popupui__btns popupui__btns--bottom">
                <button
                   className="popupui__btn popupui__btn--edit"
@@ -1642,7 +1718,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    };
 
    return (
-      <>
+      <div ref={rootRef} style={{ display: "contents" }}>
          <div className="popup-panel__header">
             <h3 className="popup-panel__title">Editează rezervarea</h3>
          </div>
@@ -1658,6 +1734,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          </div>
 
          <AlertPills messages={alerts} onDismiss={popAlert} />
-      </>
+      </div>
    );
 }

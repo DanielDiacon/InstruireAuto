@@ -23,6 +23,7 @@ function APInstrGroups() {
       { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
+      { popup: "addProfessor", text: "Profesori", icon: instrIcon },
       { popup: "addManager", text: "Manageri", icon: managerIcon },
       { link: "/admin/groups", text: "Grupe", icon: groupsIcon },
       {
@@ -32,7 +33,7 @@ function APInstrGroups() {
       },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
       { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
-      { popup: "profile", text: "Profil", icon: accIcon },
+      //{ popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    return (

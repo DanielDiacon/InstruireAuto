@@ -20,12 +20,9 @@ import EventInfoPopup from "../Popups/EventInfo";
 import InstrEventInfoPopup from "../Popups/InstrEventInfo";
 import AddManager from "../Popups/AddManager";
 import StudentsMultiSelectPopup from "../Popups/StudentsMultiSelectPopup";
-
-// 🔹 noul popup pentru creare rezervare în pas unic
 import CreateRezervation from "../Popups/CreateRezervation";
-
-// ✅ NOU: popup pentru categorii întrebări
 import QuestionCategoriesPopup from "../Popups/QuestionCategories";
+import AddProfessor from "../Popups/AddProfessor";
 
 export default function Popup() {
    const [popupState, setPopupState] = useState({
@@ -189,6 +186,8 @@ export default function Popup() {
             return <InstrEventInfoPopup key={openKey} {...popupState.props} />;
          case "addManager":
             return <AddManager key={openKey} {...popupState.props} />;
+         case "addProfessor":
+            return <AddProfessor key={openKey} {...popupState.props} />;
          case "startExam":
             return (
                <StudentsMultiSelectPopup key={openKey} {...popupState.props} />
@@ -222,7 +221,14 @@ export default function Popup() {
 
    return (
       <>
-         <div className="popup-panel__overlay" onClick={handleCloseClick} />
+         <div
+            className="popup-panel__overlay"
+            onPointerDown={(e) => {
+               // doar click stânga (mouse); pe touch nu există button
+               if (typeof e.button === "number" && e.button !== 0) return;
+               handleCloseClick();
+            }}
+         />
          <div
             className={`popup-panel ${exiting ? "popup-exit" : ""}`}
             ref={panelRef}

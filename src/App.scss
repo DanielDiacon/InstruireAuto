@@ -7,8 +7,11 @@
    font-style: normal;
    font-display: swap;
 }
+@import url("https://fonts.googleapis.com/css2?family=Google+Sans:ital,opsz,wght@0,17..18,400..700;1,17..18,400..700&display=swap");
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght,XOPQ,XTRA,YOPQ,YTDE,YTFI,YTLC,YTUC@8..144,100..1000,96,468,79,-203,738,514,712&display=swap');
 
 $fontFamily: "Lexend", sans-serif;
+//$fontFamily: "Google Sans", sans-serif;
 $fontSize: 14;
 
 // colors palette
@@ -64,6 +67,8 @@ $fontSize: 14;
 
    --black-p: #f2f4ef;
    --black-s: #e6e9e3;
+   //--black-p: #FFF7FF;
+   //--black-s: #E1E0F9;
    --black-t: #eaebe6;
    --white-p: hsl(0, 0%, 10%);
    --white-s: hsl(0, 0%, 8%);

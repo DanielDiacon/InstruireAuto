@@ -26,12 +26,14 @@ import {
    deleteInstructorBlackout,
 } from "../../api/instructorsService";
 
+import {
+   closePopup as closePopupStore,
+   closeSubPopup as closeSubPopupStore,
+} from "../Utils/popupStore";
+
 const GROUP_TOKEN_FIXED = "ABCD1234";
 const EMAIL_DOMAIN = "instrauto.com";
 const MOLDOVA_TZ = "Europe/Chisinau";
-
-const SECTOR_ORDER = ["Botanica", "Ciocana", "Buiucani"];
-const GEARBOX_ORDER = ["Manual", "Automat"];
 
 const slugify = (s) =>
    (s || "")
@@ -83,11 +85,6 @@ function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
       M: get("minute"),
       S: get("second"),
    };
-}
-
-function ymdStrInTZ(dateLike, timeZone = MOLDOVA_TZ) {
-   const { y, m, d } = partsInTZ(dateLike, timeZone);
-   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
 function hhmmInTZ(dateLike, timeZone = MOLDOVA_TZ) {
@@ -163,12 +160,21 @@ function splitFullName(full = "") {
    return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
 }
 
+function escapeRegExp(s) {
+   return (s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function highlightText(text, query) {
    if (!text) return "";
    if (!query) return text;
-   const parts = text.toString().split(new RegExp(`(${query})`, "gi"));
+
+   const safe = escapeRegExp(query);
+   if (!safe) return text;
+
+   const parts = text.toString().split(new RegExp(`(${safe})`, "gi"));
+   const qLower = (query || "").toLowerCase();
    return parts.map((part, i) =>
-      part.toLowerCase() === (query || "").toLowerCase() ? (
+      part.toLowerCase() === qLower ? (
          <i key={i} className="highlight">
             {part}
          </i>
@@ -195,41 +201,53 @@ function getBlackoutDT(b) {
    if (!b) return null;
    if (typeof b === "string") return b;
    const t = String(b.type || b.Type || "").toUpperCase();
-   if (t === "REPEAT") {
+   if (t === "REPEAT")
       return b.startDateTime || b.dateTime || b.datetime || null;
-   }
    return b.dateTime || b.datetime || b.startTime || b.date || b.begin || null;
 }
 
 /** compară dacă două momente au aceeași zi + minut în MOLDOVA_TZ */
 function sameLocalSlot(aIso, bIso, tz = MOLDOVA_TZ) {
    if (!aIso || !bIso) return false;
-   return (
-      ymdStrInTZ(aIso, tz) === ymdStrInTZ(bIso, tz) &&
-      hhmmInTZ(aIso, tz) === hhmmInTZ(bIso, tz)
-   );
+
+   const aYmd = (() => {
+      const { y, m, d } = partsInTZ(aIso, tz);
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+   })();
+
+   const bYmd = (() => {
+      const { y, m, d } = partsInTZ(bIso, tz);
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+   })();
+
+   return aYmd === bYmd && hhmmInTZ(aIso, tz) === hhmmInTZ(bIso, tz);
 }
 
 export default function CreateRezervation({
-   // info venită din parent (canvas / alt popup)
-   initialStartTime, // ISO sau Date
-   initialDate, // opțional, dacă vreți separat
-   initialTime, // opțional, HH:mm
+   initialStartTime,
+   initialDate,
+   initialTime,
    initialStudentId,
    initialInstructorId,
    initialSector = "Botanica",
    initialGearbox = "Manual",
 
-   // fallback vechi
    start,
    end,
    instructorId: instructorIdFromPayload,
    sector: sectorFromPayload,
    gearbox: gearboxFromPayload,
 
+   draftSlotKey, // ✅ ADD ASTA
+
    onClose,
 }) {
    const dispatch = useDispatch();
+   const rootRef = useRef(null);
+
+   // ✅ FIX: guard + armare click-away
+   const closingRef = useRef(false);
+   const openArmedRef = useRef(false);
 
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
@@ -255,14 +273,17 @@ export default function CreateRezervation({
 
    // Pills
    const [messages, setMessages] = useState([]);
-   const pushPill = (text, type = "error") =>
+   const pushPill = useCallback((text, type = "error") => {
       setMessages((prev) => [
          ...prev,
          { id: Date.now() + Math.random(), text, type },
       ]);
-   const popPill = () => setMessages((prev) => prev.slice(0, -1));
+   }, []);
+   const popPill = useCallback(() => {
+      setMessages((prev) => prev.slice(0, -1));
+   }, []);
 
-   const [view, setView] = useState("formSelect"); // formSelect | searchStudent | searchInstructor
+   const [view, setView] = useState("formSelect");
 
    // derive inițiale
    const effectiveStartISO =
@@ -280,8 +301,8 @@ export default function CreateRezervation({
          : "Manual";
 
    // Select state
-   const [sector] = useState(effectiveSector); // nu mai permitem toggle
-   const [gearbox] = useState(effectiveGearbox); // nu mai permitem toggle
+   const [sector] = useState(effectiveSector);
+   const [gearbox] = useState(effectiveGearbox);
    const [studentId, setStudentId] = useState(
       initialStudentId != null ? String(initialStudentId) : ""
    );
@@ -319,11 +340,11 @@ export default function CreateRezervation({
    const [checkingBlackout, setCheckingBlackout] = useState(false);
    const [blocking, setBlocking] = useState(false);
 
+   // ✅ încărcări inițiale (nu spammează: check + deps corecte)
    useEffect(() => {
       if (!studentsAll?.length) dispatch(fetchStudents());
       if (!instructors?.length) dispatch(fetchInstructors());
-      // nu mai calculăm disponibilități aici
-   }, [dispatch]); // eslint-disable-line
+   }, [dispatch, studentsAll?.length, instructors?.length]);
 
    const selectedStudent = useMemo(
       () =>
@@ -400,27 +421,245 @@ export default function CreateRezervation({
       "";
    const instructorPhone = selectedInstructor?.phone || "";
 
-   const autoSelectSingleStudent = (
-      list,
-      msg = "Elev selectat după căutare."
-   ) => {
-      if (!list || list.length !== 1) return false;
-      const s = list[0];
-      if (!s?.id) return false;
+   /* =========================
+   ✅ CREATE-DRAFT join/leave (SINGLE SOURCE OF TRUTH)
+   - cheia vine din calendar: draftSlotKey = "<instId>|<suffix>"
+   - păstrăm <suffix> IDENTIC; schimbăm doar instId dacă user îl schimbă în popup
+========================= */
 
-      const idStr = String(s.id);
-      setStudentId(idStr);
-      setNewFullName("");
-      setPhoneFull("");
-      setQStudent("");
-      setHighlightedStudentId(null);
-      setView("formSelect");
+   const wsRef = useRef(null);
+   useEffect(() => {
+      wsRef.current =
+         typeof window !== "undefined" ? window.__reservationWS : null;
+   }, []);
 
-      if (msg) {
-         pushPill(msg, "info");
+   const draftSuffix = useMemo(() => {
+      const raw = String(draftSlotKey || "").trim();
+      if (raw.includes("|")) {
+         // păstrăm tot după primul "|", EXACT cum a venit
+         return raw.split("|").slice(1).join("|").trim();
       }
-      return true;
-   };
+
+      // fallback (doar dacă NU ai draftSlotKey din calendar)
+      // IMPORTANT: folosește același “start” pe care îl folosește calendarul tău când construiește draftSlotKey.
+      if (effectiveStartISO) {
+         const d = new Date(effectiveStartISO);
+         return Number.isFinite(d.getTime()) ? d.toISOString() : "";
+      }
+      if (selectedDate && selectedTime?.oraStart) {
+         // aici e tot fallback; ideal NU ajungi aici dacă trimiți draftSlotKey din calendar
+         return toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
+      }
+      return "";
+   }, [draftSlotKey, effectiveStartISO, selectedDate, selectedTime]);
+
+   const draftRoomKey = useMemo(() => {
+      const inst = String(instructorId || "").trim();
+      const suf = String(draftSuffix || "").trim();
+      if (!inst || !suf) return "";
+      return `${inst}|${suf}`;
+   }, [instructorId, draftSuffix]);
+
+   const activeKeyRef = useRef("");
+   useEffect(() => {
+      activeKeyRef.current = draftRoomKey;
+   }, [draftRoomKey]);
+
+   const leftRef = useRef(new Set());
+
+   const getWS = () =>
+      (typeof window !== "undefined" ? window.__reservationWS : null) ||
+      wsRef.current;
+   const buildDraftPayload = useCallback(
+      (key) => {
+         if (!key) return null;
+
+         const instId = Number(instructorId);
+         if (!Number.isFinite(instId) || instId <= 0) return null;
+
+         const startIso =
+            effectiveStartISO ||
+            (selectedDate && selectedTime?.oraStart
+               ? toUtcIsoFromLocal(selectedDate, selectedTime.oraStart)
+               : null);
+
+         if (!startIso) return null;
+
+         return {
+            draftKey: key,
+            instructorId: instId,
+            reservations: [
+               {
+                  startTime: startIso,
+                  sector,
+                  gearbox,
+               },
+            ],
+         };
+      },
+      [
+         instructorId,
+         effectiveStartISO,
+         selectedDate,
+         selectedTime,
+         sector,
+         gearbox,
+      ]
+   );
+
+   const joinDraft = useCallback(
+      (key) => {
+         if (!key) return;
+         leftRef.current.delete(key);
+
+         const ws = getWS();
+         ws?.joinCreateDraft?.(key, { sector, gearbox });
+
+         if (typeof window !== "undefined" && window.__WS_DEBUG) {
+            console.log("[DRAFT] join", key, { sector, gearbox });
+         }
+      },
+      [sector, gearbox]
+   );
+
+   const leaveDraft = useCallback(
+      (key) => {
+         if (!key) return;
+         if (leftRef.current.has(key)) return;
+         leftRef.current.add(key);
+
+         const ws = getWS();
+         ws?.leaveCreateDraft?.(key, { sector, gearbox });
+
+         if (typeof window !== "undefined" && window.__WS_DEBUG) {
+            console.log("[DRAFT] leave", key, { sector, gearbox });
+         }
+      },
+      [sector, gearbox]
+   );
+
+   useEffect(() => {
+      if (!draftRoomKey) return;
+
+      // JOIN pe cheia unică
+      joinDraft(draftRoomKey);
+
+      // LEAVE garantat când cheia se schimbă sau la unmount
+      return () => {
+         leaveDraft(draftRoomKey);
+      };
+   }, [draftRoomKey, joinDraft, leaveDraft]);
+
+   // force leave la pagehide / unload / tab hidden
+   useEffect(() => {
+      const forceLeave = () => {
+         const key = activeKeyRef.current;
+         if (key) leaveDraft(key);
+      };
+
+      const onPageHide = () => forceLeave();
+      const onBeforeUnload = () => forceLeave();
+      const onVis = () => {
+         if (document.hidden) forceLeave();
+      };
+
+      window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("beforeunload", onBeforeUnload);
+      document.addEventListener("visibilitychange", onVis);
+
+      return () => {
+         window.removeEventListener("pagehide", onPageHide);
+         window.removeEventListener("beforeunload", onBeforeUnload);
+         document.removeEventListener("visibilitychange", onVis);
+      };
+   }, [leaveDraft]);
+
+   // closeSelf: folosește STRICT cheia activă
+   const closeSelf = useCallback(() => {
+      if (closingRef.current) return;
+      closingRef.current = true;
+
+      const key = activeKeyRef.current || draftRoomKey;
+      leaveDraft(key);
+
+      if (typeof onClose === "function") return onClose();
+
+      try {
+         closeSubPopupStore();
+      } catch {}
+      try {
+         closePopupStore();
+      } catch {}
+   }, [onClose, leaveDraft, draftRoomKey]);
+
+   // ✅ click-away armat după 2 frame-uri, cu composedPath()
+   useEffect(() => {
+      closingRef.current = false;
+      openArmedRef.current = false;
+
+      let raf1 = 0;
+      let raf2 = 0;
+
+      raf1 = requestAnimationFrame(() => {
+         raf2 = requestAnimationFrame(() => {
+            openArmedRef.current = true;
+         });
+      });
+
+      const isInside = (e) => {
+         const root = rootRef.current;
+         if (!root) return false;
+
+         const path =
+            typeof e.composedPath === "function" ? e.composedPath() : null;
+         if (path && path.includes(root)) return true;
+
+         const target = e.target;
+         return target instanceof Node ? root.contains(target) : false;
+      };
+
+      const onPointerDown = (e) => {
+         if (!openArmedRef.current) return;
+         if (typeof e.button === "number" && e.button !== 0) return;
+
+         if (isInside(e)) return;
+         closeSelf();
+      };
+
+      const onKeyDown = (e) => {
+         if (e.key === "Escape") closeSelf();
+      };
+
+      document.addEventListener("pointerdown", onPointerDown, true);
+      document.addEventListener("keydown", onKeyDown, true);
+
+      return () => {
+         cancelAnimationFrame(raf1);
+         cancelAnimationFrame(raf2);
+         document.removeEventListener("pointerdown", onPointerDown, true);
+         document.removeEventListener("keydown", onKeyDown, true);
+      };
+   }, [closeSelf]);
+
+   const autoSelectSingleStudent = useCallback(
+      (list, msg = "Elev selectat după căutare.") => {
+         if (!list || list.length !== 1) return false;
+         const s = list[0];
+         if (!s?.id) return false;
+
+         const idStr = String(s.id);
+         setStudentId(idStr);
+         setNewFullName("");
+         setPhoneFull("");
+         setQStudent("");
+         setHighlightedStudentId(null);
+         setView("formSelect");
+
+         if (msg) pushPill(msg, "info");
+         return true;
+      },
+      [pushPill]
+   );
 
    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    async function waitUntilStudentInListByPhone(
@@ -442,7 +681,7 @@ export default function CreateRezervation({
       return "";
    }
 
-   const ensureStudentCreated = async () => {
+   const ensureStudentCreated = useCallback(async () => {
       const { firstName, lastName } = splitFullName(newFullName);
       if (!firstName || !lastName) {
          pushPill("Scrie numele complet (ex.: Ion Popescu).");
@@ -503,6 +742,7 @@ export default function CreateRezervation({
                try {
                   created = await res.json();
                } catch {}
+
                let newId =
                   String(
                      created?.user?.id ??
@@ -512,9 +752,7 @@ export default function CreateRezervation({
                         ""
                   ) || "";
 
-               if (!newId) {
-                  newId = await waitUntilStudentInListByPhone(digits);
-               }
+               if (!newId) newId = await waitUntilStudentInListByPhone(digits);
 
                if (!newId) {
                   pushPill(
@@ -586,11 +824,12 @@ export default function CreateRezervation({
          "error"
       );
       return false;
-   };
+   }, [dispatch, newFullName, phoneFull, pushPill]);
 
    const [saving, setSaving] = useState(false);
 
-   const onSave = async () => {
+   const onSave = useCallback(async () => {
+      if (saving) return;
       if (!studentId) return pushPill("Selectează/creează elevul.");
       if (!instructorId) return pushPill("Selectează instructorul.");
       if (!selectedDate || !selectedTime) {
@@ -640,33 +879,41 @@ export default function CreateRezervation({
             { id: Date.now(), type: "success", text: "Programare creată." },
          ]);
 
+         // ✅ IMPORTANT: evităm dublu-fetch + setTimeout spam
          try {
             await (dispatch(fetchReservationsDelta()).unwrap?.() ??
                dispatch(fetchReservationsDelta()));
          } catch {}
 
-         triggerCalendarRefresh();
-
-         setTimeout(async () => {
-            try {
-               await (dispatch(fetchReservationsDelta()).unwrap?.() ??
-                  dispatch(fetchReservationsDelta()));
-            } catch {}
+         // ✅ un singur refresh bus (coalesced în calendarBus / listener)
+         try {
             triggerCalendarRefresh();
-         }, 0);
+         } catch {}
 
-         onClose?.();
+         closeSelf();
       } catch (e) {
          pushPill(e?.message || "Nu am putut crea programarea.");
       } finally {
          setSaving(false);
       }
-   };
+   }, [
+      saving,
+      studentId,
+      instructorId,
+      selectedDate,
+      selectedTime,
+      sector,
+      gearbox,
+      privateMessage,
+      dispatch,
+      pushPill,
+      closeSelf,
+   ]);
 
    const validNewName = newFullName.trim().split(/\s+/).length >= 2;
    const validNewPhone = onlyDigits(phoneFull).length > 0;
 
-   const handleCreateStudentClick = async () => {
+   const handleCreateStudentClick = useCallback(async () => {
       if (continuing) return;
       setContinuing(true);
       try {
@@ -674,8 +921,9 @@ export default function CreateRezervation({
       } finally {
          setContinuing(false);
       }
-   };
+   }, [continuing, ensureStudentCreated]);
 
+   // când scrii telefon, caută exact și highlight
    useEffect(() => {
       const digits = onlyDigits(phoneFull);
       if (!digits) {
@@ -762,6 +1010,7 @@ export default function CreateRezervation({
       }
 
       let cancelled = false;
+
       const run = async () => {
          setCheckingBlackout(true);
          try {
@@ -808,14 +1057,13 @@ export default function CreateRezervation({
       };
 
       run();
-
       return () => {
          cancelled = true;
       };
    }, [instructorId, selectedDate, selectedTime]);
 
    /* ====== Block / Unblock blackout SINGLE ====== */
-   const handleToggleBlackout = async () => {
+   const handleToggleBlackout = useCallback(async () => {
       if (!instructorId) {
          pushPill("Selectează instructorul înainte de blocare.", "error");
          return;
@@ -832,13 +1080,10 @@ export default function CreateRezervation({
       setBlocking(true);
       try {
          if (!hasBlackout) {
-            // BLOCHEAZĂ: adăugăm SINGLE
             await addInstructorBlackout(Number(instructorId), dateTimeToSend);
          } else if (blackoutId != null) {
-            // DEBLOCHEAZĂ: ștergem blackout-ul existent
             await deleteInstructorBlackout(blackoutId);
          } else {
-            // fallback: nu avem id, îl căutăm și apoi ștergem
             const list = await getInstructorBlackouts(instructorId);
             const found = (list || []).find((b) => {
                const type = String(b?.type || b?.Type || "").toUpperCase();
@@ -854,22 +1099,29 @@ export default function CreateRezervation({
                   found.blackoutId ??
                   found.blackout_id ??
                   null;
-               if (id != null) {
-                  await deleteInstructorBlackout(id);
-               }
+               if (id != null) await deleteInstructorBlackout(id);
             }
          }
 
-         // eventual redesenăm calendarul
-         triggerCalendarRefresh();
-         // popup se închide automat la block/unblock:
-         onClose?.();
+         try {
+            triggerCalendarRefresh();
+         } catch {}
+
+         closeSelf();
       } catch (e) {
          pushPill(e?.message || "Nu am putut actualiza blocarea.", "error");
       } finally {
          setBlocking(false);
       }
-   };
+   }, [
+      instructorId,
+      selectedDate,
+      selectedTime,
+      hasBlackout,
+      blackoutId,
+      pushPill,
+      closeSelf,
+   ]);
 
    const blackoutButtonLabel = hasBlackout ? "Deblochează" : "Blochează";
    const blackoutButtonDisabled =
@@ -882,7 +1134,7 @@ export default function CreateRezervation({
       !selectedTime;
 
    return (
-      <div className="popupui popupui--a-add-prog">
+      <div ref={rootRef} className="popupui popupui--a-add-prog">
          <AlertPills messages={messages} onDismiss={popPill} />
 
          <div className="popup-panel__header">
@@ -890,7 +1142,6 @@ export default function CreateRezervation({
          </div>
 
          <div className="popupui__content">
-            {/* Ecran principal – totul într-o singură pagină */}
             {view === "formSelect" && (
                <>
                   <div className="popupui__form-row popupui__form-row--spaced">
@@ -1138,6 +1389,7 @@ export default function CreateRezervation({
                            const isHighlighted =
                               highlightedStudentId &&
                               String(s.id) === String(highlightedStudentId);
+
                            return (
                               <li
                                  key={s.id}
@@ -1190,6 +1442,7 @@ export default function CreateRezervation({
                         </button>
                      </div>
                   </div>
+
                   <div className="popupui__search-list-wrapper">
                      <ul className="popupui__search-list">
                         {filteredInstructors.map((i) => {
@@ -1197,6 +1450,7 @@ export default function CreateRezervation({
                               i.lastName || ""
                            }`.trim();
                            const phone = i.phone || "";
+
                            return (
                               <li
                                  key={i.id}

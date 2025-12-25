@@ -1,5 +1,5 @@
-// src/components/Popups/AddManager.jsx
-import React, { useEffect, useMemo, useState, useRef } from "react";
+// src/components/Popups/AddProfessor.jsx
+import React, { useEffect, useMemo, useState } from "react";
 import { ReactSVG } from "react-svg";
 import editIcon from "../../assets/svg/edit.svg";
 import AlertPills from "../Utils/AlertPills";
@@ -10,147 +10,7 @@ import {
    deleteUser,
 } from "../../api/usersService";
 
-/* ================== CULORI (copiat din ReservationEditPopup) ================== */
-const COLOR_TOKENS = [
-   //"--event-default",
-   "--red",
-   "--orange",
-   "--yellow",
-   "--green",
-   "--blue",
-   "--indigo",
-   "--purple",
-   "--pink",
-   //"--black-t",
-];
-
-const COLOR_LABEL = {
-   //"event-default": "Implicit",
-   red: "Roșu",
-   orange: "Portocaliu",
-   yellow: "Galben",
-   green: "Verde",
-   blue: "Albastru",
-   indigo: "Indigo",
-   purple: "Mov",
-   pink: "Roz",
-   //"black-t": "Negru",
-};
-
-const COLOR_HINTS = {
-   //"event-default": "Culoare implicită din calendar",
-   yellow: "Loc Liber",
-   green: "Achitată",
-   red: "Grafic Închis",
-   orange: "Achitare Card În Oficiu",
-   indigo: "Lecție Stabilită De Instructor",
-   pink: "Grafic Pentru Ciocana/Buiucani",
-   blue: "Instructorul Care Activează Pe Ciocana",
-   purple: "Instructorul Care Activează Pe Botanica",
-   //"black-t": "Trasparent",
-};
-
-function coerceColorToken(val) {
-   if (!val) return "--event-default";
-   const raw = String(val).trim();
-
-   // dacă e deja token: "--blue"
-   if (raw.startsWith("--")) {
-      const k = raw.toLowerCase();
-      return COLOR_TOKENS.includes(k) ? k : "--event-default";
-   }
-
-   // dacă vine "blue" / "Blue" / "EVENT-DEFAULT"
-   const key = raw.toLowerCase();
-   const candidate = `--${key}`;
-   return COLOR_TOKENS.includes(candidate) ? candidate : "--event-default";
-}
-
-// ✅ prinde culoarea indiferent cum se numește în API (dacă diferă)
-function pickManagerColor(mgr) {
-   const raw =
-      mgr?.color ??
-      mgr?.eventColor ??
-      mgr?.calendarColor ??
-      mgr?.colorToken ??
-      mgr?.reservationColor ??
-      "";
-   return coerceColorToken(raw);
-}
-
-/* ================== ColorPicker UI ================== */
-function ColorPicker({ value, onChange, label = "Culoare" }) {
-   const [colorHoverText, setColorHoverText] = useState("");
-   const colorHoverTimerRef = useRef(null);
-
-   useEffect(() => {
-      return () => {
-         if (colorHoverTimerRef.current)
-            clearTimeout(colorHoverTimerRef.current);
-      };
-   }, []);
-
-   return (
-      <div
-         style={{
-            padding: "2px 8px 8px 8px",
-            background: "var(--black-s",
-            borderRadius: 22,
-         }}
-      >
-         <div
-            className="popupui__color-grid"
-            role="radiogroup"
-            aria-label={label}
-         >
-            {COLOR_TOKENS.map((token) => {
-               const suffix = token.replace(/^--/, "");
-               const active = value === token;
-               const name = COLOR_LABEL[suffix] || suffix;
-               const tip = COLOR_HINTS[suffix]
-                  ? `${COLOR_HINTS[suffix]}`
-                  : name;
-
-               return (
-                  <button
-                     key={token}
-                     type="button"
-                     role="radio"
-                     aria-checked={active}
-                     aria-label={tip}
-                     title={tip}
-                     className={[
-                        "popupui__color-swatch",
-                        `popupui__color-swatch--${suffix}`,
-                        active ? "is-active" : "",
-                     ]
-                        .filter(Boolean)
-                        .join(" ")}
-                     style={{
-                        // ✅ nu depinde de CSS; folosește variabilele de culoare existente
-                        width: 28,
-                        height: 28,
-                        borderRadius: 999,
-                        transform: active ? "scale(1.06)" : "none",
-                        cursor: "pointer",
-                     }}
-                     onClick={() => onChange(token)}
-                     onFocus={() => setColorHoverText(tip)}
-                     onBlur={() => setColorHoverText("")}
-                     onTouchStart={() => {
-                        setColorHoverText(tip);
-                        if (colorHoverTimerRef.current)
-                           clearTimeout(colorHoverTimerRef.current);
-                     }}
-                  />
-               );
-            })}
-         </div>
-      </div>
-   );
-}
-
-function AddManager() {
+function AddProfessor() {
    const [activeTab, setActiveTab] = useState("list"); // 'list' | 'add'
    const [search, setSearch] = useState("");
    const [saving, setSaving] = useState(false);
@@ -162,27 +22,25 @@ function AddManager() {
    const popPill = () => setPillMessages((prev) => prev.slice(0, -1));
 
    // === data ===
-   const [managers, setManagers] = useState([]);
+   const [professors, setProfessors] = useState([]);
 
    // === add form ===
-   const [newMgr, setNewMgr] = useState({
+   const [newProf, setNewProf] = useState({
       firstName: "",
       lastName: "",
       phone: "",
       email: "",
       password: "",
       confirmPassword: "",
-      color: "--event-default",
    });
 
    // === edit form ===
    const [editingId, setEditingId] = useState(null);
-   const [editMgr, setEditMgr] = useState({
+   const [editProf, setEditProf] = useState({
       firstName: "",
       lastName: "",
       phone: "",
       email: "",
-      color: "--event-default",
    });
 
    function highlightText(text, query) {
@@ -200,74 +58,66 @@ function AddManager() {
       );
    }
 
-   const loadManagers = async () => {
+   const loadProfessors = async () => {
       setLoading(true);
       try {
          const all = await getUsers();
          const list = (all || []).filter(
-            (u) => String(u.role || "").toUpperCase() === "MANAGER"
+            (u) => String(u.role || "").toUpperCase() === "PROFESSOR"
          );
-
-         // ✅ normalizează culoarea încă de aici
-         const normalized = list.map((u) => ({
-            ...u,
-            color: pickManagerColor(u),
-         }));
-
-         setManagers(normalized);
+         setProfessors(list);
       } catch (e) {
-         console.error("[Managers] getUsers error:", e);
-         pushPill("Eroare la încărcarea listei de manageri.");
+         console.error("[Professors] getUsers error:", e);
+         pushPill("Eroare la încărcarea listei de profesori.");
       } finally {
          setLoading(false);
       }
    };
 
    useEffect(() => {
-      loadManagers();
+      loadProfessors();
       // eslint-disable-next-line react-hooks/exhaustive-deps
    }, []);
 
-   const filteredManagers = useMemo(() => {
+   const filteredProfessors = useMemo(() => {
       const q = (search || "").toLowerCase();
-      return managers.filter((m) => {
-         const fullName = `${m.firstName || ""} ${m.lastName || ""}`
+      return professors.filter((p) => {
+         const fullName = `${p.firstName || ""} ${p.lastName || ""}`
             .trim()
             .toLowerCase();
-         const email = (m.email || "").toLowerCase();
-         const phone = (m.phone || "").toLowerCase();
-         const color = (m.color || "").toLowerCase();
+         const email = (p.email || "").toLowerCase();
+         const phone = (p.phone || "").toLowerCase();
          return (
             fullName.includes(q) ||
             email.includes(q) ||
             phone.includes(q) ||
-            color.includes(q) ||
-            "manager".includes(q)
+            "professor".includes(q) ||
+            "profesor".includes(q)
          );
       });
-   }, [managers, search]);
+   }, [professors, search]);
 
    // === ADD ===
    const handleAdd = async () => {
       setSaving(true);
       setPillMessages([]);
 
-      if (!newMgr.firstName?.trim() || !newMgr.lastName?.trim()) {
+      if (!newProf.firstName?.trim() || !newProf.lastName?.trim()) {
          pushPill("Completează numele și prenumele.");
          setSaving(false);
          return;
       }
-      if (!newMgr.email?.trim()) {
+      if (!newProf.email?.trim()) {
          pushPill("Email este obligatoriu.");
          setSaving(false);
          return;
       }
-      if (!newMgr.password || newMgr.password.length < 6) {
+      if (!newProf.password || newProf.password.length < 6) {
          pushPill("Parola trebuie să aibă minim 6 caractere.");
          setSaving(false);
          return;
       }
-      if (newMgr.password !== newMgr.confirmPassword) {
+      if (newProf.password !== newProf.confirmPassword) {
          pushPill("Parolele nu coincid.");
          setSaving(false);
          return;
@@ -275,44 +125,40 @@ function AddManager() {
 
       try {
          const payload = {
-            firstName: newMgr.firstName.trim(),
-            lastName: newMgr.lastName.trim(),
-            phone: newMgr.phone?.trim() || "",
-            email: newMgr.email.trim(),
-            password: newMgr.password,
-            role: "MANAGER",
-            color: coerceColorToken(newMgr.color),
+            firstName: newProf.firstName.trim(),
+            lastName: newProf.lastName.trim(),
+            phone: newProf.phone?.trim() || "",
+            email: newProf.email.trim(),
+            password: newProf.password,
+            role: "PROFESSOR",
          };
 
          const created = await createUser(payload);
 
          if (!created?.id) {
-            pushPill("Nu am putut crea managerul (fără id).");
+            pushPill("Nu am putut crea profesorul (fără id).");
          } else {
-            // ✅ nu depinde de ce întoarce API: forțează culoarea în UI
             const localCreated = {
                ...created,
-               role: "MANAGER",
-               color: payload.color,
+               role: "PROFESSOR",
             };
 
-            setManagers((prev) => [localCreated, ...prev]);
+            setProfessors((prev) => [localCreated, ...prev]);
 
-            setNewMgr({
+            setNewProf({
                firstName: "",
                lastName: "",
                phone: "",
                email: "",
                password: "",
                confirmPassword: "",
-               color: "--event-default",
             });
 
             setActiveTab("list");
          }
       } catch (e) {
-         console.error("[ADD MANAGER] error:", e);
-         pushPill("Eroare la crearea managerului.");
+         console.error("[ADD PROFESSOR] error:", e);
+         pushPill("Eroare la crearea profesorului.");
       } finally {
          setSaving(false);
       }
@@ -324,36 +170,33 @@ function AddManager() {
       setSaving(true);
       try {
          const payload = {
-            firstName: editMgr.firstName?.trim(),
-            lastName: editMgr.lastName?.trim(),
-            phone: editMgr.phone?.trim(),
-            email: editMgr.email?.trim(),
-            role: "MANAGER",
-            color: coerceColorToken(editMgr.color),
+            firstName: editProf.firstName?.trim(),
+            lastName: editProf.lastName?.trim(),
+            phone: editProf.phone?.trim(),
+            email: editProf.email?.trim(),
+            role: "PROFESSOR",
          };
 
          const updated = await updateUser(editingId, payload);
 
-         // ✅ forțează culoarea (și restul) în state, indiferent ce întoarce API
-         setManagers((prev) =>
-            prev.map((m) => {
-               if (String(m.id) !== String(editingId)) return m;
+         setProfessors((prev) =>
+            prev.map((p) => {
+               if (String(p.id) !== String(editingId)) return p;
                return {
-                  ...m,
+                  ...p,
                   ...updated,
-                  firstName: payload.firstName ?? m.firstName,
-                  lastName: payload.lastName ?? m.lastName,
-                  phone: payload.phone ?? m.phone,
-                  email: payload.email ?? m.email,
-                  role: "MANAGER",
-                  color: payload.color, // ✅ important
+                  firstName: payload.firstName ?? p.firstName,
+                  lastName: payload.lastName ?? p.lastName,
+                  phone: payload.phone ?? p.phone,
+                  email: payload.email ?? p.email,
+                  role: "PROFESSOR",
                };
             })
          );
 
          setEditingId(null);
       } catch (e) {
-         console.error("[EDIT MANAGER] error:", e);
+         console.error("[EDIT PROFESSOR] error:", e);
          pushPill("Eroare la salvarea modificărilor.");
       } finally {
          setSaving(false);
@@ -363,14 +206,14 @@ function AddManager() {
    // === DELETE ===
    const handleDelete = async (id) => {
       if (!id) return;
-      if (!window.confirm("Ești sigur că vrei să ștergi acest manager?"))
+      if (!window.confirm("Ești sigur că vrei să ștergi acest profesor?"))
          return;
       try {
          await deleteUser(id);
-         setManagers((prev) => prev.filter((m) => m.id !== id));
+         setProfessors((prev) => prev.filter((p) => p.id !== id));
          if (editingId === id) setEditingId(null);
       } catch (e) {
-         console.error("[DELETE MANAGER] error:", e);
+         console.error("[DELETE PROFESSOR] error:", e);
          pushPill("Eroare la ștergere.");
       }
    };
@@ -378,7 +221,7 @@ function AddManager() {
    return (
       <>
          <div className="popup-panel__header">
-            <h3 className="popup-panel__title">Manageri</h3>
+            <h3 className="popup-panel__title">Profesori</h3>
          </div>
 
          <div className="instructors-popup__content">
@@ -387,7 +230,7 @@ function AddManager() {
                <input
                   type="text"
                   className="instructors-popup__search"
-                  placeholder="Caută manager..."
+                  placeholder="Caută profesor..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                />
@@ -419,43 +262,43 @@ function AddManager() {
                         </div>
                      ) : (
                         <ul className="instructors-popup__list-items">
-                           {filteredManagers.map((mgr) => (
+                           {filteredProfessors.map((prof) => (
                               <li
-                                 key={mgr.id}
+                                 key={prof.id}
                                  className={`instructors-popup__item ${
-                                    editingId === mgr.id ? "active" : ""
+                                    editingId === prof.id ? "active" : ""
                                  }`}
                               >
-                                 {editingId === mgr.id ? (
+                                 {editingId === prof.id ? (
                                     <div className="instructors-popup__form">
                                        <div className="instructors-popup__form-row">
                                           <input
                                              type="text"
                                              className="instructors-popup__input"
-                                             value={editMgr.firstName}
+                                             value={editProf.firstName}
                                              onChange={(e) =>
-                                                setEditMgr((s) => ({
+                                                setEditProf((s) => ({
                                                    ...s,
                                                    firstName: e.target.value,
                                                 }))
                                              }
                                              placeholder={
-                                                mgr.firstName || "Prenume"
+                                                prof.firstName || "Prenume"
                                              }
                                              autoComplete="given-name"
                                           />
                                           <input
                                              type="text"
                                              className="instructors-popup__input"
-                                             value={editMgr.lastName}
+                                             value={editProf.lastName}
                                              onChange={(e) =>
-                                                setEditMgr((s) => ({
+                                                setEditProf((s) => ({
                                                    ...s,
                                                    lastName: e.target.value,
                                                 }))
                                              }
                                              placeholder={
-                                                mgr.lastName || "Nume"
+                                                prof.lastName || "Nume"
                                              }
                                              autoComplete="family-name"
                                           />
@@ -465,16 +308,16 @@ function AddManager() {
                                           <input
                                              type="tel"
                                              className="instructors-popup__input"
-                                             value={editMgr.phone}
+                                             value={editProf.phone}
                                              onChange={(e) =>
-                                                setEditMgr((s) => ({
+                                                setEditProf((s) => ({
                                                    ...s,
                                                    phone: e.target.value,
                                                 }))
                                              }
                                              placeholder={
-                                                (mgr.phone &&
-                                                   `Ex: ${mgr.phone}`) ||
+                                                (prof.phone &&
+                                                   `Ex: ${prof.phone}`) ||
                                                 "Telefon"
                                              }
                                              inputMode="tel"
@@ -483,35 +326,23 @@ function AddManager() {
                                           <input
                                              type="email"
                                              className="instructors-popup__input"
-                                             value={editMgr.email}
+                                             value={editProf.email}
                                              onChange={(e) =>
-                                                setEditMgr((s) => ({
+                                                setEditProf((s) => ({
                                                    ...s,
                                                    email: e.target.value,
                                                 }))
                                              }
-                                             placeholder={mgr.email || "Email"}
+                                             placeholder={prof.email || "Email"}
                                              autoComplete="email"
                                           />
                                        </div>
-
-                                       {/* ✅ Culoare (edit) */}
-                                       <ColorPicker
-                                          value={editMgr.color}
-                                          onChange={(token) =>
-                                             setEditMgr((s) => ({
-                                                ...s,
-                                                color: token,
-                                             }))
-                                          }
-                                          label="Culoare manager"
-                                       />
 
                                        <div className="instructors-popup__btns">
                                           <button
                                              className="instructors-popup__form-button instructors-popup__form-button--delete"
                                              onClick={() =>
-                                                handleDelete(mgr.id)
+                                                handleDelete(prof.id)
                                              }
                                              disabled={saving}
                                           >
@@ -540,39 +371,41 @@ function AddManager() {
                                        <div className="instructors-popup__item-left">
                                           <h3>
                                              {highlightText(
-                                                `${mgr.firstName || ""} ${
-                                                   mgr.lastName || ""
+                                                `${prof.firstName || ""} ${
+                                                   prof.lastName || ""
                                                 }`.trim(),
                                                 search
                                              )}
                                           </h3>
                                           <p>
                                              {highlightText(
-                                                mgr.phone || "",
+                                                prof.phone || "",
                                                 search
                                              )}
                                           </p>
                                           <p>
                                              {highlightText(
-                                                mgr.email || "",
+                                                prof.email || "",
                                                 search
                                              )}
                                           </p>
                                           <p>
-                                             {highlightText("MANAGER", search)}
+                                             {highlightText(
+                                                "PROFESSOR",
+                                                search
+                                             )}
                                           </p>
                                        </div>
 
                                        <ReactSVG
                                           className="instructors-popup__edit-button react-icon"
                                           onClick={() => {
-                                             setEditingId(mgr.id);
-                                             setEditMgr({
-                                                firstName: mgr.firstName || "",
-                                                lastName: mgr.lastName || "",
-                                                phone: mgr.phone || "",
-                                                email: mgr.email || "",
-                                                color: pickManagerColor(mgr), // ✅ cheia: preselect corect
+                                             setEditingId(prof.id);
+                                             setEditProf({
+                                                firstName: prof.firstName || "",
+                                                lastName: prof.lastName || "",
+                                                phone: prof.phone || "",
+                                                email: prof.email || "",
                                              });
                                           }}
                                           src={editIcon}
@@ -593,12 +426,12 @@ function AddManager() {
                            type="text"
                            className="instructors-popup__input"
                            placeholder="Prenume"
-                           value={newMgr.firstName}
+                           value={newProf.firstName}
                            onChange={(e) =>
-                              setNewMgr({
-                                 ...newMgr,
+                              setNewProf((s) => ({
+                                 ...s,
                                  firstName: e.target.value,
-                              })
+                              }))
                            }
                            autoComplete="given-name"
                         />
@@ -606,9 +439,12 @@ function AddManager() {
                            type="text"
                            className="instructors-popup__input"
                            placeholder="Nume"
-                           value={newMgr.lastName}
+                           value={newProf.lastName}
                            onChange={(e) =>
-                              setNewMgr({ ...newMgr, lastName: e.target.value })
+                              setNewProf((s) => ({
+                                 ...s,
+                                 lastName: e.target.value,
+                              }))
                            }
                            autoComplete="family-name"
                         />
@@ -619,9 +455,12 @@ function AddManager() {
                            type="email"
                            className="instructors-popup__input"
                            placeholder="Email (user)"
-                           value={newMgr.email}
+                           value={newProf.email}
                            onChange={(e) =>
-                              setNewMgr({ ...newMgr, email: e.target.value })
+                              setNewProf((s) => ({
+                                 ...s,
+                                 email: e.target.value,
+                              }))
                            }
                            autoComplete="email"
                         />
@@ -629,9 +468,12 @@ function AddManager() {
                            type="tel"
                            className="instructors-popup__input"
                            placeholder="Telefon"
-                           value={newMgr.phone}
+                           value={newProf.phone}
                            onChange={(e) =>
-                              setNewMgr({ ...newMgr, phone: e.target.value })
+                              setNewProf((s) => ({
+                                 ...s,
+                                 phone: e.target.value,
+                              }))
                            }
                            inputMode="tel"
                            autoComplete="tel"
@@ -643,9 +485,12 @@ function AddManager() {
                            type="password"
                            className="instructors-popup__input"
                            placeholder="Parolă (user)"
-                           value={newMgr.password}
+                           value={newProf.password}
                            onChange={(e) =>
-                              setNewMgr({ ...newMgr, password: e.target.value })
+                              setNewProf((s) => ({
+                                 ...s,
+                                 password: e.target.value,
+                              }))
                            }
                            autoComplete="new-password"
                         />
@@ -653,12 +498,12 @@ function AddManager() {
                            type="password"
                            className="instructors-popup__input"
                            placeholder="Confirmă parola"
-                           value={newMgr.confirmPassword}
+                           value={newProf.confirmPassword}
                            onChange={(e) =>
-                              setNewMgr({
-                                 ...newMgr,
+                              setNewProf((s) => ({
+                                 ...s,
                                  confirmPassword: e.target.value,
-                              })
+                              }))
                            }
                            autoComplete="new-password"
                         />
@@ -669,15 +514,6 @@ function AddManager() {
                            />
                         </div>
                      </div>
-
-                     {/* ✅ Culoare (add) */}
-                     <ColorPicker
-                        value={newMgr.color}
-                        onChange={(token) =>
-                           setNewMgr((s) => ({ ...s, color: token }))
-                        }
-                        label="Culoare manager"
-                     />
 
                      <div className="instructors-popup__btns">
                         <button
@@ -703,4 +539,4 @@ function AddManager() {
    );
 }
 
-export default AddManager;
+export default AddProfessor;

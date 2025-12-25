@@ -21,6 +21,7 @@ import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
 import managerIcon from "../assets/svg/mdi--account-star-outline.svg";
 import examIcon from "../assets/svg/mdi--book-clock-outline.svg";
 import homeIcon from "../assets/svg/material-symbols--home-outline.svg";
+import categoriiIcon from "../assets/svg/mdi--category-plus-outline.svg";
 
 import { getAllReservations } from "../api/reservationsService";
 import { getUsers } from "../api/usersService";
@@ -41,13 +42,13 @@ import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
 import PreloadAppData from "../components/Utils/PreloadAppData";
 import Footer from "../components/Footer";
 
-
 function MPanel() {
    const links = [
       { link: "/manager", text: "Acasă", icon: homeIcon },
       { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
       { popup: "addInstr", text: "Instrucori", icon: instrIcon },
+      { popup: "addProfessor", text: "Profesori", icon: instrIcon },
       { popup: "startExam", text: "Examen", icon: examIcon },
       { link: "/manager/groups", text: "Grupe", icon: groupsIcon },
       {
@@ -55,8 +56,9 @@ function MPanel() {
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
+      { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
       { link: "/manager/history", text: "Istoric", icon: clockIcon },
-      { popup: "profile", text: "Profil", icon: accIcon },
+      //{ popup: "profile", text: "Profil", icon: accIcon },
    ];
 
    const dispatch = useDispatch();

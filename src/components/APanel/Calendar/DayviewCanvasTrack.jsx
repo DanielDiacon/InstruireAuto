@@ -26,7 +26,10 @@ import {
    fetchReservationsDelta,
    removeReservationLocal,
 } from "../../../store/reservationsSlice";
-import { triggerCalendarRefresh } from "../../Utils/calendarBus";
+import {
+   triggerCalendarRefresh,
+   listenCalendarRefresh,
+} from "../../Utils/calendarBus";
 import { ReactSVG } from "react-svg";
 
 import copyIcon from "../../../assets/svg/material-symbols--file-copy-outline.svg";
@@ -103,6 +106,172 @@ const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
 
 const RANGE_MINUTES = 90; // ✅ 90 min window
+/* ================== STRONG SIGNATURE HELPERS (REDRAW FIX) ================== */
+
+function _hashStr(str) {
+   const s = String(str || "");
+   let h = 5381;
+   for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
+   return (h >>> 0).toString(36);
+}
+
+function _ms(d) {
+   if (!d) return 0;
+   const x = d instanceof Date ? d : new Date(d);
+   const t = x.getTime();
+   return Number.isFinite(t) ? t : 0;
+}
+
+function hasAnyPresence(v) {
+   if (v === true) return true;
+   if (!v) return false;
+
+   if (v instanceof Set) return v.size > 0;
+   if (Array.isArray(v)) return v.length > 0;
+
+   if (typeof v === "object") return Object.keys(v).length > 0;
+
+   return false;
+}
+
+/**
+ * Semnătură robustă pentru canvas:
+ * include câmpurile care îți schimbă UI-ul desenat (confirmare, note, favorite, important, etc.)
+ * + poziționarea în pad-uri (lateral/cancel) prin _padSlotIndex/_padColumnIndex.
+ */
+function buildCanvasEventsSignature(events) {
+   if (!Array.isArray(events) || !events.length) return "0";
+
+   const parts = [];
+
+   for (const ev of events) {
+      if (!ev) continue;
+
+      const raw = ev.raw || {};
+
+      const id = raw.id ?? ev.id ?? "";
+      const startMs = _ms(ev.start ?? raw.startTime ?? raw.start ?? raw.date);
+      const endMs = _ms(ev.end ?? raw.endTime ?? raw.end) || startMs;
+
+      const instId = String(
+         raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? ""
+      );
+
+      const userId = String(
+         raw.userId ??
+            raw.user_id ??
+            ev.userId ??
+            ev.studentId ??
+            raw.user?.id ??
+            ""
+      );
+
+      const sector = String(raw.sector ?? ev.sector ?? "");
+      const gearbox = String(raw.gearbox ?? ev.gearbox ?? "");
+      const color = String(raw.color ?? ev.color ?? "");
+
+      const isConf = !!(raw.isConfirmed ?? raw.is_confirmed ?? ev.isConfirmed);
+      const isFav = !!(raw.isFavorite ?? raw.is_favorite ?? ev.isFavorite);
+      const isImp = !!(raw.isImportant ?? raw.is_important ?? ev.isImportant);
+      const isCanc = !!(raw.isCancelled ?? raw.is_cancelled ?? ev.isCancelled);
+
+      const flags = `${isConf ? 1 : 0}${isFav ? 1 : 0}${isImp ? 1 : 0}${
+         isCanc ? 1 : 0
+      }`;
+
+      // ⚠️ acestea schimbă text/inscripții desenate
+      const phone = String(getStudentPhoneFromEv(ev) || "");
+      const noteFromEvent = String(
+         raw.privateMessage ?? ev.privateMessage ?? ev.eventPrivateMessage ?? ""
+      );
+      const noteFromProfile = String(getStudentPrivateMessageFromEv(ev) || "");
+      const notesHash = _hashStr(`${noteFromEvent}|${noteFromProfile}`);
+
+      // ⚠️ acestea schimbă poziția/randarea în pad-uri
+      const padSlotIndex =
+         ev._padSlotIndex != null ? String(ev._padSlotIndex) : "";
+      const padColIndex =
+         ev._padColumnIndex != null ? String(ev._padColumnIndex) : "";
+      const movedCancel = ev._movedToCancelPad ? "1" : "0";
+      const fromLateral = ev._fromLateralPad ? "1" : "0";
+      const localSlotKey = String(ev.localSlotKey || "");
+
+      // dacă ai updatedAt/version din API, e cel mai bun invalidator
+      const ver = String(
+         raw.updatedAt ??
+            raw.updated_at ??
+            raw.version ??
+            raw.rev ??
+            raw._rev ??
+            ""
+      );
+
+      parts.push(
+         [
+            instId,
+            id,
+            startMs,
+            endMs,
+            userId,
+            sector,
+            gearbox,
+            color,
+            flags,
+            phone,
+            notesHash,
+            padSlotIndex,
+            padColIndex,
+            movedCancel,
+            fromLateral,
+            localSlotKey,
+            ver,
+         ].join("|")
+      );
+   }
+
+   parts.sort();
+   return parts.join(";");
+}
+
+/* ================== SECTOR FILTER HELPERS (NEW) ================== */
+
+function normalizeSectorFilter(raw) {
+   const s = String(raw || "")
+      .trim()
+      .toLowerCase();
+   if (!s) return ""; // "" = fără filtru (toate)
+
+   if (s === "all" || s === "toate" || s === "total") return "";
+
+   if (s.includes("bot")) return "botanica";
+   if (s.includes("cio")) return "ciocana";
+   if (s.includes("bui")) return "buiucani";
+   if (s.includes("oth")) return "other";
+
+   return s; // fallback
+}
+
+function buildInstructorsLayoutSignature(list) {
+   if (!Array.isArray(list) || !list.length) return "0";
+
+   let out = "";
+   for (let idx = 0; idx < list.length; idx++) {
+      const inst = list[idx];
+      if (!inst) {
+         out += `${idx}:null;`;
+         continue;
+      }
+      const id = String(inst.id ?? "");
+      const sector = String(getInstructorSector(inst) || "").toLowerCase();
+      const padType = String(inst._padType ?? "");
+      const padIdx =
+         typeof inst._padColumnIndex === "number"
+            ? String(inst._padColumnIndex)
+            : "";
+      out += `${idx}:${id}:${sector}:${padType}:${padIdx};`;
+   }
+   return out;
+}
 
 /* ================== HISTORY (Reservation) - helpers ================== */
 
@@ -748,6 +917,11 @@ export default function DayviewCanvasTrack({
    onReservationJoin,
    presenceByReservationUsers = null,
    presenceByReservationColors,
+   createDraftBySlotUsers = null,
+   createDraftBySlotColors = null,
+
+   // ✅ NEW (optional): poți pasa direct din parent, dar merge și dacă îl pui în layout.*
+   sectorFilter: sectorFilterProp = null,
 }) {
    const canvasRef = useRef(null);
    const hitMapRef = useRef([]);
@@ -758,65 +932,6 @@ export default function DayviewCanvasTrack({
    const longPressTargetRef = useRef(null);
    const ignoreClickUntilRef = useRef(0);
    const lastPointerTypeRef = useRef("mouse");
-
-   //   function openReservationPopup(ev) {
-   //      if (!ev) return;
-   //      const reservationId = ev.raw?.id ?? ev.id;
-   //      if (!reservationId) return;
-   //      openPopup("reservationEdit", { reservationId });
-   //   }
-   //
-   //   function openStudentPopup(ev) {
-   //      if (!ev) return;
-   //      const raw = ev.raw || {};
-   //
-   //      const fallbackName =
-   //         raw?.clientName ||
-   //         raw?.customerName ||
-   //         raw?.name ||
-   //         ev.title ||
-   //         "Programare";
-   //
-   //      const phoneVal = getStudentPhoneFromEv(ev);
-   //
-   //      const noteFromEvent = (ev.eventPrivateMessage || "").toString().trim();
-   //      const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
-   //         .toString()
-   //         .trim();
-   //
-   //      const reservationId = raw?.id ?? ev.id;
-   //
-   //      const userIdRaw =
-   //         raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
-   //
-   //      const emailRaw = raw?.user?.email ?? raw?.email ?? ev?.studentEmail ?? "";
-   //
-   //      const firstNameSeed =
-   //         (ev.studentFirst || "").trim() || fallbackName.split(" ")[0] || "";
-   //      const lastNameSeed = (ev.studentLast || "").trim();
-   //
-   //      if (ev.studentId || userIdRaw) {
-   //         openPopup("studentDetails", {
-   //            student: {
-   //               id: ev.studentId ?? null,
-   //               userId: userIdRaw ?? null,
-   //               firstName: firstNameSeed,
-   //               lastName: lastNameSeed,
-   //               phone: phoneVal || "",
-   //               email: emailRaw || "",
-   //               privateMessage: noteFromProfile,
-   //               isConfirmed: !!ev.isConfirmed,
-   //            },
-   //            noteFromEvent,
-   //            studentPrivateMessage: noteFromProfile,
-   //            fromReservationId: reservationId,
-   //            fromReservationStartISO:
-   //               raw?.startTime || raw?.start || ev.start || null,
-   //         });
-   //      } else {
-   //         openReservationPopup(ev);
-   //      }
-   //   }
 
    const preGridCols =
       !preGrid || preGrid.enabled === false
@@ -835,6 +950,7 @@ export default function DayviewCanvasTrack({
    const hasPreGrid = preGridCols > 0 && preGridRows > 0;
 
    const [themeTick, setThemeTick] = useState(0);
+   const [refreshTick, setRefreshTick] = useState(0);
 
    const [selectedEventId, setSelectedEventId] = useState(
       getSelectedEvent()?.id ?? null
@@ -874,36 +990,67 @@ export default function DayviewCanvasTrack({
 
    const dispatch = useDispatch();
 
+   // ✅ NEW: sector activ (din prop sau din layout.*) + invalidare cache redraw
+   const activeSectorFilter = useMemo(() => {
+      const raw =
+         sectorFilterProp ??
+         layout?.sectorFilter ??
+         layout?.activeSector ??
+         layout?.selectedSector ??
+         layout?.sector ??
+         null;
+
+      return normalizeSectorFilter(raw);
+   }, [
+      sectorFilterProp,
+      layout?.sectorFilter,
+      layout?.activeSector,
+      layout?.selectedSector,
+      layout?.sector,
+   ]);
+
+   useEffect(() => {
+      // când schimbi sectorul, forțează redraw (altfel poate rămâne canvas vechi)
+      lastDrawSigRef.current = null;
+   }, [activeSectorFilter]);
+
    // ✅ B) Normalizează presence -> Set de reservationId-uri (pentru render.js)
    const presenceReservationIds = useMemo(() => {
       const src = presenceByReservationUsers;
-
       if (!src) return null;
 
-      // dacă deja e Set
-      if (src instanceof Set) return src;
-
-      // dacă vine ca array de id-uri
-      if (Array.isArray(src)) {
-         return new Set(src.map((x) => String(x)).filter(Boolean));
+      if (src instanceof Set) {
+         // deja e set de rid-uri
+         return src.size ? src : null;
       }
 
-      // dacă vine ca obiect/map: { [reservationId]: true | users[] | {..} }
+      // ✅ IMPORTANT: Map(rid -> Set(userId) / array / object) => păstrează DOAR rid-urile cu utilizatori reali
+      if (src instanceof Map) {
+         const ids = [];
+         for (const [rid, users] of src.entries()) {
+            if (!rid) continue;
+            if (hasAnyPresence(users)) ids.push(String(rid));
+         }
+         return ids.length ? new Set(ids) : null;
+      }
+
+      if (Array.isArray(src)) {
+         const ids = src.map((x) => String(x)).filter(Boolean);
+         return ids.length ? new Set(ids) : null;
+      }
+
       if (typeof src === "object") {
          const ids = [];
          for (const [rid, v] of Object.entries(src)) {
             if (!rid) continue;
-            const ok =
-               v === true ||
-               (Array.isArray(v) && v.length > 0) ||
-               (v && typeof v === "object" && Object.keys(v).length > 0);
-            if (ok) ids.push(String(rid));
+            if (hasAnyPresence(v)) ids.push(String(rid));
          }
          return ids.length ? new Set(ids) : null;
       }
 
       return null;
    }, [presenceByReservationUsers]);
+
    // ✅ A) Culori user + culori prezență per rezervare
    const userColorById = useMemo(() => {
       const m = new Map();
@@ -918,20 +1065,32 @@ export default function DayviewCanvasTrack({
    }, [users]);
 
    const presenceColorsByReservation = useMemo(() => {
-      if (!presenceByReservationColors) return new Map();
-
-      if (presenceByReservationColors instanceof Map)
-         return presenceByReservationColors;
-
-      // suport dacă vine ca obiect plain
+      const src = presenceByReservationColors;
       const m = new Map();
-      for (const [rid, cols] of Object.entries(presenceByReservationColors)) {
-         if (!rid) continue;
-         const arr = Array.isArray(cols)
-            ? cols.filter(Boolean).map(String)
-            : [];
-         if (arr.length) m.set(String(rid), arr);
+
+      if (!src) return m;
+
+      if (src instanceof Map) {
+         for (const [rid, cols] of src.entries()) {
+            if (!rid) continue;
+            const arr = Array.isArray(cols)
+               ? cols.filter(Boolean).map(String)
+               : [];
+            if (arr.length) m.set(String(rid), arr); // ✅ doar non-empty
+         }
+         return m;
       }
+
+      if (typeof src === "object") {
+         for (const [rid, cols] of Object.entries(src)) {
+            if (!rid) continue;
+            const arr = Array.isArray(cols)
+               ? cols.filter(Boolean).map(String)
+               : [];
+            if (arr.length) m.set(String(rid), arr);
+         }
+      }
+
       return m;
    }, [presenceByReservationColors]);
 
@@ -952,6 +1111,22 @@ export default function DayviewCanvasTrack({
       parts.sort();
       return parts.join("|");
    }, [presenceColorsByReservation]);
+
+   const createDraftSig = useMemo(() => {
+      if (
+         !createDraftBySlotColors ||
+         !(createDraftBySlotColors instanceof Map) ||
+         !createDraftBySlotColors.size
+      ) {
+         return "";
+      }
+      const parts = [];
+      for (const [k, cols] of createDraftBySlotColors.entries()) {
+         parts.push(`${k}:${(cols || []).join(",")}`);
+      }
+      parts.sort();
+      return parts.join("|");
+   }, [createDraftBySlotColors]);
 
    const joinReservationSafe = useCallback(
       (reservationId) => {
@@ -1012,9 +1187,6 @@ export default function DayviewCanvasTrack({
          const lastNameSeed = (ev.studentLast || "").trim();
 
          if (ev.studentId || userIdRaw) {
-            // ✅ JOIN și la studentDetails (că e tot “din rezervare”)
-            if (reservationId) joinReservationSafe(reservationId);
-
             openPopup("studentDetails", {
                student: {
                   id: ev.studentId ?? null,
@@ -1036,17 +1208,14 @@ export default function DayviewCanvasTrack({
             openReservationPopup(ev);
          }
       },
-      [joinReservationSafe, openReservationPopup]
+      [openReservationPopup]
    );
 
    /* ================== HISTORY + RANGE PANEL (COMUN) ================== */
 
    const [canvasPx, setCanvasPx] = useState({ w: 0, h: 0 });
 
-   // historyUI: panel ancorat pe un slot / rezervare (dar afiseaza ISTORIC COMUN pentru toate rezervarile din interval)
-   // { instructorId, baseStartISO, anchor:{x,y,w,h} }
    const [historyUI, setHistoryUI] = useState(null);
-
    const [historyIdx, setHistoryIdx] = useState(0);
 
    const [rangeLoading, setRangeLoading] = useState(false);
@@ -1054,7 +1223,6 @@ export default function DayviewCanvasTrack({
    const [rangeItems, setRangeItems] = useState([]);
    const [rangeMeta, setRangeMeta] = useState(null); // {from, to, label}
 
-   // map: reservationId -> history payload
    const [rangeHistoryById, setRangeHistoryById] = useState({});
    const [rangeHistLoading, setRangeHistLoading] = useState(false);
    const [rangeHistError, setRangeHistError] = useState("");
@@ -1063,6 +1231,60 @@ export default function DayviewCanvasTrack({
       () => buildNameMaps({ users, instructorsFull }),
       [users, instructorsFull]
    );
+
+   function initialsFromName(full) {
+      const parts = String(full || "")
+         .trim()
+         .split(/\s+/)
+         .filter(Boolean);
+      return parts
+         .slice(0, 2)
+         .map((p) => p[0].toUpperCase())
+         .join("");
+   }
+
+   const desiredInstructorBadgeByUserId = useMemo(() => {
+      const instrInitialsById = new Map();
+
+      (instructorsFull || []).forEach((i) => {
+         if (i?.id == null) return;
+
+         const full =
+            `${i?.firstName || ""} ${i?.lastName || ""}`.trim() ||
+            String(i?.name || "").trim();
+
+         const init = initialsFromName(full);
+         if (init) instrInitialsById.set(String(i.id), init);
+      });
+
+      const out = new Map();
+
+      (users || []).forEach((u) => {
+         if (u?.id == null) return;
+
+         const desiredId = u?.desiredInstructorId;
+         if (desiredId == null) return;
+
+         const badge = instrInitialsById.get(String(desiredId)) || "";
+         if (badge) out.set(String(u.id), badge);
+      });
+
+      return out;
+   }, [users, instructorsFull]);
+
+   const desiredBadgeSig = useMemo(() => {
+      if (
+         !desiredInstructorBadgeByUserId ||
+         !desiredInstructorBadgeByUserId.size
+      )
+         return "";
+      const parts = [];
+      for (const [uid, badge] of desiredInstructorBadgeByUserId.entries()) {
+         parts.push(`${uid}:${badge}`);
+      }
+      parts.sort();
+      return parts.join("|");
+   }, [desiredInstructorBadgeByUserId]);
 
    const openRangePanelFromEvent = useCallback((ev, anchor) => {
       const raw = ev?.raw || {};
@@ -1124,7 +1346,6 @@ export default function DayviewCanvasTrack({
       setRangeHistLoading(false);
    }, []);
 
-   // range fetch (NOW from instructor history) -> lista rezervari in interval
    useEffect(() => {
       if (!historyUI) return;
 
@@ -1190,7 +1411,6 @@ export default function DayviewCanvasTrack({
       };
    }, [historyUI?.instructorId, historyUI?.baseStartISO, mapsForHistory]);
 
-   // fetch history pentru fiecare rezervare gasita in interval (COMUN)
    const rangeIdsKey = useMemo(() => {
       const ids = (rangeItems || [])
          .map((r) => String(r.id || ""))
@@ -1295,7 +1515,6 @@ export default function DayviewCanvasTrack({
       return () => window.removeEventListener("keydown", onKey);
    }, [historyUI, closeReservationHistory]);
 
-   // timeline comun paginabil (toate schimbarile din toate rezervarile gasite)
    const combinedRangeTimeline = useMemo(() => {
       if (!rangeItems || !rangeItems.length) return [];
 
@@ -1412,6 +1631,17 @@ export default function DayviewCanvasTrack({
    useEffect(() => {
       const release = retainGlobals();
       return release;
+   }, []);
+   useEffect(() => {
+      if (typeof listenCalendarRefresh !== "function") return;
+
+      // când cineva apelează triggerCalendarRefresh(), invalidăm semnătura + forțăm redraw
+      const unsubscribe = listenCalendarRefresh(() => {
+         lastDrawSigRef.current = null;
+         setRefreshTick((t) => t + 1);
+      });
+
+      return unsubscribe;
    }, []);
 
    /* ================== selection + hidden listeners ================== */
@@ -1665,7 +1895,7 @@ export default function DayviewCanvasTrack({
       Number(layout.slotHeight) > 0 ? Number(layout.slotHeight) : 50;
    const layoutSlotGap = 4;
 
-   /* ================== aranjare instructori ================== */
+   /* ================== aranjare instructori (UPDATED: sectorFilter) ================== */
 
    const effectiveInstructors = useMemo(() => {
       if (!Array.isArray(instructors) || !instructors.length) return [];
@@ -1707,15 +1937,28 @@ export default function DayviewCanvasTrack({
       const lateralTemplate =
          lateralPads[0] || waitPads[0] || cancelPads[0] || null;
 
+      // ✅ regula ta veche: buiucani doar marți/joi
+      // ✅ DAR: dacă ai filtru explicit buiucani, îl arătăm mereu
       let showBuiucani = true;
-      if (dayStart instanceof Date) {
-         const wd = dayStart.getDay();
-         showBuiucani = wd === 2 || wd === 4;
+      if (!activeSectorFilter) {
+         if (dayStart instanceof Date) {
+            const wd = dayStart.getDay();
+            showBuiucani = wd === 2 || wd === 4;
+         }
+      } else if (activeSectorFilter === "buiucani") {
+         showBuiucani = true;
       }
 
-      const realFiltered = showBuiucani
+      const realDayFiltered = showBuiucani
          ? real
          : real.filter((inst) => !isBuiucaniInstructor(inst));
+
+      // ✅ dacă există filtru de sector, ținem doar sectorul ăla (nu mai combinăm cu altele)
+      const realFiltered = activeSectorFilter
+         ? realDayFiltered.filter(
+              (inst) => getInstructorSector(inst) === activeSectorFilter
+           )
+         : realDayFiltered;
 
       const buckets = {
          botanica: { auto: [], manual: [] },
@@ -1728,7 +1971,7 @@ export default function DayviewCanvasTrack({
          const sector = getInstructorSector(inst);
          const isAuto = isAutoInstructor(inst, cars);
          const gear = isAuto ? "auto" : "manual";
-         buckets[sector][gear].push(inst);
+         (buckets[sector] || buckets.other)[gear].push(inst);
       }
 
       const idx = {
@@ -1789,9 +2032,6 @@ export default function DayviewCanvasTrack({
          makePad(wait2Base, "wait", 1),
       ]);
 
-      const jsDay = dayStart instanceof Date ? dayStart.getDay() : null;
-      const isTueOrWed = jsDay === 2 || jsDay === 4;
-
       const addRealRow = (cols0to2) => {
          const c0 = cols0to2[0] || null;
          const c1 = cols0to2[1] || null;
@@ -1804,62 +2044,79 @@ export default function DayviewCanvasTrack({
          rows.push([c0, c1, c2, lateralClone]);
       };
 
-      if (isTueOrWed && remainingCount("buiucani") > 0) {
-         const buCount = remainingCount("buiucani");
-         const row = [null, null, null];
+      // ✅ MOD NOU: dacă ai filtru, generezi rânduri doar din sectorul ales
+      if (activeSectorFilter) {
+         const sec = activeSectorFilter;
 
-         if (buCount >= 3) {
+         while (remainingCount(sec) > 0) {
+            const row = [null, null, null];
+            row[0] = popFromSector(sec, "auto");
+            row[1] = popFromSector(sec, "manual");
+            row[2] = popFromSector(sec, "manual");
+            addRealRow(row);
+         }
+      } else {
+         // ✅ logica ta veche
+         const jsDay = dayStart instanceof Date ? dayStart.getDay() : null;
+         const isTueOrThu = jsDay === 2 || jsDay === 4;
+
+         if (isTueOrThu && remainingCount("buiucani") > 0) {
+            const buCount = remainingCount("buiucani");
+            const row = [null, null, null];
+
+            if (buCount >= 3) {
+               row[0] = popFromSector("buiucani", "auto");
+               row[1] = popFromSector("buiucani", "manual");
+               row[2] = popFromSector("buiucani", "manual");
+            } else if (buCount === 2) {
+               row[0] = popFromSector("buiucani", "auto");
+               row[1] = popFromSector("buiucani", "manual");
+               row[2] = popFromSector("botanica", "manual");
+            } else {
+               row[0] = popFromSector("buiucani", "auto");
+               row[1] = popFromSector("botanica", "manual");
+               row[2] = popFromSector("botanica", "manual");
+            }
+
+            addRealRow(row);
+         }
+
+         let sectorForNextRow = "botanica";
+         const anyMainSectorLeft = () =>
+            remainingCount("botanica") > 0 || remainingCount("ciocana") > 0;
+
+         while (anyMainSectorLeft()) {
+            let sector = sectorForNextRow;
+            const other = sector === "botanica" ? "ciocana" : "botanica";
+
+            if (remainingCount(sector) === 0 && remainingCount(other) > 0)
+               sector = other;
+            if (remainingCount(sector) === 0) break;
+
+            const row = [null, null, null];
+            row[0] = popFromSector(sector, "auto");
+            row[1] = popFromSector(sector, "manual");
+            row[2] = popFromSector(sector, "manual");
+            addRealRow(row);
+
+            sectorForNextRow = sector === "botanica" ? "ciocana" : "botanica";
+         }
+
+         while (remainingCount("buiucani") > 0) {
+            const row = [null, null, null];
             row[0] = popFromSector("buiucani", "auto");
             row[1] = popFromSector("buiucani", "manual");
             row[2] = popFromSector("buiucani", "manual");
-         } else if (buCount === 2) {
-            row[0] = popFromSector("buiucani", "auto");
-            row[1] = popFromSector("buiucani", "manual");
-            row[2] = popFromSector("botanica", "manual");
-         } else {
-            row[0] = popFromSector("buiucani", "auto");
-            row[1] = popFromSector("botanica", "manual");
-            row[2] = popFromSector("botanica", "manual");
+            addRealRow(row);
          }
 
-         addRealRow(row);
-      }
-
-      let sectorForNextRow = "botanica";
-      const anyMainSectorLeft = () =>
-         remainingCount("botanica") > 0 || remainingCount("ciocana") > 0;
-
-      while (anyMainSectorLeft()) {
-         let sector = sectorForNextRow;
-         const other = sector === "botanica" ? "ciocana" : "botanica";
-
-         if (remainingCount(sector) === 0 && remainingCount(other) > 0)
-            sector = other;
-         if (remainingCount(sector) === 0) break;
-
-         const row = [null, null, null];
-         row[0] = popFromSector(sector, "auto");
-         row[1] = popFromSector(sector, "manual");
-         row[2] = popFromSector(sector, "manual");
-         addRealRow(row);
-
-         sectorForNextRow = sector === "botanica" ? "ciocana" : "botanica";
-      }
-
-      while (remainingCount("buiucani") > 0) {
-         const row = [null, null, null];
-         row[0] = popFromSector("buiucani", "auto");
-         row[1] = popFromSector("buiucani", "manual");
-         row[2] = popFromSector("buiucani", "manual");
-         addRealRow(row);
-      }
-
-      while (remainingCount("other") > 0) {
-         const row = [null, null, null];
-         row[0] = popFromSector("other", "auto");
-         row[1] = popFromSector("other", "manual");
-         row[2] = popFromSector("other", "manual");
-         addRealRow(row);
+         while (remainingCount("other") > 0) {
+            const row = [null, null, null];
+            row[0] = popFromSector("other", "auto");
+            row[1] = popFromSector("other", "manual");
+            row[2] = popFromSector("other", "manual");
+            addRealRow(row);
+         }
       }
 
       const flat = rows.flat();
@@ -1916,7 +2173,13 @@ export default function DayviewCanvasTrack({
       }
 
       return enriched;
-   }, [instructors, cars, dayStart]);
+   }, [instructors, cars, dayStart, activeSectorFilter]);
+
+   // ✅ NEW: semnătură layout instructori (forțează redraw când se schimbă sector/ordinea)
+   const instructorsLayoutSig = useMemo(
+      () => buildInstructorsLayoutSignature(effectiveInstructors),
+      [effectiveInstructors]
+   );
 
    const headerMetrics = useMemo(() => {
       const colsCount = Math.max(1, effectiveInstructors.length || 1);
@@ -2165,6 +2428,7 @@ export default function DayviewCanvasTrack({
       hiddenVersion,
       effectiveInstructors,
       layoutColsPerRow,
+      refreshTick,
    ]);
 
    /* ================== blocked normalize + canceled slots per inst ================== */
@@ -2221,7 +2485,7 @@ export default function DayviewCanvasTrack({
          blockedKeyMapForSlots: normalizedBlocked,
          canceledSlotKeysByInst: canceledKeysByInst,
       };
-   }, [blockedKeyMap, events]);
+   }, [blockedKeyMap, events, refreshTick]);
 
    /* ================== overlapEventsByInst (active only) ================== */
 
@@ -2257,18 +2521,21 @@ export default function DayviewCanvasTrack({
       });
 
       return map;
-   }, [events]);
+   }, [events, refreshTick]);
 
    /* ================== signatures (redraw memo) ================== */
 
    const eventsSig = useMemo(
-      () => buildEventsSignatureForDay(eventsForCanvas),
-      [eventsForCanvas]
+      () => buildCanvasEventsSignature(eventsForCanvas),
+      // ⚠️ refreshTick forțează recalcul chiar dacă upstream a păstrat aceleași referințe
+      [eventsForCanvas, refreshTick]
    );
+
    const overlapSig = useMemo(
-      () => buildEventsSignatureForDay(events || []),
-      [events]
+      () => buildCanvasEventsSignature(events || []),
+      [events, refreshTick]
    );
+
    const slotsSig = useMemo(() => buildSlotsSignature(slotGeoms), [slotGeoms]);
 
    const blockedSig = useMemo(
@@ -2348,6 +2615,13 @@ export default function DayviewCanvasTrack({
          canceledSig,
          waitSig,
          presenceSig,
+         desiredBadgeSig,
+         createDraftSig,
+
+         // ✅ NEW: forțează redraw când schimbi sector/ordonare instructori
+         sectorSig: activeSectorFilter || "ALL",
+         instructorsLayoutSig,
+
          highlightId: selectedEventId || activeEventId || null,
          highlightSlotKey:
             selectedSlot && selectedSlot.slotStart && selectedSlot.instructorId
@@ -2360,7 +2634,11 @@ export default function DayviewCanvasTrack({
       };
 
       const sigKey = JSON.stringify(sig);
-      if (lastDrawSigRef.current === sigKey) return;
+
+      const noSkip =
+         typeof window !== "undefined" && window.__DV_NO_SKIP === true;
+
+      if (!noSkip && lastDrawSigRef.current === sigKey) return;
       lastDrawSigRef.current = sigKey;
 
       let width = hoursColWidth + worldWidth;
@@ -2439,8 +2717,11 @@ export default function DayviewCanvasTrack({
          overlapEventsByInst,
          canceledSlotKeysByInst,
          presenceByReservationColors,
-           presenceReservationIds: effectivePresenceReservationIds,
-  presenceColorsByReservation,
+         presenceReservationIds: effectivePresenceReservationIds,
+         desiredInstructorBadgeByUserId,
+         presenceColorsByReservation,
+         createDraftBySlotUsers,
+         createDraftBySlotColors,
       });
       hitMapRef.current = hitMap;
    }, [
@@ -2452,6 +2733,7 @@ export default function DayviewCanvasTrack({
       headerMetrics,
       themeTick,
       blackoutVer,
+      refreshTick,
       activeEventId,
       selectedEventId,
       selectedSlot,
@@ -2471,10 +2753,18 @@ export default function DayviewCanvasTrack({
       waitSig,
       overlapEventsByInst,
       canceledSlotKeysByInst,
-      presenceReservationIds, // ✅
-      presenceSig, // ✅
-      presenceColorsByReservation, // ✅ (recomandat)
+      presenceReservationIds,
+      presenceSig,
+      presenceColorsByReservation,
       presenceByReservationColors,
+      desiredInstructorBadgeByUserId,
+      createDraftSig,
+      createDraftBySlotUsers,
+      createDraftBySlotColors,
+
+      // ✅ NEW
+      activeSectorFilter,
+      instructorsLayoutSig,
    ]);
 
    /* ================== active rect callback ================== */
@@ -2868,15 +3158,6 @@ export default function DayviewCanvasTrack({
             setSelectedSlot(slotPayload);
             setGlobalSelection({ event: null, slot: slotPayload });
 
-            //// ✅ click pe slot gol => deschide panel comun (dacă nu e paste mode)
-            //if (
-            //   foundSlotItem.kind === "empty-slot" &&
-            //   !getCopyBuffer() &&
-            //   foundSlotItem
-            //) {
-            //   openRangePanelFromSlot(slotPayload, foundSlotItem);
-            //}
-
             if (isTouchLike && getCopyBuffer()) {
                setTouchToolbar({
                   type: "slot",
@@ -2957,11 +3238,22 @@ export default function DayviewCanvasTrack({
                   item.kind === "empty-slot" &&
                   typeof onCreateSlot === "function"
                ) {
+                  const slotPayload = {
+                     instructorId: item.instructorId,
+                     slotStart: item.slotStart,
+                     slotEnd: item.slotEnd,
+                  };
+
+                  setSelectedEventId(null);
+                  setSelectedSlot(slotPayload);
+                  setGlobalSelection({ event: null, slot: slotPayload });
+
                   const payload = {
                      instructorId: item.instructorId,
                      start: new Date(item.slotStart),
                      end: new Date(item.slotEnd),
                   };
+
                   requestAnimationFrame(() => onCreateSlot(payload));
                }
                break;
@@ -3149,6 +3441,7 @@ export default function DayviewCanvasTrack({
          canvas.removeEventListener("pointercancel", handlePointerCancel);
       };
    }, [reloadWaitNotes, waitNotes, openStudentPopup]);
+
    /* ================== UI overlay ================== */
 
    const { colWidth, colGap, headerHeight, colsPerRow, rowTops } =
@@ -3258,7 +3551,6 @@ export default function DayviewCanvasTrack({
                   <ReactSVG src={cutIcon} className="dv-touch-toolbar__icon" />
                </button>
 
-               {/* ✅ history button: deschide panel comun (event sau slot) */}
                <button
                   type="button"
                   className={
@@ -3320,7 +3612,7 @@ export default function DayviewCanvasTrack({
                onPointerDown={(e) => e.stopPropagation()}
             />
          )}
-         {/* PANEL overlay (istoric comun + lista rezervari in interval) */}
+
          {historyUI && (
             <div
                className="dv-history"
@@ -3403,7 +3695,6 @@ export default function DayviewCanvasTrack({
                      </div>
                   ) : (
                      <>
-                        {/* ISTORIC COMUN (PAGINARE UNICA) */}
                         <div className="dv-history__section dv-history__section--timeline">
                            {rangeHistError ? (
                               <div className="dv-history__state dv-history__state--error">

@@ -158,7 +158,6 @@ function drawPresenceBorder(
    ctx.restore();
 }
 
-
 const EVENT_COLOR_MAP = {
    DEFAULT: DEFAULT_EVENT_COLOR_TOKEN,
    RED: "--event-red",
@@ -460,11 +459,12 @@ export function drawAll({
    editingWait = null,
    overlapEventsByInst = null,
    canceledSlotKeysByInst = null,
-
-   // ✅ NEW (presence)
    presenceReservationIds = null, // Set<string> | string[] | { [id]: true }
-
    presenceByReservationColors = null,
+   desiredInstructorBadgeByUserId = null, // Map<userId, "AB"> sau object
+   presenceColorsByReservation = null,
+   createDraftBySlotUsers = null,
+   createDraftBySlotColors = null,
 }) {
    if (!ctx || !width || !height) return;
 
@@ -863,6 +863,67 @@ export function drawAll({
             ctx.fillStyle = fillColor;
             drawRoundRect(ctx, slotX, slotY, slotW, slotH, slotRadius);
             ctx.fill();
+            // ✅ CREATE-DRAFT indicator (slot gol)
+            // ✅ CREATE-DRAFT overlay (slot gol) — ca la EDIT, dar scrie "CREARE"
+            // ✅ CREATE-DRAFT overlay (slot gol) — cu border colorat (ca la EDITARE)
+            if (
+               createDraftBySlotColors &&
+               !isPadCol &&
+               slotStartDate instanceof Date &&
+               !isNaN(slotStartDate)
+            ) {
+               const draftKey = `${instId}|${slotStartDate.toISOString()}`;
+
+               // re-folosim exact aceeași rezolvare de culori ca la EDITARE
+               const draftColors = getPresenceColorsForId(
+                  createDraftBySlotColors,
+                  draftKey
+               );
+               const isCreatingHere =
+                  Array.isArray(draftColors) && draftColors.length;
+
+               if (isCreatingHere) {
+                  ctx.save();
+
+                  // overlay
+                  ctx.fillStyle = "rgba(0,0,0,0.65)";
+                  drawRoundRect(
+                     ctx,
+                     slotX + 1,
+                     slotY + 1,
+                     slotW - 2,
+                     slotH - 2,
+                     slotRadius
+                  );
+                  ctx.fill();
+
+                  // text
+                  ctx.fillStyle = "#fff";
+                  ctx.textBaseline = "top";
+                  ctx.font = `bold ${Math.max(
+                     11,
+                     12 * fontScale
+                  )}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+                  ctx.fillText(
+                     "CREARE",
+                     slotX + 8 * fontScale,
+                     slotY + 6 * fontScale
+                  );
+
+                  // ✅ border colorat (identic ca la EDITARE)
+                  drawPresenceBorder(
+                     ctx,
+                     slotX,
+                     slotY,
+                     slotW,
+                     slotH,
+                     draftColors,
+                     slotRadius
+                  );
+
+                  ctx.restore();
+               }
+            }
 
             // border blackout
             if (isBlocked || isSlot19_30) {
@@ -1091,12 +1152,31 @@ export function drawAll({
             if (isFavorite) statusEmoji += "⁂";
             if (isImportant) statusEmoji += statusEmoji ? " · ‼" : "‼";
 
+            // ✅ userId din rezervare
+            const userIdForBadge = raw?.userId ?? null;
+
+            // ✅ badge "AB"
+            let desiredBadge = "";
+            if (userIdForBadge != null && desiredInstructorBadgeByUserId) {
+               const k = String(userIdForBadge);
+
+               if (desiredInstructorBadgeByUserId instanceof Map) {
+                  desiredBadge = desiredInstructorBadgeByUserId.get(k) || "";
+               } else if (typeof desiredInstructorBadgeByUserId === "object") {
+                  desiredBadge = desiredInstructorBadgeByUserId[k] || "";
+               }
+            }
+
             const metaParts = [];
             if (timeText) metaParts.push(timeText);
             if (ev.gearboxLabel) metaParts.push(ev.gearboxLabel);
             if (statusEmoji) metaParts.push(statusEmoji);
 
-            const metaLine = metaParts.join(" · ");
+            // ✅ aici apare inițiala lângă celelalte meta
+            if (desiredBadge) metaParts.push(desiredBadge);
+
+            // ✅ IMPORTANT: filter(Boolean) (NU metaParts.push(Boolean)!)
+            const metaLine = metaParts.filter(Boolean).join(" · ");
 
             if (metaLine) {
                const metaLines = wrapText(ctx, metaLine, maxTextWidth, 1);
@@ -1179,12 +1259,12 @@ export function drawAll({
                      presenceByReservationColors
                   );
                }
-               console.log(
-                  "RID:",
-                  String(ridPresence),
-                  "colors:",
-                  presenceColors
-               );
+               //console.log(
+               //   "RID:",
+               //   String(ridPresence),
+               //   "colors:",
+               //   presenceColors
+               //);
             }
 
             if (presenceColors && presenceColors.length) {
@@ -1263,7 +1343,7 @@ export function drawAll({
                   12 * fontScale
                )}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
                ctx.fillText(
-                  "EDIT",
+                  "EDITARE",
                   cardX + 8 * fontScale,
                   cardY + 6 * fontScale
                );

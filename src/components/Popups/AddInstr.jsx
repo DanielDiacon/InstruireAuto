@@ -221,7 +221,7 @@ function AddInstr() {
       phone: "",
       email: "",
       password: "",
-      sector: "Botanica",
+      sector: "", // ✅ input liber
       isActive: true,
       instructorsGroupId: null,
       carPlate: "",
@@ -236,11 +236,10 @@ function AddInstr() {
       lastName: "",
       phone: "",
       email: "",
-      sector: "Botanica",
+      sector: "", // ✅ input liber
       carPlate: "",
       gearbox: "manual",
    });
-
    const [editPills, setEditPills] = useState([]);
    const pushEditPill = useCallback((text, type = "error") => {
       setEditPills((prev) => [
@@ -396,6 +395,7 @@ function AddInstr() {
       if (!newInstr.password || newInstr.password.length < 6)
          localErrors.push("Parola trebuie să aibă minim 6 caractere.");
       localErrors.push(...collectCreateConflicts());
+      if (!newInstr.sector?.trim()) localErrors.push("Completează sectorul.");
 
       if (localErrors.length) {
          setPills(localErrors);
@@ -745,6 +745,17 @@ function AddInstr() {
    const handleSaveDetails = async () => {
       setSaving(true);
       setEditPills([]);
+      if (!editInstr.sector?.trim()) {
+         setEditPills([
+            {
+               id: Date.now() + Math.random(),
+               text: "Completează sectorul.",
+               type: "error",
+            },
+         ]);
+         setSaving(false);
+         return;
+      }
 
       const conflicts = collectEditConflicts(editingId, editingUserId);
       if (conflicts.length) {
@@ -948,131 +959,86 @@ function AddInstr() {
                                              </div>
 
                                              {/* rând 3 */}
-                                             <input
-                                                type="email"
-                                                className="instructors-popup__input"
-                                                value={editInstr.email}
-                                                onChange={(e) =>
-                                                   setEditInstr((s) => ({
-                                                      ...s,
-                                                      email: e.target.value,
-                                                   }))
-                                                }
-                                                placeholder={email || "Email"}
-                                                autoComplete="email"
-                                             />
 
                                              {/* rând 4 */}
                                              <div className="instructors-popup__form-row">
-                                                <div
-                                                   className={`instructors-popup__radio-wrapper grow ${
-                                                      editInstr.sector ===
-                                                      "Botanica"
-                                                         ? "active-botanica"
-                                                         : "active-ciocana"
-                                                   }`}
-                                                >
-                                                   <label>
-                                                      <input
-                                                         type="radio"
-                                                         name={`sector-${inst.id}`}
-                                                         value="Botanica"
-                                                         checked={
-                                                            editInstr.sector ===
-                                                            "Botanica"
-                                                         }
-                                                         onChange={(e) =>
-                                                            setEditInstr(
-                                                               (s) => ({
-                                                                  ...s,
-                                                                  sector:
-                                                                     e.target
-                                                                        .value,
-                                                               })
-                                                            )
-                                                         }
-                                                      />
-                                                      Botanica
-                                                   </label>
-                                                   <label>
-                                                      <input
-                                                         type="radio"
-                                                         name={`sector-${inst.id}`}
-                                                         value="Ciocana"
-                                                         checked={
-                                                            editInstr.sector ===
-                                                            "Ciocana"
-                                                         }
-                                                         onChange={(e) =>
-                                                            setEditInstr(
-                                                               (s) => ({
-                                                                  ...s,
-                                                                  sector:
-                                                                     e.target
-                                                                        .value,
-                                                               })
-                                                            )
-                                                         }
-                                                      />
-                                                      Ciocana
-                                                   </label>
-                                                </div>
+                                                <input
+                                                   type="email"
+                                                   className="instructors-popup__input"
+                                                   value={editInstr.email}
+                                                   onChange={(e) =>
+                                                      setEditInstr((s) => ({
+                                                         ...s,
+                                                         email: e.target.value,
+                                                      }))
+                                                   }
+                                                   placeholder={
+                                                      email || "Email"
+                                                   }
+                                                   autoComplete="email"
+                                                />
 
-                                                <div
-                                                   className={`instructors-popup__radio-wrapper grow ${
-                                                      editInstr.gearbox ===
-                                                      "manual"
-                                                         ? "active-botanica"
-                                                         : "active-ciocana"
-                                                   }`}
-                                                >
-                                                   <label>
-                                                      <input
-                                                         type="radio"
-                                                         name={`gearbox-${inst.id}`}
-                                                         value="manual"
-                                                         checked={
-                                                            editInstr.gearbox ===
-                                                            "manual"
-                                                         }
-                                                         onChange={(e) =>
-                                                            setEditInstr(
-                                                               (s) => ({
-                                                                  ...s,
-                                                                  gearbox:
-                                                                     e.target
-                                                                        .value,
-                                                               })
-                                                            )
-                                                         }
-                                                      />
-                                                      Manual
-                                                   </label>
-                                                   <label>
-                                                      <input
-                                                         type="radio"
-                                                         name={`gearbox-${inst.id}`}
-                                                         value="automat"
-                                                         checked={
-                                                            editInstr.gearbox ===
-                                                            "automat"
-                                                         }
-                                                         onChange={(e) =>
-                                                            setEditInstr(
-                                                               (s) => ({
-                                                                  ...s,
-                                                                  gearbox:
-                                                                     e.target
-                                                                        .value,
-                                                               })
-                                                            )
-                                                         }
-                                                      />
-                                                      Automat
-                                                   </label>
-                                                </div>
+                                                <input
+                                                   type="text"
+                                                   className="instructors-popup__input"
+                                                   placeholder="Botanica Ciocana Buiucani"
+                                                   value={editInstr.sector}
+                                                   onChange={(e) =>
+                                                      setEditInstr((s) => ({
+                                                         ...s,
+                                                         sector: e.target.value,
+                                                      }))
+                                                   }
+                                                   autoComplete="off"
+                                                />
                                              </div>
-
+                                             <div
+                                                className={`instructors-popup__radio-wrapper grow ${
+                                                   editInstr.gearbox ===
+                                                   "manual"
+                                                      ? "active-botanica"
+                                                      : "active-ciocana"
+                                                }`}
+                                             >
+                                                <label>
+                                                   <input
+                                                      type="radio"
+                                                      name={`gearbox-${inst.id}`}
+                                                      value="manual"
+                                                      checked={
+                                                         editInstr.gearbox ===
+                                                         "manual"
+                                                      }
+                                                      onChange={(e) =>
+                                                         setEditInstr((s) => ({
+                                                            ...s,
+                                                            gearbox:
+                                                               e.target.value,
+                                                         }))
+                                                      }
+                                                   />
+                                                   Manual
+                                                </label>
+                                                <label>
+                                                   <input
+                                                      type="radio"
+                                                      name={`gearbox-${inst.id}`}
+                                                      value="automat"
+                                                      checked={
+                                                         editInstr.gearbox ===
+                                                         "automat"
+                                                      }
+                                                      onChange={(e) =>
+                                                         setEditInstr((s) => ({
+                                                            ...s,
+                                                            gearbox:
+                                                               e.target.value,
+                                                         }))
+                                                      }
+                                                   />
+                                                   Automat
+                                                </label>
+                                             </div>
                                              <AlertPills
                                                 messages={editPills}
                                                 onDismiss={popEditPill}
@@ -1712,84 +1678,59 @@ function AddInstr() {
                         />
                      </div>
 
-                     <div className="instructors-popup__form-row">
-                        <div
-                           className={`instructors-popup__radio-wrapper grow ${
-                              newInstr.sector === "Botanica"
-                                 ? "active-botanica"
-                                 : "active-ciocana"
-                           }`}
-                        >
-                           <label>
-                              <input
-                                 type="radio"
-                                 name="sector"
-                                 value="Botanica"
-                                 checked={newInstr.sector === "Botanica"}
-                                 onChange={(e) =>
-                                    setNewInstr({
-                                       ...newInstr,
-                                       sector: e.target.value,
-                                    })
-                                 }
-                              />
-                              Botanica
-                           </label>
-                           <label>
-                              <input
-                                 type="radio"
-                                 name="sector"
-                                 value="Ciocana"
-                                 checked={newInstr.sector === "Ciocana"}
-                                 onChange={(e) =>
-                                    setNewInstr({
-                                       ...newInstr,
-                                       sector: e.target.value,
-                                    })
-                                 }
-                              />
-                              Ciocana
-                           </label>
-                        </div>
+                     <div className="grow">
+                        <input
+                           type="text"
+                           className="instructors-popup__input"
+                           placeholder="Botanica Ciocana Buiucani"
+                           value={newInstr.sector}
+                           onChange={(e) =>
+                              setNewInstr((s) => ({
+                                 ...s,
+                                 sector: e.target.value,
+                              }))
+                           }
+                           autoComplete="off"
+                        />
+                     </div>
 
-                        <div
-                           className={`instructors-popup__radio-wrapper grow ${
-                              newInstr.gearbox === "manual"
-                                 ? "active-botanica"
-                                 : "active-ciocana"
-                           }`}
-                        >
-                           <label>
-                              <input
-                                 type="radio"
-                                 name="gearbox_add"
-                                 value="manual"
-                                 checked={newInstr.gearbox === "manual"}
-                                 onChange={(e) =>
-                                    setNewInstr({
-                                       ...newInstr,
-                                       gearbox: e.target.value,
-                                    })
-                                 }
-                              />
-                              Manual
-                           </label>
-                           <label>
-                              <input
-                                 type="radio"
-                                 name="gearbox_add"
-                                 value="automat"
-                                 checked={newInstr.gearbox === "automat"}
-                                 onChange={(e) =>
-                                    setNewInstr({
-                                       ...newInstr,
-                                       gearbox: e.target.value,
-                                    })
-                                 }
-                              />
-                              Automat
-                           </label>
-                        </div>
+                     <div
+                        className={`instructors-popup__radio-wrapper grow ${
+                           newInstr.gearbox === "manual"
+                              ? "active-botanica"
+                              : "active-ciocana"
+                        }`}
+                     >
+                        <label>
+                           <input
+                              type="radio"
+                              name="gearbox_add"
+                              value="manual"
+                              checked={newInstr.gearbox === "manual"}
+                              onChange={(e) =>
+                                 setNewInstr({
+                                    ...newInstr,
+                                    gearbox: e.target.value,
+                                 })
+                              }
+                           />
+                           Manual
+                        </label>
+                        <label>
+                           <input
+                              type="radio"
+                              name="gearbox_add"
+                              value="automat"
+                              checked={newInstr.gearbox === "automat"}
+                              onChange={(e) =>
+                                 setNewInstr({
+                                    ...newInstr,
+                                    gearbox: e.target.value,
+                                 })
+                              }
+                           />
+                           Automat
+                        </label>
                      </div>
 
                      <div className="instructors-popup__btns">

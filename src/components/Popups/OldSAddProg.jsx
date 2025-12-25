@@ -1,4 +1,4 @@
-// src/components/Popups/SAddProg.jsx
+// src/components/Popups/OldSAddProg.jsx
 import React, { useState, useContext, useEffect, useMemo } from "react";
 import DatePicker, { registerLocale } from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -590,7 +590,7 @@ function calcAvailability({
 }
 
 /* ————— Componentă ————— */
-export default function SAddProg({ onClose }) {
+export default function OldSAddProg({ onClose }) {
    /* ALERT PILLS */
    const [messages, setMessages] = useState([]);
    const [debugArmed, setDebugArmed] = useState(false);
@@ -1252,7 +1252,7 @@ export default function SAddProg({ onClose }) {
                sector: String(sector || "Botanica"),
                gearbox: normalizedGearbox,
                privateMessage: "",
-               color: "#FF5733",
+               color: "--black-t",
             })),
          };
 

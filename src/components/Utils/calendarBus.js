@@ -1,40 +1,35 @@
-// Singleton very-light event bus pentru refresh calendar
-const listeners = new Set();
+// src/components/APanel/Utils/calendarBus.js
+const EVT = "ia:calendar-refresh";
 
-export function triggerCalendarRefresh(payload) {
-   // coalesce în microtask ca să nu spamăm
-   Promise.resolve().then(() => {
-      for (const fn of Array.from(listeners)) {
-         try {
-            fn(payload);
-         } catch {
-            /* no-op */
-         }
-      }
+let rafId = 0;
+let pendingDetail = null;
+
+export function triggerCalendarRefresh(detail = {}) {
+   if (typeof window === "undefined") return;
+   window.dispatchEvent(new CustomEvent(EVT, { detail }));
+}
+
+/**
+ * Coalesce într-un singur frame: nu spammează redraw-ul.
+ * IMPORTANT: DayviewCanvasTrack ascultă exact acest EVT.
+ */
+export function scheduleCalendarRefresh(detail = {}) {
+   if (typeof window === "undefined") return;
+
+   pendingDetail = { ...(pendingDetail || {}), ...(detail || {}) };
+
+   if (rafId) return;
+   rafId = window.requestAnimationFrame(() => {
+      rafId = 0;
+      const d = pendingDetail || {};
+      pendingDetail = null;
+      triggerCalendarRefresh(d);
    });
-
-   // fallback: event nativ – util dacă există code-splitting
-   try {
-      window.dispatchEvent(
-         new CustomEvent("dv-calendar-refresh", {
-            detail: payload || null,
-         })
-      );
-   } catch {}
 }
 
 export function listenCalendarRefresh(cb) {
-   listeners.add(cb);
-
-   const onWin = (ev) => {
-      // ev?.detail conține payload-ul
-      cb(ev?.detail);
-   };
-
-   window.addEventListener("dv-calendar-refresh", onWin);
-
-   return () => {
-      listeners.delete(cb);
-      window.removeEventListener("dv-calendar-refresh", onWin);
-   };
+   if (typeof window === "undefined") return () => {};
+   const handler = (e) => cb?.(e?.detail || {});
+   window.addEventListener(EVT, handler);
+   return () => window.removeEventListener(EVT, handler);
 }

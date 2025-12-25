@@ -10,17 +10,20 @@ import React, {
 } from "react";
 import { useDispatch, useSelector, shallowEqual } from "react-redux";
 
-// ✅ e în același folder (din screenshot)
-import { listenCalendarRefresh } from "../../Utils/calendarBus";
+import {
+   listenCalendarRefresh,
+   scheduleCalendarRefresh,
+} from "../../Utils/calendarBus";
 
-// ✅ din Calendar -> APanel -> components -> src -> store
 import { fetchInstructorsGroups } from "../../../store/instructorsGroupSlice";
 import { fetchCars } from "../../../store/carsSlice";
 import {
    fetchReservationsDelta,
    maybeRefreshReservations,
    fetchReservationsForMonth,
+   removeReservationLocal, // ✅ ADD
 } from "../../../store/reservationsSlice";
+
 import { fetchStudents } from "../../../store/studentsSlice";
 import { fetchUsers } from "../../../store/usersSlice";
 import { fetchInstructors } from "../../../store/instructorsSlice";
@@ -33,13 +36,11 @@ import {
    selectCalendarDerivedData,
 } from "../../../store/calendarSelectors";
 
-// ✅ din Calendar -> APanel -> components -> Utils
 import { openPopup } from "../../Utils/popupStore";
 
 import DayviewCanvasTrack from "./DayviewCanvasTrack";
 import useInertialPan from "./useInertialPan";
 
-// ✅ din Calendar -> APanel -> components -> src -> socket/api
 import { useReservationSocket } from "../../../socket/useReservationSocket";
 import { getInstructorBlackouts } from "../../../api/instructorsService";
 
@@ -49,6 +50,19 @@ const startOfDayTs = (d) => {
    const x = new Date(d);
    return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 };
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function getMonthRangeYMD(dateLike) {
+   const d = new Date(dateLike);
+   const y = d.getFullYear();
+   const m = d.getMonth(); // 0-11
+   const lastDay = new Date(y, m + 1, 0).getDate();
+
+   return {
+      startDate: `${y}-${pad2(m + 1)}-01`,
+      endDate: `${y}-${pad2(m + 1)}-${pad2(lastDay)}`,
+   };
+}
 
 const toFloatingDate = (val) => {
    if (!val) return null;
@@ -76,25 +90,24 @@ const norm = (s = "") =>
 const digitsOnly = (s = "") => s.toString().replace(/\D+/g, "");
 
 const normPlate = (s = "") => s.toString().replace(/[\s-]/g, "").toUpperCase();
+
 function normalizeUsersList(users) {
    if (!users) return [];
    if (Array.isArray(users)) return users;
-
-   // suport pentru forme comune din slice-uri
    if (Array.isArray(users.items)) return users.items;
    if (Array.isArray(users.list)) return users.list;
    if (Array.isArray(users.data)) return users.data;
-
    return [];
 }
+
 function isAdminOrManager(u) {
    const role = String(
       u?.role ?? u?.userRole ?? u?.type ?? u?.profile?.role ?? ""
    ).toUpperCase();
    return role === "ADMIN" || role === "MANAGER";
 }
+
 function pickUserProfileColor(u) {
-   // ia “culoarea din profil” – încearcă mai multe câmpuri (nu știm exact schema ta)
    return (
       u?.profile?.color ||
       u?.profileColor ||
@@ -105,7 +118,6 @@ function pickUserProfileColor(u) {
    );
 }
 
-// fallback deterministic (dacă userul n-are culoare setată în profil)
 const FALLBACK_USER_COLOR_TOKENS = [
    "--event-blue",
    "--event-green",
@@ -123,16 +135,34 @@ function hashToColorToken(id) {
    return FALLBACK_USER_COLOR_TOKENS[h % FALLBACK_USER_COLOR_TOKENS.length];
 }
 
-// citire token din cookie
 const getCookie = (name) => {
    if (typeof document === "undefined") return null;
    const m = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
    return m ? decodeURIComponent(m[2]) : null;
 };
 
+function decodeJwtPayload(token) {
+   try {
+      if (!token) return null;
+      const parts = String(token).split(".");
+      if (parts.length < 2) return null;
+      const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+      const json = atob(b64 + pad);
+      return JSON.parse(json);
+   } catch {
+      return null;
+   }
+}
+
+function getUserIdFromToken(token) {
+   const p = decodeJwtPayload(token);
+   if (!p) return null;
+   return p.userId ?? p.uid ?? p.id ?? p.sub ?? p.user?.id ?? null;
+}
+
 const px = (v) => parseFloat(String(v || 0));
 
-/* ===== Dropdown reutilizabil (compatibil cu .dv-dd din SCSS-ul tău) ===== */
 function SimpleDropdown({
    value,
    onChange,
@@ -227,7 +257,7 @@ const DUMMY_INSTRUCTORS = Array.from({ length: 10 }).map((_, idx) => {
    };
 });
 
-/* === CONSTANTE PENTRU LAYOUT / ZOOM / TIMING (stabile, în afara componentei) === */
+/* === CONSTANTE PENTRU LAYOUT / ZOOM / TIMING === */
 
 const Z_BASE = 0.6;
 const ZOOM_PERCENT_LEVELS = [50, 75, 100, 125, 150];
@@ -248,15 +278,14 @@ const TZ_PARTS_FMT_MAIN = new Intl.DateTimeFormat("en-GB", {
    second: "2-digit",
 });
 
-// durată lecție + dimensiuni de bază
 const LESSON_MINUTES = 90;
 const EVENT_H = 48;
 const SLOT_H = 125;
 const HOURS_COL_W = 60;
 const COL_W = 220;
-const GROUP_GAP = 32; // px
+const GROUP_GAP = 32;
 
-/* ================= COMPONENT PRINCIPAL (Shell) ================= */
+/* ================= COMPONENT PRINCIPAL ================= */
 export default function ACalendarOptimized({
    date,
    extraFilters,
@@ -264,7 +293,31 @@ export default function ACalendarOptimized({
 } = {}) {
    const dispatch = useDispatch();
 
-   /* ====== DATA & STARE GLOBALĂ ====== */
+   /* ================== Gate refresh (anti-spam) ================== */
+   const refreshInFlightRef = useRef(false);
+   const refreshQueuedRef = useRef(false);
+
+   const runReservationsRefresh = useCallback(
+      (reason) => {
+         if (refreshInFlightRef.current) {
+            refreshQueuedRef.current = true;
+            return;
+         }
+
+         refreshInFlightRef.current = true;
+
+         Promise.resolve(dispatch(fetchReservationsDelta()))
+            .catch(() => {})
+            .finally(() => {
+               refreshInFlightRef.current = false;
+               if (refreshQueuedRef.current) {
+                  refreshQueuedRef.current = false;
+                  runReservationsRefresh("queued");
+               }
+            });
+      },
+      [dispatch]
+   );
 
    const [currentDate, setCurrentDate] = useState(() =>
       date ? new Date(date) : new Date()
@@ -280,16 +333,38 @@ export default function ACalendarOptimized({
 
    const scrollRef = useRef(null);
    const dayRefs = useRef(new Map());
-
    const scrollLazyRafRef = useRef(null);
 
    const [visibleDays, setVisibleDays] = useState(() => new Set());
    const visibleDaysCount = visibleDays.size;
 
-   // scroll automat pe Y pentru event activ (folosit DOAR la search / focus)
+   // ✅ Auto-scroll Y: doar o singură dată per acțiune (search / săgeți / focus-edit)
+   const activeEventIdRef = useRef(null);
+   const autoScrollYOnceRef = useRef({ eventId: null, key: null, done: true });
+
+   const armAutoScrollYOnce = useCallback((eventId, key) => {
+      const id = eventId != null ? String(eventId) : null;
+      autoScrollYOnceRef.current = {
+         eventId: id,
+         key: String(key ?? Date.now()),
+         done: false,
+      };
+   }, []);
+
+   const disarmAutoScrollY = useCallback(() => {
+      autoScrollYOnceRef.current = { eventId: null, key: null, done: true };
+   }, []);
+
+   // scroll automat pe Y pentru event activ — DAR o singură dată (gate)
    const handleActiveEventRectChange = useCallback((info) => {
       const scroller = scrollRef.current;
       if (!scroller || !info) return;
+
+      const activeId = activeEventIdRef.current;
+      const gate = autoScrollYOnceRef.current;
+
+      if (!activeId || !gate || gate.done) return;
+      if (gate.eventId && String(gate.eventId) !== String(activeId)) return;
 
       const scRect = scroller.getBoundingClientRect();
       const scHeight = scRect.height || scroller.clientHeight || 0;
@@ -299,15 +374,11 @@ export default function ACalendarOptimized({
       let centerY = info.centerY ?? null;
 
       if (centerY == null) {
-         if (topY != null && bottomY != null) {
+         if (topY != null && bottomY != null)
             centerY = topY + (bottomY - topY) / 2;
-         } else if (topY != null) {
-            centerY = topY;
-         } else if (bottomY != null) {
-            centerY = bottomY;
-         } else {
-            return;
-         }
+         else if (topY != null) centerY = topY;
+         else if (bottomY != null) centerY = bottomY;
+         else return;
       }
 
       const centerRel = centerY - scRect.top;
@@ -316,10 +387,13 @@ export default function ACalendarOptimized({
       const maxScrollTop = Math.max(0, scroller.scrollHeight - scHeight);
       const nextTop = Math.max(0, Math.min(wantedTop, maxScrollTop));
 
-      if (Math.abs(nextTop - scroller.scrollTop) < 1) return;
+      if (Math.abs(nextTop - scroller.scrollTop) < 1) {
+         autoScrollYOnceRef.current = { ...gate, done: true };
+         return;
+      }
 
-      // fără animație – să ajungă instant
       scroller.scrollTop = nextTop;
+      autoScrollYOnceRef.current = { ...gate, done: true };
    }, []);
 
    const isInteractiveTarget = useCallback(
@@ -427,12 +501,392 @@ export default function ACalendarOptimized({
       slopPx: 6,
    });
 
-   // 🔐 WebSocket pentru rezervări – FĂRĂ scheduleSmartTick/polling
    const token = getCookie("access_token");
-   // ✅ Presence: reservationId -> Set(userId)
+   const isDraftClearSignal = (payload) => {
+      const p = payload || {};
+      if (
+         p?.action === "clear" ||
+         p?.action === "cancel" ||
+         p?.clear === true ||
+         p?.ended === true
+      )
+         return true;
+
+      const d = p?.reservationDraft ?? p?.reservationDraftOut ?? p?.draft ?? p;
+
+      const arr = Array.isArray(d?.reservations)
+         ? d.reservations
+         : Array.isArray(p?.reservations)
+         ? p.reservations
+         : null;
+
+      // IMPORTANT: empty array = “cancel/end”
+      return Array.isArray(arr) && arr.length === 0;
+   };
+
+   // ✅ debug WS o singură dată
+   useEffect(() => {
+      try {
+         localStorage.setItem("__WS_DEBUG", "1");
+      } catch {}
+   }, []);
+
    const [presenceByReservationUsers, setPresenceByReservationUsers] = useState(
       () => new Map()
    );
+   const [presenceVer, setPresenceVer] = useState(0);
+
+   const [createDraftBySlotUsers, setCreateDraftBySlotUsers] = useState(
+      () => new Map()
+   );
+   const [createDraftVer, setCreateDraftVer] = useState(0);
+
+   const CREATE_DRAFT_TTL_MS = 60 * 1000;
+   const CREATE_DRAFT_CLEANUP_EVERY_MS = 10 * 1000;
+
+   useEffect(() => {
+      const t = setInterval(() => {
+         const now = Date.now();
+         let changed = false;
+
+         setCreateDraftBySlotUsers((prev) => {
+            if (!(prev instanceof Map) || prev.size === 0) return prev;
+
+            const next = new Map();
+            prev.forEach((entry, key) => {
+               const exp = entry?.expiresAt ?? 0;
+               if (exp && exp <= now) {
+                  changed = true;
+                  return;
+               }
+               next.set(key, entry);
+            });
+
+            return changed ? next : prev;
+         });
+
+         if (changed) setCreateDraftVer((v) => v + 1);
+      }, CREATE_DRAFT_CLEANUP_EVERY_MS);
+
+      return () => clearInterval(t);
+   }, []);
+
+   const normalizeIso = (iso) => {
+      const d = new Date(iso);
+      return isNaN(d) ? "" : d.toISOString();
+   };
+
+   const parseDraftSlotKey = (slotKey) => {
+      const [iid, isoRaw] = String(slotKey || "").split("|");
+      const iidTrim = String(iid || "").trim();
+      const iso = normalizeIso(String(isoRaw || "").trim());
+      if (!iidTrim || !iso) return null;
+      return { instructorId: iidTrim, startIso: iso };
+   };
+
+   const buildDraftSlotKey = (instructorId, startTimeIso) => {
+      const iid = String(instructorId ?? "").trim();
+      const iso = String(startTimeIso ?? "").trim();
+      if (!iid || !iso) return null;
+      return `${iid}|${iso}`;
+   };
+   const pickStartLike = (r) =>
+      r?.startTime ??
+      r?.start ??
+      r?.startedAt ??
+      r?.startDate ??
+      r?.dateTime ??
+      r?.datetime ??
+      r?.begin ??
+      r?.from ??
+      null;
+
+   const extractDraftSlots = (payload) => {
+      const p = payload || {};
+      const draft =
+         p?.reservationDraft ?? p?.reservationDraftOut ?? p?.draft ?? p;
+
+      const out = [];
+      const push = (instructorId, iso) => {
+         const iid = String(instructorId ?? "").trim();
+         const sIso = normalizeIso(iso);
+         if (!iid || !sIso) return;
+         out.push({ instructorId: iid, startIso: sIso });
+      };
+
+      // 1) draftKey/slotKey direct
+      const key =
+         p?.draftKey ?? p?.slotKey ?? draft?.draftKey ?? draft?.slotKey ?? null;
+
+      if (key && String(key).includes("|")) {
+         const parsed = parseDraftSlotKey(key); // folosește funcția ta existentă
+         if (parsed) push(parsed.instructorId, parsed.startIso);
+      }
+
+      // 2) instructor + reservations[]
+      const instructorId = draft?.instructorId ?? p?.instructorId ?? null;
+
+      const arr = Array.isArray(draft?.reservations)
+         ? draft.reservations
+         : Array.isArray(p?.reservations)
+         ? p.reservations
+         : [];
+
+      if (instructorId != null && arr.length) {
+         for (const r of arr) {
+            const iso = pickStartLike(r);
+            if (iso) push(instructorId, iso);
+         }
+      }
+
+      // 3) fallback: startTime la root
+      const single = pickStartLike(draft) || pickStartLike(p);
+      if (instructorId != null && single) push(instructorId, single);
+
+      // dedup
+      const seen = new Set();
+      return out.filter((x) => {
+         const k = `${x.instructorId}|${x.startIso}`;
+         if (seen.has(k)) return false;
+         seen.add(k);
+         return true;
+      });
+   };
+
+   const myUserId = useMemo(() => {
+      const id = getUserIdFromToken(token);
+      return id != null ? String(id) : null;
+   }, [token]);
+
+   const myUserIdRef = useRef(myUserId);
+   useEffect(() => {
+      myUserIdRef.current = myUserId;
+   }, [myUserId]);
+
+   useEffect(() => {
+      if (typeof window === "undefined") return;
+
+      const apply = (on) => {
+         window.__WS_DEBUG = !!on;
+         try {
+            localStorage.setItem("__WS_DEBUG", on ? "1" : "0");
+         } catch {}
+         console.log("[WS DEBUG]", window.__WS_DEBUG ? "ON" : "OFF");
+      };
+
+      // 1) pornește din URL: ?wsdebug=1
+      let forced = false;
+      try {
+         const qs = new URLSearchParams(window.location.search);
+         const q = (qs.get("wsdebug") || "").toLowerCase();
+         if (q === "1" || q === "true" || q === "on") {
+            apply(true);
+            forced = true;
+         }
+         if (q === "0" || q === "false" || q === "off") {
+            apply(false);
+            forced = true;
+         }
+      } catch {}
+
+      // 2) altfel, citește din localStorage (persistă între refresh-uri)
+      if (!forced) {
+         try {
+            apply(localStorage.getItem("__WS_DEBUG") === "1");
+         } catch {
+            apply(false);
+         }
+      }
+
+      // 3) toggle fără consolă: Ctrl + Shift + D
+      const onKey = (e) => {
+         const k = (e.key || "").toLowerCase();
+         if ((e.ctrlKey || e.metaKey) && e.shiftKey && k === "d") {
+            e.preventDefault();
+            apply(!window.__WS_DEBUG);
+         }
+      };
+
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+   }, []);
+
+   // ✅ Socket: nu face fetch direct, doar invalidează prin bus
+   /* ===================== DRAFT helpers (SINGLE SOURCE OF TRUTH) ===================== */
+
+   const activeDraftSlotByUserRef = useRef(new Map()); // userId -> slotKey
+
+   const triggerRedraw = useCallback((meta = {}) => {
+      scheduleCalendarRefresh({
+         source: meta.source || "ui",
+         type: meta.type || "redraw",
+         forceReload: false, // IMPORTANT: redraw only
+         ...meta,
+      });
+   }, []);
+
+   function pickDraftFromPayload(payload) {
+      const p = payload || {};
+      const d1 = p.reservationDraft || p.draft || p.reservationDraftOut || p;
+      return d1?.reservationDraft ? d1.reservationDraft : d1;
+   }
+
+   function getUserIdFromPayload(payload, draft) {
+      const startedBy =
+         payload?.startedBy ??
+         draft?.startedBy ??
+         payload?.by ??
+         payload?.user ??
+         null;
+
+      const uid =
+         startedBy?.id ??
+         startedBy?.userId ??
+         startedBy?._id ??
+         payload?.userId ??
+         null;
+
+      return uid != null ? String(uid) : null;
+   }
+
+   function extractSlotKeys(payload, draft) {
+      const slotKey =
+         draft?.slotKey ??
+         draft?.draftKey ??
+         payload?.slotKey ??
+         payload?.draftKey ??
+         null;
+
+      if (slotKey) return [String(slotKey)];
+
+      const instructorId = draft?.instructorId ?? payload?.instructorId ?? null;
+      const reservations = Array.isArray(draft?.reservations)
+         ? draft.reservations
+         : [];
+
+      if (!instructorId || !reservations.length) return [];
+
+      const out = [];
+      for (const r of reservations) {
+         const isoLike = r?.startTime ?? r?.start ?? r?.startDate ?? null;
+         if (!isoLike) continue;
+         const d = new Date(isoLike);
+         if (Number.isNaN(d.getTime())) continue;
+         out.push(`${String(instructorId)}|${d.toISOString()}`);
+      }
+      return out;
+   }
+
+   const applyCreateDraftPresence = useCallback(
+      (payload, { forceClear = false } = {}) => {
+         const draft = pickDraftFromPayload(payload);
+         const uid = getUserIdFromPayload(payload, draft);
+         if (!uid) return;
+
+         const actionRaw = draft?.action ?? payload?.action ?? null;
+         const action =
+            actionRaw != null ? String(actionRaw).trim().toLowerCase() : "";
+
+         const reservations = Array.isArray(draft?.reservations)
+            ? draft.reservations
+            : [];
+
+         const isClear =
+            forceClear ||
+            action === "clear" ||
+            action === "end" ||
+            action === "ended" ||
+            action === "stop" ||
+            action === "stopped" ||
+            // IMPORTANT: dacă “started” vine cu reservations:[] -> tratăm ca clear
+            (reservations.length === 0 && !!action);
+
+         const slotKeys = extractSlotKeys(payload, draft);
+         if (!slotKeys.length) return;
+
+         const now = Date.now();
+         const expiresAt = now + 60 * 1000;
+
+         setCreateDraftBySlotUsers((prev) => {
+            const next = new Map(prev);
+
+            const removeFromSlot = (slotKey) => {
+               const k = String(slotKey);
+               const entry0 = next.get(k);
+               if (!entry0) return;
+
+               const users0 =
+                  entry0?.users instanceof Set
+                     ? entry0.users
+                     : entry0 instanceof Set
+                     ? entry0
+                     : new Set();
+               const users1 = new Set(users0);
+               users1.delete(uid);
+
+               if (users1.size === 0) next.delete(k);
+               else
+                  next.set(k, {
+                     users: users1,
+                     expiresAt,
+                     startedByLast: entry0?.startedByLast ?? null,
+                  });
+            };
+
+            const addToSlot = (slotKey) => {
+               const k = String(slotKey);
+               const entry0 = next.get(k);
+               const users0 =
+                  entry0?.users instanceof Set
+                     ? entry0.users
+                     : entry0 instanceof Set
+                     ? entry0
+                     : new Set();
+               const users1 = new Set(users0);
+               users1.add(uid);
+
+               next.set(k, {
+                  users: users1,
+                  expiresAt,
+                  startedByLast:
+                     payload?.startedBy ?? entry0?.startedByLast ?? null,
+               });
+            };
+
+            if (isClear) {
+               slotKeys.forEach(removeFromSlot);
+
+               const prevSlot = activeDraftSlotByUserRef.current.get(uid);
+               if (prevSlot && slotKeys.includes(prevSlot)) {
+                  activeDraftSlotByUserRef.current.delete(uid);
+               }
+
+               return next;
+            }
+
+            // START: scoate user-ul din slotul anterior, ca să nu rămână în 2 locuri
+            const prevSlot = activeDraftSlotByUserRef.current.get(uid);
+            if (prevSlot && !slotKeys.includes(prevSlot))
+               removeFromSlot(prevSlot);
+
+            slotKeys.forEach(addToSlot);
+            activeDraftSlotByUserRef.current.set(uid, slotKeys[0]);
+
+            return next;
+         });
+
+         setCreateDraftVer((v) => v + 1);
+
+         // IMPORTANT: redraw only (NU refetch)
+         triggerRedraw({
+            source: "draft",
+            type: isClear ? "create-clear" : "create-start",
+         });
+      },
+      [triggerRedraw]
+   );
+
+   /* ===================== PRESENCE (join/left) ===================== */
 
    const applyPresenceDelta = useCallback((type, payload) => {
       const ridRaw =
@@ -440,77 +894,315 @@ export default function ACalendarOptimized({
          payload?.reservation_id ??
          payload?.rid ??
          null;
-      const uidRaw =
-         payload?.userId ?? payload?.user_id ?? payload?.uid ?? null;
-
       if (ridRaw == null) return;
-
       const rid = String(ridRaw);
+
+      const uidRaw =
+         payload?.userId ??
+         payload?.user_id ??
+         payload?.uid ??
+         payload?.user?.id ??
+         payload?.by?.id ??
+         payload?.leftBy?.id ??
+         payload?.joinedBy?.id ??
+         null;
+
       const uid = uidRaw != null ? String(uidRaw) : null;
 
       setPresenceByReservationUsers((prev) => {
          const next = new Map(prev);
 
-         // JOIN fără userId (fallback) => doar marcăm ca “cineva e acolo”
          if (!uid) {
-            next.set(rid, new Set(["__someone__"]));
+            if (type === "join") {
+               const set = new Set(next.get(rid) || []);
+               set.add("__someone__");
+               next.set(rid, set);
+            } else if (type === "left") {
+               next.delete(rid);
+            }
             return next;
          }
 
          const set = new Set(next.get(rid) || []);
-         if (type === "join") set.add(uid);
-         else if (type === "left") set.delete(uid);
+
+         if (type === "join") {
+            set.add(uid);
+            set.delete("__someone__");
+         } else if (type === "left") {
+            set.delete(uid);
+            set.delete("__someone__");
+         }
 
          if (set.size) next.set(rid, set);
          else next.delete(rid);
 
          return next;
       });
+
+      setPresenceVer((v) => v + 1);
+
+      // redraw only
+      scheduleCalendarRefresh({
+         source: "presence",
+         type: `presence-${type}`,
+         forceReload: false,
+      });
    }, []);
 
-   const reservationWS = useReservationSocket(token, {
+   /* ===================== SOCKET API (FINAL INTEGRATION) ===================== */
+
+   const socketApi = useReservationSocket(token, {
+      enabled: true,
+
+      // cheia: nu lăsa draft-events să ajungă în onReservationsChanged (unde tu refaci date)
+      ignoreEvents: new Set([
+         "reservation:create:started",
+         "reservation:create:ended",
+         "reservation:create:stopped",
+         // (opțional) poți ignora și presence aici dacă vrei:
+         // "reservation:joined",
+         // "reservation:left",
+         // "reservation:joinDenied",
+      ]),
+
       onConnect: () => {
-         // reset presence la reconnect (evită “ghost borders”)
          setPresenceByReservationUsers(new Map());
-         dispatch(fetchReservationsDelta());
+         setCreateDraftBySlotUsers(new Map());
+         activeDraftSlotByUserRef.current = new Map();
+
+         // un refresh gated la conectare (NU spam)
+         runReservationsRefresh("ws-connect");
       },
+
       onDisconnect: () => {
          setPresenceByReservationUsers(new Map());
+         setCreateDraftBySlotUsers(new Map());
+         activeDraftSlotByUserRef.current = new Map();
       },
 
-      // ✅ aici vrem payload-ul {reservationId, userId}
       onReservationJoined: (data) => applyPresenceDelta("join", data),
       onReservationLeft: (data) => applyPresenceDelta("left", data),
-
       onReservationJoinDenied: (data) => console.warn("[WS] join denied", data),
 
-      // rezervările s-au schimbat => refresh din store
-      onReservationsChanged: () => dispatch(fetchReservationsDelta()),
+      onReservationCreateStarted: (payload) =>
+         applyCreateDraftPresence(payload, { forceClear: false }),
+
+      onReservationCreateEnded: (payload) =>
+         applyCreateDraftPresence(payload, { forceClear: true }),
+
+      onReservationsChanged: ({ eventName, payload }) => {
+         // AICI doar evenimente care chiar schimbă DB (create/update/delete etc.)
+         const ev = String(eventName || "");
+
+         // DELETE fast: scoate local + redraw + refresh gated
+         const isDelete =
+            /deleted|delete|removed|remove/i.test(ev) ||
+            payload?.type === "delete" ||
+            payload?.action === "delete";
+
+         if (isDelete) {
+            const rid =
+               payload?.id ??
+               payload?.reservationId ??
+               payload?.reservation_id ??
+               null;
+
+            if (rid != null) {
+               dispatch(removeReservationLocal(rid)); // dispare instant
+            }
+
+            scheduleCalendarRefresh({
+               source: "socket",
+               type: "delete",
+               id: rid != null ? String(rid) : undefined,
+               eventName: ev,
+               // default forceReload = true -> listenerul tău va face refresh gated
+            });
+
+            runReservationsRefresh("socket-delete");
+            return;
+         }
+
+         // create/update/etc
+         scheduleCalendarRefresh({
+            source: "socket",
+            type: "reservations-changed",
+            eventName: ev,
+            // default forceReload = true
+         });
+
+         runReservationsRefresh(`socket:${ev || "changed"}`);
+      },
    });
+
+   /* ===================== SAFE wrappers used by canvas & popups ===================== */
 
    const joinReservationSafe = useCallback(
       (reservationId) => {
          const rid = String(reservationId ?? "").trim();
          if (!rid) return;
 
-         // suportă mai multe semnături (în funcție de cum ai scris hook-ul)
-         if (typeof reservationWS?.joinReservation === "function") {
-            reservationWS.joinReservation(rid);
-            return;
-         }
-         if (typeof reservationWS?.join === "function") {
-            reservationWS.join(rid);
-            return;
-         }
+         // optimistic local
+         applyPresenceDelta("join", {
+            reservationId: rid,
+            userId: myUserIdRef.current,
+         });
+
+         socketApi?.joinReservation?.(rid);
       },
-      [reservationWS]
+      [socketApi, applyPresenceDelta]
    );
 
-   const presenceReservationIds =
-      reservationWS?.presenceReservationIds ??
-      reservationWS?.presenceIds ??
-      reservationWS?.presence ??
-      null;
+   const leaveReservationSafe = useCallback(
+      (reservationId) => {
+         const rid = String(reservationId ?? "").trim();
+         if (!rid) return;
+
+         // optimistic local
+         applyPresenceDelta("left", {
+            reservationId: rid,
+            userId: myUserIdRef.current,
+         });
+
+         socketApi?.leaveReservation?.(rid);
+      },
+      [socketApi, applyPresenceDelta]
+   );
+
+   const startCreateDraftSafe = useCallback(
+      (instructorId, startDateLike, extra = {}) => {
+         const iid = String(instructorId ?? "").trim();
+         const iso = normalizeIso(startDateLike);
+         if (!iid || !iso) return;
+
+         const iidNum = Number(iid);
+         const instructorIdOut = Number.isFinite(iidNum) ? iidNum : iid;
+
+         const slotKey = `${String(instructorIdOut)}|${iso}`;
+
+         // optimistic local (idempotent)
+         applyCreateDraftPresence(
+            {
+               reservationDraft: {
+                  instructorId: instructorIdOut,
+                  draftKey: slotKey,
+                  slotKey,
+                  action: "start",
+                  reservations: [
+                     {
+                        startTime: iso,
+                        sector: extra.sector,
+                        gearbox: extra.gearbox,
+                     },
+                  ],
+               },
+               startedBy: { id: myUserIdRef.current },
+            },
+            { forceClear: false }
+         );
+
+         socketApi?.emitReservationCreateStarted?.({
+            reservationDraft: {
+               instructorId: instructorIdOut,
+               draftKey: slotKey,
+               slotKey,
+               action: "start",
+               reservations: [
+                  {
+                     startTime: iso,
+                     sector: extra.sector,
+                     gearbox: extra.gearbox,
+                  },
+               ],
+            },
+            startedBy: { id: myUserIdRef.current },
+         });
+      },
+      [socketApi, applyCreateDraftPresence]
+   );
+
+   const leaveCreateDraftSafe = useCallback(
+      (slotKey, extra = {}) => {
+         const k = String(slotKey || "").trim();
+         if (!k) return;
+
+         // optimistic local clear (OK)
+         applyCreateDraftPresence(
+            {
+               reservationDraft: {
+                  draftKey: k,
+                  slotKey: k,
+                  action: "clear",
+                  reservations: [],
+               },
+               action: "clear",
+               startedBy: { id: myUserIdRef.current },
+            },
+            { forceClear: true }
+         );
+
+         // ✅ IMPORTANT: include instructorId parsed from slotKey
+         const parsed = parseDraftSlotKey(k); // ai deja funcția mai sus
+         const instructorIdOut = parsed?.instructorId ?? null;
+
+         // ✅ trimite CLEAR prin “started”
+         socketApi?.emitReservationCreateStarted?.({
+            reservationDraft: {
+               instructorId: instructorIdOut, // ✅ esențial
+               draftKey: k,
+               slotKey: k,
+               action: "clear",
+               reservations: [],
+               sector: extra?.sector,
+               gearbox: extra?.gearbox,
+            },
+            startedBy: { id: myUserIdRef.current },
+         });
+
+         // ❌ scoate astea dacă backend nu le are:
+         // socketApi?.emitReservationCreateEnded?.(...)
+      },
+      [socketApi, applyCreateDraftPresence]
+   );
+
+   const joinCreateDraftSafe = useCallback(
+      (slotKey, extra = {}) => {
+         const raw = String(slotKey || "").trim();
+         if (!raw || !raw.includes("|")) return;
+
+         const [iidRaw, isoRaw] = raw.split("|");
+         const iid = String(iidRaw || "").trim();
+         const iso = String(isoRaw || "").trim();
+         if (!iid || !iso) return;
+
+         startCreateDraftSafe(iid, iso, extra);
+      },
+      [startCreateDraftSafe]
+   );
+
+   useEffect(() => {
+      if (typeof window === "undefined") return;
+
+      window.__reservationWS = {
+         joinReservation: (rid) => joinReservationSafe(rid),
+         leaveReservation: (rid) => leaveReservationSafe(rid),
+         joinCreateDraft: (slotKey, extra) =>
+            joinCreateDraftSafe(slotKey, extra),
+         leaveCreateDraft: (slotKey, extra) =>
+            leaveCreateDraftSafe(slotKey, extra),
+      };
+
+      return () => {
+         try {
+            delete window.__reservationWS;
+         } catch {}
+      };
+   }, [
+      joinReservationSafe,
+      leaveReservationSafe,
+      joinCreateDraftSafe,
+      leaveCreateDraftSafe,
+   ]);
 
    const [sectorFilter, setSectorFilter] = useState("Toate");
    const sectorFilterNorm = sectorFilter.toLowerCase();
@@ -535,11 +1227,11 @@ export default function ACalendarOptimized({
                dispatch(fetchUsers()),
             ]);
          } finally {
+            // no-op
          }
       })();
    }, [dispatch, currentDate, extraFilters]);
 
-   // ===== Store selectors (memoizați) =====
    const {
       reservations: reservationsLive,
       instructorsGroups,
@@ -553,23 +1245,52 @@ export default function ACalendarOptimized({
       selectCalendarDerivedData,
       shallowEqual
    );
+
    const usersList = useMemo(() => normalizeUsersList(users), [users]);
 
    const adminManagerColorById = useMemo(() => {
       const map = new Map();
-
       for (const u of usersList) {
          if (!isAdminOrManager(u)) continue;
-
          const id = u?.id ?? u?.userId ?? u?._id;
          if (id == null) continue;
-
          const c = pickUserProfileColor(u) || hashToColorToken(id);
          map.set(String(id), String(c));
       }
-
       return map;
    }, [usersList]);
+
+   const createDraftBySlotColors = useMemo(() => {
+      const out = new Map();
+      if (!(createDraftBySlotUsers instanceof Map)) return out;
+
+      createDraftBySlotUsers.forEach((entry, slotKey) => {
+         const uidsSet = entry?.users;
+         const uids = uidsSet instanceof Set ? Array.from(uidsSet) : [];
+
+         const colors = [];
+         const seen = new Set();
+
+         for (const uidRaw of uids) {
+            const uid = String(uidRaw || "");
+            if (!uid) continue;
+
+            const color =
+               uid === "__someone__"
+                  ? "--event-green"
+                  : adminManagerColorById.get(uid) || hashToColorToken(uid);
+
+            if (color && !seen.has(color)) {
+               seen.add(color);
+               colors.push(color);
+            }
+         }
+
+         if (colors.length) out.set(String(slotKey), colors);
+      });
+
+      return out;
+   }, [createDraftBySlotUsers, adminManagerColorById]);
 
    const presenceByReservationColors = useMemo(() => {
       const out = new Map();
@@ -601,17 +1322,15 @@ export default function ACalendarOptimized({
       return out;
    }, [presenceByReservationUsers, adminManagerColorById]);
 
-   // ✅ Fără copie locală / pending: folosim direct datele din store
    const reservationsUIDedup = reservationsLive || [];
 
    useEffect(() => {
       if (!hasPrefetchedAllRef.current) return;
       if ((reservationsLive?.length ?? 0) === 0) {
-         dispatch(fetchReservationsDelta());
+         runReservationsRefresh("empty-after-prefetch");
       }
-   }, [dispatch, reservationsLive?.length]);
+   }, [runReservationsRefresh, reservationsLive?.length]);
 
-   // fallback simplu: când revii în tab, facem maybeRefreshReservations
    useEffect(() => {
       const onFocusVisible = () => {
          if (!document.hidden) {
@@ -708,7 +1427,6 @@ export default function ACalendarOptimized({
       return set;
    }, [instructors, instructorMeta, sectorFilterNorm]);
 
-   // map rapid: instructorId -> groupId
    const instructorGroupByInstId = useMemo(() => {
       const map = new Map();
       (instructorsGroups || []).forEach((grp) => {
@@ -775,9 +1493,7 @@ export default function ACalendarOptimized({
 
    function ymdStrInTZ(dateLike, timeZone = MOLDOVA_TZ_ID) {
       const { y, m, d } = partsInTZ(dateLike, timeZone);
-      return `${y}-${String(m).padStart(2, "0")}-${String(d)
-         .toString()
-         .padStart(2, "0")}`;
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
    }
 
    function hhmmInTZ(dateLike, timeZone = MOLDOVA_TZ_ID) {
@@ -893,7 +1609,6 @@ export default function ACalendarOptimized({
 
          const fallbackName =
             r.clientName || r.customerName || r.name || "Programare";
-
          const fullName = `${first} ${last}`.trim() || fallbackName;
 
          const allNotesRaw = [
@@ -910,7 +1625,6 @@ export default function ACalendarOptimized({
                .filter(Boolean)
                .join(" ")
          );
-
          const searchPhoneDigits = digitsOnly(
             phone ??
                r.clientPhone ??
@@ -980,32 +1694,25 @@ export default function ACalendarOptimized({
    function canonSector(val) {
       if (!val) return null;
       const s = norm(val);
-
-      // acceptă și valori de genul "sec. Botanica", "BOTANICA", etc.
       if (s.includes("botanica")) return SECTOR_CANON.botanica;
       if (s.includes("ciocana")) return SECTOR_CANON.ciocana;
       if (s.includes("buiucani")) return SECTOR_CANON.buiucani;
-
       return null;
    }
 
    function resolveSectorForCreate({ ev, instId, gObj, instructorMeta }) {
-      // 1) dacă event-ul are sector setat explicit
       const fromEv = canonSector(ev?.sector);
       if (fromEv) return fromEv;
 
-      // 2) din instructorMeta (asta e "în funcție de instructor")
       const meta = instructorMeta?.get?.(String(instId || "")) || {};
       const fromMeta = canonSector(
          meta.sectorNorm || meta.sector || meta.location
       );
       if (fromMeta) return fromMeta;
 
-      // 3) fallback din grup
       const fromGroup = canonSector(gObj?.sector || gObj?.location);
       if (fromGroup) return fromGroup;
 
-      // 4) default final
       return "Botanica";
    }
 
@@ -1013,53 +1720,81 @@ export default function ACalendarOptimized({
       (ev) => {
          const instId = String(ev.instructorId ?? "");
          const meta = instructorMeta.get(instId) || {};
+
          const grpId =
             ev.groupId && ev.groupId !== "__ungrouped"
                ? String(ev.groupId)
                : findGroupForInstructor(instId);
+
          const gObj =
             (instructorsGroups || []).find(
                (g) => String(g.id) === String(grpId)
             ) || null;
+
          const sectorVal = resolveSectorForCreate({
             ev,
             instId,
             gObj,
             instructorMeta,
          });
+
          const gbLabel = (meta.gearbox || "").toLowerCase().includes("auto")
             ? "Automat"
             : "Manual";
+
+         // ✅ Cheie FIXĂ pe slotul inițial (asta folosește popup-ul la leave)
+         const startIso = normalizeIso(ev.start);
+         const draftSlotKey = buildDraftSlotKey(instId, startIso);
+
+         // 2) deschide popup-ul cu draftSlotKey
          openPopup("createRezervation", {
             start: ev.start,
             end: ev.end,
+
             instructorId: instId === "__unknown" ? null : instId,
             sector: sectorVal,
             gearbox: meta.gearbox || null,
-            initialStartTime: new Date(ev.start).toISOString(),
+
+            initialStartTime: startIso,
             initialInstructorId: instId === "__unknown" ? null : instId,
             initialSector: sectorVal,
             initialGearbox: gbLabel,
+
+            // ✅ NOU: cheie fixă pentru join/leave în popup
+            draftSlotKey,
          });
       },
-      [instructorMeta, instructorsGroups, findGroupForInstructor]
+      [
+         instructorMeta,
+         instructorsGroups,
+         findGroupForInstructor,
+         startCreateDraftSafe,
+      ]
    );
 
-   // eveniment de refresh / focus din alte componente
+   // ✅ BUS: aici facem refresh real (gated)
+   const focusRequestRef = useRef(null);
+   const [focusToken, setFocusToken] = useState(0);
+
    useEffect(() => {
       return listenCalendarRefresh((payload) => {
-         // 👉 doar dacă NU vine explicit forceReload: false
-         // (adică în afară de cazul special din ReservationEditPopup)
          if (!payload || payload.forceReload !== false) {
-            dispatch(fetchReservationsDelta());
+            runReservationsRefresh(payload?.type || "bus");
          }
 
-         if (payload && payload.type === "focus-reservation") {
+         if (
+            payload?.type === "reservation-created" &&
+            payload?.reservationId
+         ) {
+            joinReservationSafe(payload.reservationId);
+         }
+
+         if (payload?.type === "focus-reservation") {
             focusRequestRef.current = payload;
             setFocusToken((t) => t + 1);
          }
       });
-   }, [dispatch]);
+   }, [runReservationsRefresh, joinReservationSafe]);
 
    const allAllowedDays = useMemo(() => {
       const base = new Date(currentDate);
@@ -1092,13 +1827,9 @@ export default function ACalendarOptimized({
             if (!el) return;
             const left = el.offsetLeft;
             const right = left + el.offsetWidth;
-
             const inRange =
                right >= viewLeft - MARGIN && left <= viewRight + MARGIN;
-
-            if (inRange) {
-               next.add(Number(ts));
-            }
+            if (inRange) next.add(Number(ts));
          });
 
          if (!next.size && loadedDays.length) {
@@ -1124,7 +1855,26 @@ export default function ACalendarOptimized({
    }, [loadedDays, mkStandardSlotsForDay]);
 
    const blackoutKeyMapRef = useRef(new Map());
+   const blackoutInFlightRef = useRef(new Set());
    const [blackoutVer, setBlackoutVer] = useState(0);
+   const currentMonthValue = useMemo(() => {
+      const d = new Date(currentDate);
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      return `${y}-${String(m + 1).padStart(2, "0")}`;
+   }, [currentDate]);
+   // luna curentă (ai deja currentMonthValue)
+   const monthRange = useMemo(
+      () => getMonthRangeYMD(currentDate),
+      [currentMonthValue]
+   );
+
+   useEffect(() => {
+      // când schimbi luna: golim cache + inflight ca să refacem doar pentru luna nouă
+      blackoutKeyMapRef.current = new Map();
+      blackoutInFlightRef.current = new Set();
+      setBlackoutVer((v) => v + 1);
+   }, [currentMonthValue]);
 
    const instIdsAll = useMemo(() => {
       if (isDummyMode) return [];
@@ -1138,13 +1888,33 @@ export default function ACalendarOptimized({
 
    const ensureBlackoutsFor = useCallback(
       async (instId) => {
-         const key = String(instId);
+         const key = String(instId || "").trim();
+         if (!key) return;
+
+         // deja încărcat (în luna curentă)
          if (blackoutKeyMapRef.current.has(key)) return;
+
+         // deja se încarcă -> nu dubla request-ul
+         if (blackoutInFlightRef.current.has(key)) return;
+
+         blackoutInFlightRef.current.add(key);
+
          try {
-            const list = await getInstructorBlackouts(key);
+            let list;
+
+            // 1) încercăm cu range-ul lunii (dacă backend acceptă)
+            try {
+               list = await getInstructorBlackouts(key, monthRange);
+            } catch (e) {
+               // 2) fallback: endpoint fără range (compat)
+               list = await getInstructorBlackouts(key);
+            }
+
             const set = new Set();
+
             for (const b of list || []) {
                const type = String(b?.type || "").toUpperCase();
+
                if (type === "REPEAT") {
                   for (const k of expandRepeatLocalKeys(b, allowedKeysSet))
                      set.add(k);
@@ -1155,13 +1925,20 @@ export default function ACalendarOptimized({
                   if (!allowedKeysSet.size || allowedKeysSet.has(k)) set.add(k);
                }
             }
+
             blackoutKeyMapRef.current.set(key, set);
             setBlackoutVer((v) => v + 1);
          } catch (e) {
             console.error("getInstructorBlackouts error for", key, e);
+
+            // IMPORTANT: ca să nu spammeze la infinit dacă serverul pică / 500 / etc.
+            blackoutKeyMapRef.current.set(key, new Set());
+            setBlackoutVer((v) => v + 1);
+         } finally {
+            blackoutInFlightRef.current.delete(key);
          }
       },
-      [allowedKeysSet]
+      [allowedKeysSet, monthRange]
    );
 
    useEffect(() => {
@@ -1219,24 +1996,16 @@ export default function ACalendarOptimized({
       return months;
    }, [monthAnchorDate]);
 
-   const currentMonthValue = useMemo(() => {
-      const d = new Date(currentDate);
-      const y = d.getFullYear();
-      const m = d.getMonth();
-      return `${y}-${String(m + 1).padStart(2, "0")}`;
-   }, [currentDate]);
-
-   // === Search state (input + rezultate) ===
+   // === Search state ===
    const [searchInput, setSearchInput] = useState("");
    const [searchState, setSearchState] = useState({
       query: "",
       hits: [],
       index: 0,
    });
-   // Focus din exterior (ex: după mutare din popup)
+
+   // Focus din exterior
    const [autoFocusEventId, setAutoFocusEventId] = useState(null);
-   const focusRequestRef = useRef(null);
-   const [focusToken, setFocusToken] = useState(0);
 
    // curățăm highlight-ul de focus după puțin timp
    useEffect(() => {
@@ -1247,7 +2016,7 @@ export default function ACalendarOptimized({
 
    const searchInputRef = useRef(null);
 
-   // când vine un focusRequest (ex. după editare în popup)
+   // când vine focusRequest (după editare)
    useEffect(() => {
       if (!focusToken) return;
 
@@ -1264,12 +2033,9 @@ export default function ACalendarOptimized({
             const y = d.getFullYear();
             const m = d.getMonth();
             const key = `${y}-${String(m + 1).padStart(2, "0")}`;
-            if (key !== currentMonthValue) {
-               sameMonth = false;
-            }
+            if (key !== currentMonthValue) sameMonth = false;
          }
       }
-
       if (!sameMonth) return;
 
       let targetDayTs = null;
@@ -1281,19 +2047,18 @@ export default function ACalendarOptimized({
       }
       if (targetDayTs == null) return;
 
+      armAutoScrollYOnce(targetId, `focus:${focusToken}`);
+
       setVisibleDays((prev) => {
          const next = new Set(prev);
          const targetIdx = loadedDays.findIndex(
             (d) => startOfDayTs(d) === targetDayTs
          );
 
-         if (targetIdx === -1) {
-            next.add(targetDayTs);
-         } else {
-            for (let i = 0; i <= targetIdx; i++) {
+         if (targetIdx === -1) next.add(targetDayTs);
+         else
+            for (let i = 0; i <= targetIdx; i++)
                next.add(startOfDayTs(loadedDays[i]));
-            }
-         }
 
          if (next.size === prev.size) return prev;
          return next;
@@ -1318,18 +2083,22 @@ export default function ACalendarOptimized({
             scrollWidth > scrollerWidth ? scrollWidth - scrollerWidth : 0;
          if (nextLeft > maxLeft) nextLeft = maxLeft;
 
-         if (Math.abs(nextLeft - scroller.scrollLeft) > 1) {
+         if (Math.abs(nextLeft - scroller.scrollLeft) > 1)
             scroller.scrollLeft = nextLeft;
-         }
       };
 
       if (typeof window !== "undefined") {
-         window.requestAnimationFrame(() => {
-            window.requestAnimationFrame(doScrollX);
-         });
-      } else {
+         window.requestAnimationFrame(() =>
+            window.requestAnimationFrame(doScrollX)
+         );
       }
-   }, [focusToken, eventsByDay, loadedDays, currentMonthValue]);
+   }, [
+      focusToken,
+      eventsByDay,
+      loadedDays,
+      currentMonthValue,
+      armAutoScrollYOnce,
+   ]);
 
    const handleMonthChange = useCallback(
       (val) => {
@@ -1339,9 +2108,7 @@ export default function ACalendarOptimized({
 
          setCurrentDate(newDate);
 
-         if (typeof onMonthChange === "function") {
-            onMonthChange(newDate);
-         }
+         if (typeof onMonthChange === "function") onMonthChange(newDate);
 
          try {
             dispatch(
@@ -1354,15 +2121,15 @@ export default function ACalendarOptimized({
             console.error("[DayView] fetchReservationsForMonth error", e);
          }
 
-         if (scrollRef.current) {
-            scrollRef.current.scrollLeft = 0;
-         }
+         if (scrollRef.current) scrollRef.current.scrollLeft = 0;
 
+         disarmAutoScrollY();
+         setAutoFocusEventId(null);
          setSearchInput("");
          setSearchState({ query: "", hits: [], index: 0 });
          setVisibleDays(new Set());
       },
-      [monthOptions, extraFilters, onMonthChange, dispatch]
+      [monthOptions, extraFilters, onMonthChange, dispatch, disarmAutoScrollY]
    );
 
    const sectorOptions = useMemo(
@@ -1442,21 +2209,19 @@ export default function ACalendarOptimized({
       return [...padCols, ...mapped];
    }, [isDummyMode, instructors, allowedInstBySector, instructorMeta]);
 
-   /* ========== LOGICA DE SEARCH OPTIMIZATĂ ========== */
+   /* ========== LOGICA DE SEARCH ========== */
 
    const clearSearch = useCallback(() => {
+      disarmAutoScrollY();
       setSearchInput("");
       setSearchState({ query: "", hits: [], index: 0 });
-   }, []);
+   }, [disarmAutoScrollY]);
 
    const handleSearchInputChange = useCallback(
       (e) => {
          const val = e.target.value;
          setSearchInput(val);
-
-         if (!val.trim()) {
-            clearSearch();
-         }
+         if (!val.trim()) clearSearch();
       },
       [clearSearch]
    );
@@ -1501,11 +2266,7 @@ export default function ACalendarOptimized({
             });
          });
 
-         setSearchState({
-            query: raw,
-            hits,
-            index: hits.length ? 0 : 0,
-         });
+         setSearchState({ query: raw, hits, index: hits.length ? 0 : 0 });
       };
 
       if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -1524,9 +2285,14 @@ export default function ACalendarOptimized({
    const activeSearchEventId = activeSearchHit ? activeSearchHit.eventId : null;
 
    const hasSearchHits = searchTotal > 0;
-   // combinăm focus-ul din search cu cel din popup (mutare)
-   // focus-ul din popup are prioritate temporar
+
    const effectiveActiveEventId = autoFocusEventId || activeSearchEventId;
+
+   useEffect(() => {
+      activeEventIdRef.current = effectiveActiveEventId
+         ? String(effectiveActiveEventId)
+         : null;
+   }, [effectiveActiveEventId]);
 
    const goSearchNext = useCallback(() => {
       setSearchState((prev) => {
@@ -1548,7 +2314,6 @@ export default function ACalendarOptimized({
       });
    }, []);
 
-   // când se schimbă indexul de search → scroll pe X la ziua potrivită
    useEffect(() => {
       const total = searchHits.length;
       if (!total) return;
@@ -1556,6 +2321,8 @@ export default function ACalendarOptimized({
       const idx = searchState.index;
       const hit = searchHits[idx];
       if (!hit) return;
+
+      armAutoScrollYOnce(hit.eventId, `search:${searchState.query}:${idx}`);
 
       const scroller = scrollRef.current;
       const dayEl = dayRefs.current.get(hit.dayTs);
@@ -1569,13 +2336,10 @@ export default function ACalendarOptimized({
             (d) => startOfDayTs(d) === targetTs
          );
 
-         if (targetIdx === -1) {
-            next.add(targetTs);
-         } else {
-            for (let i = 0; i <= targetIdx; i++) {
+         if (targetIdx === -1) next.add(targetTs);
+         else
+            for (let i = 0; i <= targetIdx; i++)
                next.add(startOfDayTs(loadedDays[i]));
-            }
-         }
 
          if (next.size === prev.size) return prev;
          return next;
@@ -1594,13 +2358,16 @@ export default function ACalendarOptimized({
             scrollWidth > scrollerWidth ? scrollWidth - scrollerWidth : 0;
          if (nextLeft > maxLeft) nextLeft = maxLeft;
 
-         if (Math.abs(nextLeft - scroller.scrollLeft) > 1) {
+         if (Math.abs(nextLeft - scroller.scrollLeft) > 1)
             scroller.scrollLeft = nextLeft;
-         }
-      } catch {
-         // ignorăm, nu blocăm nimic
-      }
-   }, [searchHits, searchState.index, loadedDays]);
+      } catch {}
+   }, [
+      searchHits,
+      searchState.index,
+      loadedDays,
+      armAutoScrollYOnce,
+      searchState.query,
+   ]);
 
    useEffect(() => {
       const handler = (e) => {
@@ -1629,9 +2396,7 @@ export default function ACalendarOptimized({
          });
       };
 
-      const onResize = () => {
-         recomputeVisibleDays();
-      };
+      const onResize = () => recomputeVisibleDays();
 
       recomputeVisibleDays();
 
@@ -1671,7 +2436,6 @@ export default function ACalendarOptimized({
                monthOptions={monthOptions}
                onMonthChange={handleMonthChange}
                sectorFilter={sectorFilter}
-               presenceByReservationColors={presenceByReservationColors}
                sectorOptions={sectorOptions}
                onSectorChange={setSectorFilter}
             />
@@ -1697,9 +2461,12 @@ export default function ACalendarOptimized({
                canvasInstructors={canvasInstructors}
                viewModel={calendarViewModel}
                forceAllDaysVisible={hasSearchHits}
-               /* ✅ ADĂUGI ASTEA */
+               presenceVer={presenceVer}
                onReservationJoin={joinReservationSafe}
-               presenceReservationIds={presenceReservationIds}
+               createDraftVer={createDraftVer}
+               createDraftBySlotUsers={createDraftBySlotUsers}
+               createDraftBySlotColors={createDraftBySlotColors}
+               presenceByReservationUsers={presenceByReservationUsers}
                presenceByReservationColors={presenceByReservationColors}
             />
          </div>
@@ -1707,7 +2474,7 @@ export default function ACalendarOptimized({
    );
 }
 
-/* ================== COMPONENTĂ HEADER / TOOLBAR ================== */
+/* ================== TOOLBAR ================== */
 
 function ACalendarToolbar({
    dataReady,
@@ -1729,7 +2496,6 @@ function ACalendarToolbar({
    sectorFilter,
    sectorOptions,
    onSectorChange,
-   presenceByReservationColors,
 }) {
    return (
       <div className="dayview__header">
@@ -1741,6 +2507,7 @@ function ACalendarToolbar({
             className="dv-dd--month"
             aria-label="Alege luna"
          />
+
          <SimpleDropdown
             value={sectorFilter}
             onChange={onSectorChange}
@@ -1749,6 +2516,7 @@ function ACalendarToolbar({
             className="dv-dd--sector"
             aria-label="Filtrează după sector"
          />
+
          <div className="dv-search">
             <div className="dv-search__input-wrapper">
                <input
@@ -1793,6 +2561,7 @@ function ACalendarToolbar({
                   ✕
                </button>
             </div>
+
             <div className="dv-search__nav">
                <button
                   type="button"
@@ -1807,10 +2576,12 @@ function ACalendarToolbar({
                   />
                </button>
             </div>
+
             <div className="dv-search__count-wrapper">
                <span className="dv-search__count">
                   {searchTotal ? `${searchIndex + 1}/${searchTotal}` : "0/0"}
                </span>
+
                <button
                   type="button"
                   className="dv-search__btn-count"
@@ -1845,7 +2616,7 @@ function ACalendarToolbar({
    );
 }
 
-/* ================== COMPONENTĂ TRACK (zile + DayviewCanvasTrack) ================== */
+/* ================== TRACK ================== */
 
 const ACalendarTrack = memo(function ACalendarTrack({
    scrollRef,
@@ -1868,9 +2639,13 @@ const ACalendarTrack = memo(function ACalendarTrack({
    canvasInstructors,
    viewModel,
    forceAllDaysVisible,
+   presenceVer,
+   createDraftVer,
+   createDraftBySlotUsers,
+   createDraftBySlotColors,
    onReservationJoin,
-   presenceByReservationUsers, // ✅
-   presenceByReservationColors, // ✅
+   presenceByReservationUsers,
+   presenceByReservationColors,
 }) {
    const eventsByDay = viewModel?.eventsByDay || new Map();
    const standardSlotsByDay = viewModel?.standardSlotsByDay || new Map();
@@ -1960,10 +2735,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
 
                      <div
                         className="dayview__group-content dayview__group-content--row"
-                        style={{
-                           flex: "1 1 auto",
-                           minHeight: 0,
-                        }}
+                        style={{ flex: "1 1 auto", minHeight: 0 }}
                      >
                         {isVisible ? (
                            <DayviewCanvasTrack
@@ -1999,6 +2771,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                               instructorsFull={instructors}
                               users={users}
                               zoom={zoom / Z_BASE}
+                              presenceVer={presenceVer}
                               onReservationJoin={onReservationJoin}
                               presenceByReservationUsers={
                                  presenceByReservationUsers
@@ -2006,6 +2779,9 @@ const ACalendarTrack = memo(function ACalendarTrack({
                               presenceByReservationColors={
                                  presenceByReservationColors
                               }
+                              createDraftVer={createDraftVer}
+                              createDraftBySlotColors={createDraftBySlotColors}
+                              createDraftBySlotUsers={createDraftBySlotUsers}
                            />
                         ) : (
                            <div className="dayview__skeleton" />
