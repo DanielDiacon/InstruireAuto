@@ -103,18 +103,20 @@ const Header = ({ children, links }) => {
                   <div className="header__top">
                      <div className="header__profil-wrapper">
                         <div className="header__profil">
-                           <h1>
-                              {user ? (
-                                 <>
-                                    {displayName.firstName} <br />{" "}
-                                    {displayName.lastName}
-                                 </>
-                              ) : (
-                                 "..."
-                              )}
-                           </h1>
-                           <p>{roleLabel}</p>
                            <ReactSVG className="header__statut" src={iconSrc} />
+                           <div className="header__profil-details">
+                              <h1>
+                                 {user ? (
+                                    <>
+                                       {displayName.firstName}{" "}
+                                       {displayName.lastName}
+                                    </>
+                                 ) : (
+                                    "..."
+                                 )}
+                              </h1>
+                              <p>{roleLabel}</p>
+                           </div>
                         </div>
                      </div>
                   </div>
