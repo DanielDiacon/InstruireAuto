@@ -929,6 +929,7 @@ export default function CreateRezervation({
          };
 
          await createReservationsForUser(payload);
+         notifyBlackoutsChanged(instructorIdNum);
 
          setMessages([
             { id: Date.now(), type: "success", text: "Programare creată." },
@@ -964,6 +965,19 @@ export default function CreateRezervation({
       blackoutType,
       hasBlackout,
    ]);
+   const notifyBlackoutsChanged = useCallback((iid) => {
+      const id = String(iid ?? "").trim();
+      if (!id) return;
+
+      try {
+         scheduleCalendarRefresh({
+            source: "popup",
+            type: "blackouts-changed",
+            instructorId: id,
+            forceReload: false, // IMPORTANT: doar blackouts, fără refetch reservations
+         });
+      } catch {}
+   }, []);
 
    const validNewName = newFullName.trim().split(/\s+/).length >= 2;
    const validNewPhone = onlyDigits(phoneFull).length > 0;
@@ -1178,8 +1192,13 @@ export default function CreateRezervation({
       }
 
       const iso = toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
+
       const dateTimeToSend =
          BUSY_KEYS_MODE === "local-match" ? isoForDbMatchLocalHour(iso) : iso;
+
+      // ✅ cheia locală de slot EXACT ca în calendar (pt. desen)
+      const targetKey = localKeyFromTs(iso, MOLDOVA_TZ);
+      const op = !hasBlackout ? "add" : "remove";
 
       setBlocking(true);
       try {
@@ -1224,6 +1243,17 @@ export default function CreateRezervation({
                if (id != null) await deleteInstructorBlackout(id);
             }
          }
+
+         try {
+            scheduleCalendarRefresh({
+               source: "popup",
+               type: "blackout-slot-patch",
+               instructorId: String(instructorId),
+               op, // "add" | "remove"
+               slotKey: targetKey, // "YYYY-MM-DD|HH:mm"
+               forceReload: false,
+            });
+         } catch {}
 
          // ✅ spune calendarului să refacă blackouts pentru instructorul acesta (fără refetch de reservations)
          try {

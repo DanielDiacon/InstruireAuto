@@ -1,5 +1,5 @@
 // src/components/Utils/Popup.jsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
    subscribePopup,
    getCurrentPopup,
@@ -7,6 +7,7 @@ import {
    getCurrentSubPopup,
    closeSubPopup as requestCloseSubPopup,
 } from "./popupStore";
+
 import AAddProg from "../Popups/AAddProg";
 import SAddProg from "../Popups/SAddProg";
 import AddInstr from "../Popups/AddInstr";
@@ -29,6 +30,7 @@ export default function Popup() {
       type: getCurrentPopup()?.type || null,
       props: getCurrentPopup()?.props || {},
    });
+
    const [exiting, setExiting] = useState(false);
    const panelRef = useRef(null);
 
@@ -42,45 +44,106 @@ export default function Popup() {
 
    // guard anti-race între sesiuni (deschidere/închidere rapidă)
    const sessionIdRef = useRef(0); // crește la fiecare OPEN
-   const hasHistoryEntryRef = useRef(0); // 0 = niciuna, altfel = id sesiune
-   const historySessionRef = useRef(0); // sesiunea care a făcut push
    const closingByPopstateRef = useRef(false);
 
-   const handleCloseClick = () => {
+   // ✅ guard: nu da back() de două ori pentru același close
+   const didPopHistoryRef = useRef(false);
+
+   // ✅ IMPORTANT: management corect pentru transitionend + fallback timeout
+   const pendingCloseRef = useRef({
+      sid: null,
+      handler: null,
+   });
+   const closeTimerRef = useRef(null);
+
+   const clearPendingClose = useCallback(() => {
+      // scoate listener-ul vechi (dacă există)
+      const { handler } = pendingCloseRef.current || {};
+      if (handler && panelRef.current) {
+         panelRef.current.removeEventListener("transitionend", handler);
+      }
+      pendingCloseRef.current = { sid: null, handler: null };
+
+      // scoate timeout-ul vechi (dacă există)
+      if (closeTimerRef.current) {
+         clearTimeout(closeTimerRef.current);
+         closeTimerRef.current = null;
+      }
+   }, []);
+
+   const isPopupDummyOnTop = (sid) => {
+      if (typeof window === "undefined") return false;
+      const st = window.history.state;
+      return !!(
+         st &&
+         st.__popup_dummy === true &&
+         String(st.sid) === String(sid)
+      );
+   };
+
+   const pushOrReplacePopupDummy = (sid) => {
+      if (typeof window === "undefined") return;
+      const marker = { __popup_dummy: true, sid };
+
+      const st = window.history.state;
+      if (st && st.__popup_dummy) {
+         window.history.replaceState(marker, "", window.location.href);
+      } else {
+         window.history.pushState(marker, "", window.location.href);
+      }
+   };
+
+   const maybePopPopupDummy = (sid) => {
+      if (typeof window === "undefined") return;
+      if (!isMobile()) return;
+      if (closingByPopstateRef.current) return;
+      if (didPopHistoryRef.current) return;
+
+      if (!isPopupDummyOnTop(sid)) return;
+
+      didPopHistoryRef.current = true;
+      closingByPopstateRef.current = true;
+
+      window.history.back();
+
+      setTimeout(() => {
+         closingByPopstateRef.current = false;
+      }, 0);
+   };
+
+   const handleCloseClick = useCallback(() => {
+      // dacă ai subpopup (stack), îl închizi separat
       if (getCurrentSubPopup()) {
          requestCloseSubPopup();
          return;
       }
-      if (
-         isMobile() &&
-         hasHistoryEntryRef.current === sessionIdRef.current &&
-         !closingByPopstateRef.current
-      ) {
-         if (typeof window !== "undefined") window.history.back();
-      } else {
-         closePopupStore();
-      }
-   };
 
+      // închidem UI imediat (store)
+      closePopupStore();
+
+      // pe mobil, scoatem dummy-ul doar dacă e pe top
+      const sid = sessionIdRef.current;
+      maybePopPopupDummy(sid);
+   }, []);
+
+   // ✅ Back hardware / gesture: dacă popup e deschis, îl închidem
    useEffect(() => {
       const onPopState = () => {
-         if (getCurrentSubPopup()) return;
-         const st = typeof window !== "undefined" ? window.history.state : null;
-         if (st && st.__subpopup_dummy) return;
          if (!isMobile()) return;
-         if (!hasHistoryEntryRef.current) return;
 
-         if (historySessionRef.current !== sessionIdRef.current) {
-            try {
-               if (typeof window !== "undefined") window.history.forward();
-            } catch {}
+         if (!getCurrentPopup()) return;
+
+         if (getCurrentSubPopup()) {
+            requestCloseSubPopup();
             return;
          }
 
-         hasHistoryEntryRef.current = 0;
          closingByPopstateRef.current = true;
+         didPopHistoryRef.current = true;
          closePopupStore();
-         setTimeout(() => (closingByPopstateRef.current = false), 0);
+         setTimeout(() => {
+            closingByPopstateRef.current = false;
+         }, 0);
       };
 
       window.addEventListener("popstate", onPopState);
@@ -91,60 +154,82 @@ export default function Popup() {
       const unsubscribe = subscribePopup(({ detail }) => {
          if (detail) {
             // ===== OPEN =====
+            // ✅ CRUCIAL: anulează orice "close pending" rămas din sesiunea precedentă
+            clearPendingClose();
+
             sessionIdRef.current += 1;
             const sid = sessionIdRef.current;
 
-            setOpenKey(sid);
+            didPopHistoryRef.current = false;
 
+            setOpenKey(sid);
             setExiting(false);
             document.body.classList.add("popup-open");
+
             setPopupState({
                type: detail.type,
                props: { ...(detail.props || {}) },
             });
 
             if (isMobile()) {
-               window.history.pushState(
-                  { __popup_dummy: true, sid },
-                  "",
-                  window.location.href
-               );
-               hasHistoryEntryRef.current = sid;
-               historySessionRef.current = sid;
+               pushOrReplacePopupDummy(sid);
             }
          } else if (panelRef.current) {
             // ===== CLOSE =====
-            if (
-               isMobile() &&
-               hasHistoryEntryRef.current === sessionIdRef.current &&
-               !closingByPopstateRef.current
-            ) {
-               if (typeof window !== "undefined") window.history.back();
-               return;
-            }
+            // ✅ evită handler stacking
+            clearPendingClose();
 
             setExiting(true);
             document.body.classList.remove("popup-open");
 
-            const handleTransitionEnd = (e) => {
-               if (e.target === panelRef.current && exiting) {
-                  setPopupState({ type: null, props: {} });
-                  panelRef.current.removeEventListener(
-                     "transitionend",
-                     handleTransitionEnd
-                  );
-               }
+            const sidAtClose = sessionIdRef.current;
+            pendingCloseRef.current.sid = sidAtClose;
+
+            const finalizeClose = () => {
+               // ✅ închide DOAR dacă close-ul încă aparține aceleiași sesiuni
+               if (pendingCloseRef.current.sid !== sidAtClose) return;
+
+               setPopupState({ type: null, props: {} });
+               setExiting(false);
+
+               // cleanup (o dată)
+               clearPendingClose();
             };
 
+            const handleTransitionEnd = (e) => {
+               if (e.target !== panelRef.current) return;
+               finalizeClose();
+            };
+
+            pendingCloseRef.current.handler = handleTransitionEnd;
             panelRef.current.addEventListener(
                "transitionend",
                handleTransitionEnd
             );
+
+            // ✅ fallback: dacă transitionend nu vine / vine ciudat, închidem după X ms
+            // (setează valoarea aprox. la durata animației tale CSS)
+            closeTimerRef.current = setTimeout(finalizeClose, 260);
+
+            // ✅ dacă cineva a închis popup-ul direct (closePopupStore) fără handleCloseClick,
+            // scoatem dummy-ul, DAR doar dacă e pe top.
+            const sid = sessionIdRef.current;
+            maybePopPopupDummy(sid);
+         } else {
+            // edge: panelRef null -> închide direct
+            clearPendingClose();
+            setPopupState({ type: null, props: {} });
+            setExiting(false);
+            document.body.classList.remove("popup-open");
          }
       });
 
-      return unsubscribe;
-   }, [exiting]);
+      return () => {
+         clearPendingClose();
+         unsubscribe?.();
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
 
    const renderContent = () => {
       switch (popupState.type) {
@@ -192,7 +277,6 @@ export default function Popup() {
             return (
                <StudentsMultiSelectPopup key={openKey} {...popupState.props} />
             );
-
          case "createRezervation":
             return (
                <CreateRezervation
@@ -201,8 +285,6 @@ export default function Popup() {
                   onClose={handleCloseClick}
                />
             );
-
-         // ✅ NOU: Question Categories
          case "questionCategories":
             return (
                <QuestionCategoriesPopup
@@ -211,7 +293,6 @@ export default function Popup() {
                   onClose={handleCloseClick}
                />
             );
-
          default:
             return null;
       }
@@ -224,7 +305,6 @@ export default function Popup() {
          <div
             className="popup-panel__overlay"
             onPointerDown={(e) => {
-               // doar click stânga (mouse); pe touch nu există button
                if (typeof e.button === "number" && e.button !== 0) return;
                handleCloseClick();
             }}

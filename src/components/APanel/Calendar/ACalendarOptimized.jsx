@@ -1862,6 +1862,42 @@ export default function ACalendarOptimized({
    useEffect(() => {
       return listenCalendarRefresh((payload) => {
          // ✅ blackouts changed: invalidează cache + re-fetch doar pentru instructor
+         if (payload?.type === "blackout-slot-patch") {
+            const iid =
+               payload?.instructorId != null
+                  ? String(payload.instructorId)
+                  : "";
+            const slotKey =
+               payload?.slotKey != null ? String(payload.slotKey) : "";
+            const op = String(payload?.op || "").toLowerCase(); // "add" | "remove"
+            if (iid && slotKey) {
+               const map0 = blackoutKeyMapRef.current;
+               const prevSet =
+                  map0.get(iid) instanceof Set ? map0.get(iid) : new Set();
+               const nextSet = new Set(prevSet); // IMPORTANT: new ref
+               if (op === "add") nextSet.add(slotKey);
+               else nextSet.delete(slotKey);
+
+               map0.set(iid, nextSet);
+            }
+            setBlackoutVer((v) => v + 1);
+
+            // ✅ forțează invalidare/redraw (nu refetch reservations)
+            scheduleCalendarRefresh({
+               source: "blackout",
+               type: "redraw",
+               forceReload: false,
+            });
+
+            // ✅ opțional: confirmare rapidă (refetch doar pt instructor)
+            try {
+               blackoutKeyMapRef.current?.delete?.(iid);
+               blackoutInFlightRef.current?.delete?.(iid);
+               ensureBlackoutsForRef.current?.(iid);
+            } catch {}
+
+            return;
+         }
          if (payload?.type === "blackouts-changed") {
             const iid =
                payload?.instructorId != null
@@ -1908,16 +1944,26 @@ export default function ACalendarOptimized({
       });
       return map;
    }, [loadedDays, mkStandardSlotsForDay]);
+   const blackoutKeyMapSnapshot = useMemo(() => {
+      const m = blackoutKeyMapRef.current;
+      return m instanceof Map ? new Map(m) : new Map();
+   }, [blackoutVer, currentMonthValue]);
 
    const calendarViewModel = useMemo(
       () => ({
          eventsByDay,
          instIdsAll,
          standardSlotsByDay,
-         blackoutKeyMap: blackoutKeyMapRef.current,
+         blackoutKeyMap: blackoutKeyMapSnapshot,
          blackoutVer,
       }),
-      [eventsByDay, instIdsAll, standardSlotsByDay, blackoutVer]
+      [
+         eventsByDay,
+         instIdsAll,
+         standardSlotsByDay,
+         blackoutVer,
+         blackoutKeyMapSnapshot,
+      ]
    );
 
    const monthOptions = useMemo(() => {
