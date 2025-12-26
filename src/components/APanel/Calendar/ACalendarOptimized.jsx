@@ -502,27 +502,6 @@ export default function ACalendarOptimized({
    });
 
    const token = getCookie("access_token");
-   const isDraftClearSignal = (payload) => {
-      const p = payload || {};
-      if (
-         p?.action === "clear" ||
-         p?.action === "cancel" ||
-         p?.clear === true ||
-         p?.ended === true
-      )
-         return true;
-
-      const d = p?.reservationDraft ?? p?.reservationDraftOut ?? p?.draft ?? p;
-
-      const arr = Array.isArray(d?.reservations)
-         ? d.reservations
-         : Array.isArray(p?.reservations)
-         ? p.reservations
-         : null;
-
-      // IMPORTANT: empty array = “cancel/end”
-      return Array.isArray(arr) && arr.length === 0;
-   };
 
    // ✅ debug WS o singură dată
    useEffect(() => {
@@ -590,68 +569,6 @@ export default function ACalendarOptimized({
       if (!iid || !iso) return null;
       return `${iid}|${iso}`;
    };
-   const pickStartLike = (r) =>
-      r?.startTime ??
-      r?.start ??
-      r?.startedAt ??
-      r?.startDate ??
-      r?.dateTime ??
-      r?.datetime ??
-      r?.begin ??
-      r?.from ??
-      null;
-
-   const extractDraftSlots = (payload) => {
-      const p = payload || {};
-      const draft =
-         p?.reservationDraft ?? p?.reservationDraftOut ?? p?.draft ?? p;
-
-      const out = [];
-      const push = (instructorId, iso) => {
-         const iid = String(instructorId ?? "").trim();
-         const sIso = normalizeIso(iso);
-         if (!iid || !sIso) return;
-         out.push({ instructorId: iid, startIso: sIso });
-      };
-
-      // 1) draftKey/slotKey direct
-      const key =
-         p?.draftKey ?? p?.slotKey ?? draft?.draftKey ?? draft?.slotKey ?? null;
-
-      if (key && String(key).includes("|")) {
-         const parsed = parseDraftSlotKey(key); // folosește funcția ta existentă
-         if (parsed) push(parsed.instructorId, parsed.startIso);
-      }
-
-      // 2) instructor + reservations[]
-      const instructorId = draft?.instructorId ?? p?.instructorId ?? null;
-
-      const arr = Array.isArray(draft?.reservations)
-         ? draft.reservations
-         : Array.isArray(p?.reservations)
-         ? p.reservations
-         : [];
-
-      if (instructorId != null && arr.length) {
-         for (const r of arr) {
-            const iso = pickStartLike(r);
-            if (iso) push(instructorId, iso);
-         }
-      }
-
-      // 3) fallback: startTime la root
-      const single = pickStartLike(draft) || pickStartLike(p);
-      if (instructorId != null && single) push(instructorId, single);
-
-      // dedup
-      const seen = new Set();
-      return out.filter((x) => {
-         const k = `${x.instructorId}|${x.startIso}`;
-         if (seen.has(k)) return false;
-         seen.add(k);
-         return true;
-      });
-   };
 
    const myUserId = useMemo(() => {
       const id = getUserIdFromToken(token);
@@ -711,7 +628,6 @@ export default function ACalendarOptimized({
       return () => window.removeEventListener("keydown", onKey);
    }, []);
 
-   // ✅ Socket: nu face fetch direct, doar invalidează prin bus
    /* ===================== DRAFT helpers (SINGLE SOURCE OF TRUTH) ===================== */
 
    const activeDraftSlotByUserRef = useRef(new Map()); // userId -> slotKey
@@ -954,15 +870,10 @@ export default function ACalendarOptimized({
    const socketApi = useReservationSocket(token, {
       enabled: true,
 
-      // cheia: nu lăsa draft-events să ajungă în onReservationsChanged (unde tu refaci date)
       ignoreEvents: new Set([
          "reservation:create:started",
          "reservation:create:ended",
          "reservation:create:stopped",
-         // (opțional) poți ignora și presence aici dacă vrei:
-         // "reservation:joined",
-         // "reservation:left",
-         // "reservation:joinDenied",
       ]),
 
       onConnect: () => {
@@ -970,7 +881,6 @@ export default function ACalendarOptimized({
          setCreateDraftBySlotUsers(new Map());
          activeDraftSlotByUserRef.current = new Map();
 
-         // un refresh gated la conectare (NU spam)
          runReservationsRefresh("ws-connect");
       },
 
@@ -991,10 +901,8 @@ export default function ACalendarOptimized({
          applyCreateDraftPresence(payload, { forceClear: true }),
 
       onReservationsChanged: ({ eventName, payload }) => {
-         // AICI doar evenimente care chiar schimbă DB (create/update/delete etc.)
          const ev = String(eventName || "");
 
-         // DELETE fast: scoate local + redraw + refresh gated
          const isDelete =
             /deleted|delete|removed|remove/i.test(ev) ||
             payload?.type === "delete" ||
@@ -1008,7 +916,7 @@ export default function ACalendarOptimized({
                null;
 
             if (rid != null) {
-               dispatch(removeReservationLocal(rid)); // dispare instant
+               dispatch(removeReservationLocal(rid));
             }
 
             scheduleCalendarRefresh({
@@ -1016,19 +924,16 @@ export default function ACalendarOptimized({
                type: "delete",
                id: rid != null ? String(rid) : undefined,
                eventName: ev,
-               // default forceReload = true -> listenerul tău va face refresh gated
             });
 
             runReservationsRefresh("socket-delete");
             return;
          }
 
-         // create/update/etc
          scheduleCalendarRefresh({
             source: "socket",
             type: "reservations-changed",
             eventName: ev,
-            // default forceReload = true
          });
 
          runReservationsRefresh(`socket:${ev || "changed"}`);
@@ -1042,7 +947,6 @@ export default function ACalendarOptimized({
          const rid = String(reservationId ?? "").trim();
          if (!rid) return;
 
-         // optimistic local
          applyPresenceDelta("join", {
             reservationId: rid,
             userId: myUserIdRef.current,
@@ -1058,7 +962,6 @@ export default function ACalendarOptimized({
          const rid = String(reservationId ?? "").trim();
          if (!rid) return;
 
-         // optimistic local
          applyPresenceDelta("left", {
             reservationId: rid,
             userId: myUserIdRef.current,
@@ -1080,7 +983,6 @@ export default function ACalendarOptimized({
 
          const slotKey = `${String(instructorIdOut)}|${iso}`;
 
-         // optimistic local (idempotent)
          applyCreateDraftPresence(
             {
                reservationDraft: {
@@ -1126,7 +1028,6 @@ export default function ACalendarOptimized({
          const k = String(slotKey || "").trim();
          if (!k) return;
 
-         // optimistic local clear (OK)
          applyCreateDraftPresence(
             {
                reservationDraft: {
@@ -1141,14 +1042,12 @@ export default function ACalendarOptimized({
             { forceClear: true }
          );
 
-         // ✅ IMPORTANT: include instructorId parsed from slotKey
-         const parsed = parseDraftSlotKey(k); // ai deja funcția mai sus
+         const parsed = parseDraftSlotKey(k);
          const instructorIdOut = parsed?.instructorId ?? null;
 
-         // ✅ trimite CLEAR prin “started”
          socketApi?.emitReservationCreateStarted?.({
             reservationDraft: {
-               instructorId: instructorIdOut, // ✅ esențial
+               instructorId: instructorIdOut,
                draftKey: k,
                slotKey: k,
                action: "clear",
@@ -1158,9 +1057,6 @@ export default function ACalendarOptimized({
             },
             startedBy: { id: myUserIdRef.current },
          });
-
-         // ❌ scoate astea dacă backend nu le are:
-         // socketApi?.emitReservationCreateEnded?.(...)
       },
       [socketApi, applyCreateDraftPresence]
    );
@@ -1716,15 +1612,21 @@ export default function ACalendarOptimized({
       return "Botanica";
    }
 
+   /* ===================== CREATE from empty slot (FIXED) ===================== */
    const handleCreateFromEmpty = useCallback(
       (ev) => {
-         const instId = String(ev.instructorId ?? "");
-         const meta = instructorMeta.get(instId) || {};
+         const instIdRaw = String(ev.instructorId ?? "");
+         const isUnknown = instIdRaw === "__unknown";
+         const instId = isUnknown ? null : instIdRaw;
+
+         const meta = instId ? instructorMeta.get(instId) || {} : {};
 
          const grpId =
             ev.groupId && ev.groupId !== "__ungrouped"
                ? String(ev.groupId)
-               : findGroupForInstructor(instId);
+               : instId
+               ? findGroupForInstructor(instId)
+               : null;
 
          const gObj =
             (instructorsGroups || []).find(
@@ -1742,25 +1644,48 @@ export default function ACalendarOptimized({
             ? "Automat"
             : "Manual";
 
-         // ✅ Cheie FIXĂ pe slotul inițial (asta folosește popup-ul la leave)
+         // ✅ start ISO (UTC) + cheie fixă pentru draft
          const startIso = normalizeIso(ev.start);
-         const draftSlotKey = buildDraftSlotKey(instId, startIso);
+         const draftSlotKey = instId
+            ? buildDraftSlotKey(instId, startIso)
+            : null;
 
-         // 2) deschide popup-ul cu draftSlotKey
+         // ✅ trimitem explicit ziua/ora locală (ca popup să nu greșească ziua)
+         const dLocal = new Date(ev.start);
+         const initialDate = `${dLocal.getFullYear()}-${String(
+            dLocal.getMonth() + 1
+         ).padStart(2, "0")}-${String(dLocal.getDate()).padStart(2, "0")}`;
+         const initialTime = `${String(dLocal.getHours()).padStart(
+            2,
+            "0"
+         )}:${String(dLocal.getMinutes()).padStart(2, "0")}`;
+
+         // ✅ pornește draft presence imediat (instant vizual)
+         if (instId && startIso) {
+            try {
+               startCreateDraftSafe(instId, startIso, {
+                  sector: sectorVal,
+                  gearbox: gbLabel,
+               });
+            } catch {}
+         }
+
          openPopup("createRezervation", {
             start: ev.start,
             end: ev.end,
 
-            instructorId: instId === "__unknown" ? null : instId,
+            instructorId: instId,
             sector: sectorVal,
             gearbox: meta.gearbox || null,
 
             initialStartTime: startIso,
-            initialInstructorId: instId === "__unknown" ? null : instId,
+            initialDate, // ✅
+            initialTime, // ✅
+            initialInstructorId: instId,
             initialSector: sectorVal,
             initialGearbox: gbLabel,
 
-            // ✅ NOU: cheie fixă pentru join/leave în popup
+            // ✅ cheie fixă pentru join/leave în popup
             draftSlotKey,
          });
       },
@@ -1772,30 +1697,14 @@ export default function ACalendarOptimized({
       ]
    );
 
-   // ✅ BUS: aici facem refresh real (gated)
+   /* ===================== BUS LISTENER (with blackouts-changed) ===================== */
    const focusRequestRef = useRef(null);
    const [focusToken, setFocusToken] = useState(0);
 
-   useEffect(() => {
-      return listenCalendarRefresh((payload) => {
-         if (!payload || payload.forceReload !== false) {
-            runReservationsRefresh(payload?.type || "bus");
-         }
+   // ✅ blackouts: ref ca să putem reîncărca din bus listener
+   const ensureBlackoutsForRef = useRef(null);
 
-         if (
-            payload?.type === "reservation-created" &&
-            payload?.reservationId
-         ) {
-            joinReservationSafe(payload.reservationId);
-         }
-
-         if (payload?.type === "focus-reservation") {
-            focusRequestRef.current = payload;
-            setFocusToken((t) => t + 1);
-         }
-      });
-   }, [runReservationsRefresh, joinReservationSafe]);
-
+   // ====== DAYS list ======
    const allAllowedDays = useMemo(() => {
       const base = new Date(currentDate);
       const year = base.getFullYear();
@@ -1857,20 +1766,20 @@ export default function ACalendarOptimized({
    const blackoutKeyMapRef = useRef(new Map());
    const blackoutInFlightRef = useRef(new Set());
    const [blackoutVer, setBlackoutVer] = useState(0);
+
    const currentMonthValue = useMemo(() => {
       const d = new Date(currentDate);
       const y = d.getFullYear();
       const m = d.getMonth();
       return `${y}-${String(m + 1).padStart(2, "0")}`;
    }, [currentDate]);
-   // luna curentă (ai deja currentMonthValue)
+
    const monthRange = useMemo(
       () => getMonthRangeYMD(currentDate),
       [currentMonthValue]
    );
 
    useEffect(() => {
-      // când schimbi luna: golim cache + inflight ca să refacem doar pentru luna nouă
       blackoutKeyMapRef.current = new Map();
       blackoutInFlightRef.current = new Set();
       setBlackoutVer((v) => v + 1);
@@ -1891,10 +1800,7 @@ export default function ACalendarOptimized({
          const key = String(instId || "").trim();
          if (!key) return;
 
-         // deja încărcat (în luna curentă)
          if (blackoutKeyMapRef.current.has(key)) return;
-
-         // deja se încarcă -> nu dubla request-ul
          if (blackoutInFlightRef.current.has(key)) return;
 
          blackoutInFlightRef.current.add(key);
@@ -1902,11 +1808,9 @@ export default function ACalendarOptimized({
          try {
             let list;
 
-            // 1) încercăm cu range-ul lunii (dacă backend acceptă)
             try {
                list = await getInstructorBlackouts(key, monthRange);
-            } catch (e) {
-               // 2) fallback: endpoint fără range (compat)
+            } catch {
                list = await getInstructorBlackouts(key);
             }
 
@@ -1931,7 +1835,6 @@ export default function ACalendarOptimized({
          } catch (e) {
             console.error("getInstructorBlackouts error for", key, e);
 
-            // IMPORTANT: ca să nu spammeze la infinit dacă serverul pică / 500 / etc.
             blackoutKeyMapRef.current.set(key, new Set());
             setBlackoutVer((v) => v + 1);
          } finally {
@@ -1941,6 +1844,11 @@ export default function ACalendarOptimized({
       [allowedKeysSet, monthRange]
    );
 
+   // ✅ ținem ref actual pentru bus listener
+   useEffect(() => {
+      ensureBlackoutsForRef.current = ensureBlackoutsFor;
+   }, [ensureBlackoutsFor]);
+
    useEffect(() => {
       if (!instIdsAll.length) return;
       if (!visibleDaysCount) return;
@@ -1949,6 +1857,48 @@ export default function ACalendarOptimized({
          ensureBlackoutsFor(iid);
       });
    }, [instIdsAll, ensureBlackoutsFor, visibleDaysCount]);
+
+   // ✅ BUS listener (cu blackouts-changed)
+   useEffect(() => {
+      return listenCalendarRefresh((payload) => {
+         // ✅ blackouts changed: invalidează cache + re-fetch doar pentru instructor
+         if (payload?.type === "blackouts-changed") {
+            const iid =
+               payload?.instructorId != null
+                  ? String(payload.instructorId)
+                  : "";
+            if (iid) {
+               blackoutKeyMapRef.current?.delete?.(iid);
+               blackoutInFlightRef.current?.delete?.(iid);
+               try {
+                  ensureBlackoutsForRef.current?.(iid);
+               } catch {}
+            } else {
+               blackoutKeyMapRef.current = new Map();
+               blackoutInFlightRef.current = new Set();
+            }
+
+            setBlackoutVer((v) => v + 1);
+            return; // IMPORTANT: nu refetch reservations
+         }
+
+         if (!payload || payload.forceReload !== false) {
+            runReservationsRefresh(payload?.type || "bus");
+         }
+
+         if (
+            payload?.type === "reservation-created" &&
+            payload?.reservationId
+         ) {
+            joinReservationSafe(payload.reservationId);
+         }
+
+         if (payload?.type === "focus-reservation") {
+            focusRequestRef.current = payload;
+            setFocusToken((t) => t + 1);
+         }
+      });
+   }, [runReservationsRefresh, joinReservationSafe]);
 
    const standardSlotsByDay = useMemo(() => {
       const map = new Map();

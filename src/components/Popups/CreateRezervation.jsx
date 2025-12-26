@@ -17,7 +17,10 @@ import { createReservationsForUser } from "../../api/reservationsService";
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
 import { fetchReservationsDelta } from "../../store/reservationsSlice";
-import { triggerCalendarRefresh } from "../Utils/calendarBus";
+import {
+   triggerCalendarRefresh,
+   scheduleCalendarRefresh, // ✅ ADD: ca să notificăm calendarul pentru blackouts
+} from "../Utils/calendarBus";
 
 import apiClientService from "../../api/ApiClientService";
 import {
@@ -117,6 +120,12 @@ const toUtcIsoFromLocal = toUtcIsoFromMoldova;
 
 const BUSY_KEYS_MODE = "local-match";
 
+/**
+ * IMPORTANT:
+ * backend-ul tău pare să compare "local hour" în DB (de aici hack-ul).
+ * pentru CREATE / ADD blackout trimiți startTimeToSend (poate fi cu offset).
+ * pentru MATCH în UI, comparăm întotdeauna pe ISO Z + tz comparison.
+ */
 function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    const base = new Date(isoUtcFromMoldova);
    const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
@@ -206,27 +215,86 @@ function getBlackoutDT(b) {
    return b.dateTime || b.datetime || b.startTime || b.date || b.begin || null;
 }
 
-/** compară dacă două momente au aceeași zi + minut în MOLDOVA_TZ */
-function sameLocalSlot(aIso, bIso, tz = MOLDOVA_TZ) {
-   if (!aIso || !bIso) return false;
+/** ==== helpers pentru REPEAT ==== */
+function pad2(n) {
+   return String(n).padStart(2, "0");
+}
+function getMonthRangeYMD(dateObj) {
+   const d = new Date(dateObj);
+   const y = d.getFullYear();
+   const m = d.getMonth(); // 0-11
+   const lastDay = new Date(y, m + 1, 0).getDate();
+   return {
+      startDate: `${y}-${pad2(m + 1)}-01`,
+      endDate: `${y}-${pad2(m + 1)}-${pad2(lastDay)}`,
+   };
+}
 
-   const aYmd = (() => {
-      const { y, m, d } = partsInTZ(aIso, tz);
-      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-   })();
+/** ==== build local date from initialDate (YYYY-MM-DD) to avoid TZ surprises ==== */
+function safeLocalDateFromYMD(ymd) {
+   const m = String(ymd || "")
+      .trim()
+      .match(/^(\d{4})-(\d{2})-(\d{2})$/);
+   if (!m) return null;
+   const Y = +m[1],
+      Mo = +m[2],
+      D = +m[3];
+   // punem ora la 12:00 ca să evităm edge DST / midnight shifts
+   return new Date(Y, Mo - 1, D, 12, 0, 0, 0);
+}
 
-   const bYmd = (() => {
-      const { y, m, d } = partsInTZ(bIso, tz);
-      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-   })();
+/* ===========================================================
+   ✅ FIX IMPORTANT (copy logic din calendar):
+   - în calendar slot-ul blocat e determinat prin "local slot key" (YYYY-MM-DD|HH:mm)
+     calculat cu busyLocalKeyFromStored(dt)
+   - în popup făceai match pe ISO (sameLocalSlot) și se rupea când backend-ul folosește local-match
+   -> AICI facem match 1:1 cu calendarul (slotKey)
+=========================================================== */
 
-   return aYmd === bYmd && hhmmInTZ(aIso, tz) === hhmmInTZ(bIso, tz);
+function ymdStrInTZ(dateLike, timeZone = MOLDOVA_TZ) {
+   const { y, m, d } = partsInTZ(dateLike, timeZone);
+   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function localKeyFromTs(dateLike, timeZone = MOLDOVA_TZ) {
+   return `${ymdStrInTZ(dateLike, timeZone)}|${hhmmInTZ(dateLike, timeZone)}`;
+}
+
+/** EXACT ca în calendar */
+function busyLocalKeyFromStored(st) {
+   const d = new Date(st);
+   if (Number.isNaN(d.getTime())) return "";
+   const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
+   const base = new Date(d.getTime() - offMin * 60000);
+   return localKeyFromTs(base.getTime(), MOLDOVA_TZ);
+}
+
+/** REPEAT: verifică dacă targetKey apare în recurență (exact ca expandRepeatLocalKeys din calendar) */
+function repeatContainsSlotKey(b, targetKey) {
+   const type = String(b?.type || b?.Type || "").toUpperCase();
+   if (type !== "REPEAT") return false;
+
+   const stepDays = Math.max(1, Number(b?.repeatEveryDays || 1));
+   const first = b?.startDateTime || b?.dateTime || b?.datetime || null;
+   const last = b?.endDateTime || first;
+   if (!first || !last) return false;
+
+   let cur = new Date(first).getTime();
+   const lastMs = new Date(last).getTime();
+   if (Number.isNaN(cur) || Number.isNaN(lastMs)) return false;
+
+   while (cur <= lastMs) {
+      const k = busyLocalKeyFromStored(new Date(cur).toISOString());
+      if (k && k === targetKey) return true;
+      cur += stepDays * 24 * 60 * 60 * 1000;
+   }
+   return false;
 }
 
 export default function CreateRezervation({
    initialStartTime,
-   initialDate,
-   initialTime,
+   initialDate, // ✅ primesc din calendar (YYYY-MM-DD)
+   initialTime, // ✅ primesc din calendar (HH:mm)
    initialStudentId,
    initialInstructorId,
    initialSector = "Botanica",
@@ -238,7 +306,7 @@ export default function CreateRezervation({
    sector: sectorFromPayload,
    gearbox: gearboxFromPayload,
 
-   draftSlotKey, // ✅ ADD ASTA
+   draftSlotKey, // ✅ cheia fixă "<instId>|<suffix>"
 
    onClose,
 }) {
@@ -315,17 +383,29 @@ export default function CreateRezervation({
    const [highlightedStudentId, setHighlightedStudentId] = useState(null);
    const [continuing, setContinuing] = useState(false);
 
-   // zi + oră derivate din props (read-only)
+   // ✅ zi + oră derivate din props (read-only)
    const [selectedDate] = useState(() => {
+      // 1) dacă calendarul îți trimite explicit ziua -> folosim asta
+      const d1 = initialDate ? safeLocalDateFromYMD(initialDate) : null;
+      if (d1) return d1;
+
+      // 2) altfel fallback la start ISO
       if (effectiveStartISO) return new Date(effectiveStartISO);
-      if (initialDate) return new Date(initialDate);
+
+      // 3) fallback final
+      if (start) return new Date(start);
       return null;
    });
 
    const [selectedTime] = useState(() => {
-      const hhmm = effectiveStartISO
-         ? hhmmInTZ(new Date(effectiveStartISO), MOLDOVA_TZ)
-         : initialTime || "";
+      // 1) dacă calendarul îți trimite explicit ora -> folosim asta
+      const hhmmFromProps = (initialTime || "").trim();
+      const hhmm =
+         hhmmFromProps ||
+         (effectiveStartISO
+            ? hhmmInTZ(new Date(effectiveStartISO), MOLDOVA_TZ)
+            : "");
+
       if (!hhmm) return null;
       const match = oreDisponibile.find((o) => o.oraStart === hhmm);
       return match || { eticheta: hhmm, oraStart: hhmm };
@@ -337,10 +417,11 @@ export default function CreateRezervation({
    // blackout state
    const [hasBlackout, setHasBlackout] = useState(false);
    const [blackoutId, setBlackoutId] = useState(null);
+   const [blackoutType, setBlackoutType] = useState(null); // ✅ "SINGLE" | "REPEAT" | null
    const [checkingBlackout, setCheckingBlackout] = useState(false);
    const [blocking, setBlocking] = useState(false);
 
-   // ✅ încărcări inițiale (nu spammează: check + deps corecte)
+   // ✅ încărcări inițiale
    useEffect(() => {
       if (!studentsAll?.length) dispatch(fetchStudents());
       if (!instructors?.length) dispatch(fetchInstructors());
@@ -422,10 +503,10 @@ export default function CreateRezervation({
    const instructorPhone = selectedInstructor?.phone || "";
 
    /* =========================
-   ✅ CREATE-DRAFT join/leave (SINGLE SOURCE OF TRUTH)
-   - cheia vine din calendar: draftSlotKey = "<instId>|<suffix>"
-   - păstrăm <suffix> IDENTIC; schimbăm doar instId dacă user îl schimbă în popup
-========================= */
+    ✅ CREATE-DRAFT join/leave (SINGLE SOURCE OF TRUTH)
+    - cheia vine din calendar: draftSlotKey = "<instId>|<suffix>"
+    - păstrăm <suffix> IDENTIC; schimbăm doar instId dacă user îl schimbă în popup
+  ========================= */
 
    const wsRef = useRef(null);
    useEffect(() => {
@@ -436,18 +517,15 @@ export default function CreateRezervation({
    const draftSuffix = useMemo(() => {
       const raw = String(draftSlotKey || "").trim();
       if (raw.includes("|")) {
-         // păstrăm tot după primul "|", EXACT cum a venit
          return raw.split("|").slice(1).join("|").trim();
       }
 
       // fallback (doar dacă NU ai draftSlotKey din calendar)
-      // IMPORTANT: folosește același “start” pe care îl folosește calendarul tău când construiește draftSlotKey.
       if (effectiveStartISO) {
          const d = new Date(effectiveStartISO);
          return Number.isFinite(d.getTime()) ? d.toISOString() : "";
       }
       if (selectedDate && selectedTime?.oraStart) {
-         // aici e tot fallback; ideal NU ajungi aici dacă trimiți draftSlotKey din calendar
          return toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
       }
       return "";
@@ -470,42 +548,6 @@ export default function CreateRezervation({
    const getWS = () =>
       (typeof window !== "undefined" ? window.__reservationWS : null) ||
       wsRef.current;
-   const buildDraftPayload = useCallback(
-      (key) => {
-         if (!key) return null;
-
-         const instId = Number(instructorId);
-         if (!Number.isFinite(instId) || instId <= 0) return null;
-
-         const startIso =
-            effectiveStartISO ||
-            (selectedDate && selectedTime?.oraStart
-               ? toUtcIsoFromLocal(selectedDate, selectedTime.oraStart)
-               : null);
-
-         if (!startIso) return null;
-
-         return {
-            draftKey: key,
-            instructorId: instId,
-            reservations: [
-               {
-                  startTime: startIso,
-                  sector,
-                  gearbox,
-               },
-            ],
-         };
-      },
-      [
-         instructorId,
-         effectiveStartISO,
-         selectedDate,
-         selectedTime,
-         sector,
-         gearbox,
-      ]
-   );
 
    const joinDraft = useCallback(
       (key) => {
@@ -541,10 +583,8 @@ export default function CreateRezervation({
    useEffect(() => {
       if (!draftRoomKey) return;
 
-      // JOIN pe cheia unică
       joinDraft(draftRoomKey);
 
-      // LEAVE garantat când cheia se schimbă sau la unmount
       return () => {
          leaveDraft(draftRoomKey);
       };
@@ -836,6 +876,21 @@ export default function CreateRezervation({
          return pushPill("Lipsește ziua sau ora programării (din props).");
       }
 
+      // dacă slotul e blocat pe REPEAT -> nu permite programare (opțional, dar logic)
+      if (blackoutType === "REPEAT") {
+         return pushPill(
+            "Slotul este blocat prin REPEAT. Nu poți crea programare aici.",
+            "error"
+         );
+      }
+      // dacă slotul e blocat pe SINGLE -> tot nu permite programare
+      if (blackoutType === "SINGLE" && hasBlackout) {
+         return pushPill(
+            "Slotul este blocat (SINGLE). Deblochează înainte de programare.",
+            "error"
+         );
+      }
+
       const iso = toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
 
       const instructorIdNum = Number(instructorId);
@@ -879,13 +934,11 @@ export default function CreateRezervation({
             { id: Date.now(), type: "success", text: "Programare creată." },
          ]);
 
-         // ✅ IMPORTANT: evităm dublu-fetch + setTimeout spam
          try {
             await (dispatch(fetchReservationsDelta()).unwrap?.() ??
                dispatch(fetchReservationsDelta()));
          } catch {}
 
-         // ✅ un singur refresh bus (coalesced în calendarBus / listener)
          try {
             triggerCalendarRefresh();
          } catch {}
@@ -908,6 +961,8 @@ export default function CreateRezervation({
       dispatch,
       pushPill,
       closeSelf,
+      blackoutType,
+      hasBlackout,
    ]);
 
    const validNewName = newFullName.trim().split(/\s+/).length >= 2;
@@ -1001,11 +1056,17 @@ export default function CreateRezervation({
       : "Nu este setată";
    const timeLabel = selectedTime?.eticheta || "Nu este setată";
 
-   /* ====== Blackout detect (există deja SINGLE pentru acest slot?) ====== */
+   /* ====== Blackout detect (FIXED):
+      - verifică lunar (startDate/endDate)
+      - găsește SINGLE pentru acest slot (cu ID pentru delete)
+      - detectează și REPEAT (doar ca status “ocupat”)
+      - IMPORTANT: match pe targetKey EXACT ca în calendar
+  ====== */
    useEffect(() => {
       if (!instructorId || !selectedDate || !selectedTime) {
          setHasBlackout(false);
          setBlackoutId(null);
+         setBlackoutType(null);
          return;
       }
 
@@ -1014,42 +1075,76 @@ export default function CreateRezervation({
       const run = async () => {
          setCheckingBlackout(true);
          try {
-            const list = await getInstructorBlackouts(instructorId);
+            const monthRange = getMonthRangeYMD(selectedDate);
+
+            let list = null;
+            try {
+               list = await getInstructorBlackouts(instructorId, monthRange);
+            } catch {
+               list = await getInstructorBlackouts(instructorId);
+            }
+
+            // țintă: cheia slotului selectat (YYYY-MM-DD|HH:mm) în Moldova TZ
             const targetIso = toUtcIsoFromLocal(
                selectedDate,
                selectedTime.oraStart
             );
+            const targetKey = localKeyFromTs(targetIso, MOLDOVA_TZ);
 
-            let found = null;
+            let foundSingle = null;
+            let foundRepeat = false;
+
             for (const b of list || []) {
                const type = String(b?.type || b?.Type || "").toUpperCase();
-               if (type !== "SINGLE") continue;
-               const dt = getBlackoutDT(b);
-               if (!dt) continue;
-               if (sameLocalSlot(dt, targetIso, MOLDOVA_TZ)) {
-                  found = b;
-                  break;
+
+               if (type === "SINGLE") {
+                  const dt = getBlackoutDT(b);
+                  if (!dt) continue;
+
+                  // IMPORTANT: comparăm ca în calendar
+                  if (busyLocalKeyFromStored(dt) === targetKey) {
+                     foundSingle = b;
+                     break;
+                  }
+               }
+
+               if (type === "REPEAT") {
+                  if (repeatContainsSlotKey(b, targetKey)) {
+                     foundRepeat = true;
+                  }
                }
             }
 
             if (cancelled) return;
 
-            if (found) {
-               setHasBlackout(true);
+            if (foundSingle) {
                const id =
-                  found.id ??
-                  found._id ??
-                  found.blackoutId ??
-                  found.blackout_id ??
+                  foundSingle.id ??
+                  foundSingle._id ??
+                  foundSingle.blackoutId ??
+                  foundSingle.blackout_id ??
                   null;
+
+               setHasBlackout(true);
+               setBlackoutType("SINGLE");
                setBlackoutId(id);
-            } else {
-               setHasBlackout(false);
-               setBlackoutId(null);
+               return;
             }
+
+            if (foundRepeat) {
+               setHasBlackout(true);
+               setBlackoutType("REPEAT");
+               setBlackoutId(null);
+               return;
+            }
+
+            setHasBlackout(false);
+            setBlackoutType(null);
+            setBlackoutId(null);
          } catch {
             if (cancelled) return;
             setHasBlackout(false);
+            setBlackoutType(null);
             setBlackoutId(null);
          } finally {
             if (!cancelled) setCheckingBlackout(false);
@@ -1073,6 +1168,15 @@ export default function CreateRezervation({
          return;
       }
 
+      // REPEAT: nu îl deblochezi aici (alt endpoint / alt UI)
+      if (blackoutType === "REPEAT") {
+         pushPill(
+            "Acest slot e blocat prin REPEAT. Deblocarea se face din setările de blocări (repetitive).",
+            "warning"
+         );
+         return;
+      }
+
       const iso = toUtcIsoFromLocal(selectedDate, selectedTime.oraStart);
       const dateTimeToSend =
          BUSY_KEYS_MODE === "local-match" ? isoForDbMatchLocalHour(iso) : iso;
@@ -1080,18 +1184,36 @@ export default function CreateRezervation({
       setBlocking(true);
       try {
          if (!hasBlackout) {
+            // ✅ creează SINGLE
             await addInstructorBlackout(Number(instructorId), dateTimeToSend);
          } else if (blackoutId != null) {
+            // ✅ șterge SINGLE
             await deleteInstructorBlackout(blackoutId);
          } else {
-            const list = await getInstructorBlackouts(instructorId);
+            // fallback (căutăm SINGLE id) — FIX: match pe targetKey, ca în calendar
+            const monthRange = getMonthRangeYMD(selectedDate);
+
+            let list = null;
+            try {
+               list = await getInstructorBlackouts(instructorId, monthRange);
+            } catch {
+               list = await getInstructorBlackouts(instructorId);
+            }
+
+            const targetIso = toUtcIsoFromLocal(
+               selectedDate,
+               selectedTime.oraStart
+            );
+            const targetKey = localKeyFromTs(targetIso, MOLDOVA_TZ);
+
             const found = (list || []).find((b) => {
                const type = String(b?.type || b?.Type || "").toUpperCase();
                if (type !== "SINGLE") return false;
                const dt = getBlackoutDT(b);
                if (!dt) return false;
-               return sameLocalSlot(dt, dateTimeToSend, MOLDOVA_TZ);
+               return busyLocalKeyFromStored(dt) === targetKey;
             });
+
             if (found) {
                const id =
                   found.id ??
@@ -1103,8 +1225,14 @@ export default function CreateRezervation({
             }
          }
 
+         // ✅ spune calendarului să refacă blackouts pentru instructorul acesta (fără refetch de reservations)
          try {
-            triggerCalendarRefresh();
+            scheduleCalendarRefresh({
+               source: "popup",
+               type: "blackouts-changed",
+               instructorId: String(instructorId),
+               forceReload: false,
+            });
          } catch {}
 
          closeSelf();
@@ -1119,11 +1247,18 @@ export default function CreateRezervation({
       selectedTime,
       hasBlackout,
       blackoutId,
+      blackoutType,
       pushPill,
       closeSelf,
    ]);
 
-   const blackoutButtonLabel = hasBlackout ? "Deblochează" : "Blochează";
+   const blackoutButtonLabel =
+      blackoutType === "REPEAT"
+         ? "Blocare (repeat)"
+         : hasBlackout
+         ? "Deblochează"
+         : "Blochează";
+
    const blackoutButtonDisabled =
       blocking ||
       saving ||
@@ -1131,7 +1266,8 @@ export default function CreateRezervation({
       checkingBlackout ||
       !instructorId ||
       !selectedDate ||
-      !selectedTime;
+      !selectedTime ||
+      blackoutType === "REPEAT";
 
    return (
       <div ref={rootRef} className="popupui popupui--a-add-prog">
@@ -1258,7 +1394,9 @@ export default function CreateRezervation({
                         onClick={handleToggleBlackout}
                         disabled={blackoutButtonDisabled}
                         title={
-                           !instructorId
+                           blackoutType === "REPEAT"
+                              ? "Blocare repetitivă (REPEAT) – se gestionează separat"
+                              : !instructorId
                               ? "Selectează instructorul înainte de blocare"
                               : !selectedDate || !selectedTime
                               ? "Lipsește ziua sau ora (vin din slotul selectat)"
@@ -1270,7 +1408,7 @@ export default function CreateRezervation({
                            : blackoutButtonLabel}
                      </button>
 
-                     {/* Buton TRIMITE (programare) */}
+                     {/* Buton TRIMITE */}
                      <button
                         onClick={onSave}
                         className="popupui__primary-btn popupui__primary-btn--arrow"
@@ -1281,10 +1419,16 @@ export default function CreateRezervation({
                            !instructorId ||
                            !studentId ||
                            !selectedDate ||
-                           !selectedTime
+                           !selectedTime ||
+                           blackoutType === "REPEAT" ||
+                           (blackoutType === "SINGLE" && hasBlackout)
                         }
                         title={
-                           !instructorId
+                           blackoutType === "REPEAT"
+                              ? "Slot blocat prin REPEAT"
+                              : blackoutType === "SINGLE" && hasBlackout
+                              ? "Slot blocat (SINGLE). Deblochează înainte."
+                              : !instructorId
                               ? "Selectează instructorul"
                               : !studentId
                               ? "Selectează elevul"
