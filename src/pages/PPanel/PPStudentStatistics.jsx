@@ -26,6 +26,8 @@ import { fetchStudents } from "../../store/studentsSlice";
 // icoane
 import accIcon from "../../assets/svg/acc.svg";
 import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
+import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
+import studentsIcon from "../../assets/svg//graduate.svg";
 
 /* ================== ENV tickets (identic cu Practice.jsx) ================== */
 const readEnv = (viteKey, craKey) =>
@@ -36,10 +38,10 @@ const readEnv = (viteKey, craKey) =>
    "";
 
 const START_ID = Number(
-   readEnv("VITE_TICKETS_START", "REACT_APP_TICKETS_START") || 246
+   readEnv("VITE_TICKETS_START", "REACT_APP_TICKETS_START") || 246,
 );
 const COUNT = Number(
-   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 269 - 246 + 1
+   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 269 - 246 + 1,
 );
 const TICKET_IDS = Array.from({ length: COUNT }, (_, i) => START_ID + i);
 
@@ -154,7 +156,7 @@ function tsOf(it) {
             it?.endedAt ||
             it?.startedAt ||
             it?.createdAt ||
-            0
+            0,
       ) || 0
    );
 }
@@ -355,9 +357,11 @@ export default function PPStudentStatistics() {
    const links = useMemo(
       () => [
          { link: "/professor", text: "Acasă", icon: homeIcon },
+         { link: "/professor/students", text: "Studenți", icon: studentsIcon },
+         { link: "/professor/groups", text: "Grupe", icon: groupsIcon },
          { popup: "profile", text: "Profil", icon: accIcon },
       ],
-      []
+      [],
    );
 
    useEffect(() => {
@@ -396,7 +400,7 @@ export default function PPStudentStatistics() {
             }
 
             const stFromGroup = myList.find(
-               (s) => String(s?.id) === String(studentId)
+               (s) => String(s?.id) === String(studentId),
             );
 
             const progRes = await getStudentPracticeProgress({
@@ -424,7 +428,7 @@ export default function PPStudentStatistics() {
                   ? ovRes.overview
                   : [];
                const row = ovList.find(
-                  (r) => String(r?.student?.id) === String(studentId)
+                  (r) => String(r?.student?.id) === String(studentId),
                );
                if (row) {
                   ov = {
@@ -493,13 +497,13 @@ export default function PPStudentStatistics() {
                      const count = Array.isArray(q)
                         ? q.length
                         : Array.isArray(q?.questions)
-                        ? q.questions.length
-                        : 0;
+                          ? q.questions.length
+                          : 0;
                      return [tid, count];
                   } catch {
                      return [tid, 0];
                   }
-               })
+               }),
             );
             if (!alive) return;
 
@@ -538,11 +542,11 @@ export default function PPStudentStatistics() {
 
    const ticketAgg = useMemo(
       () => buildTicketAgg(practiceHistory),
-      [practiceHistory]
+      [practiceHistory],
    );
    const categoryAgg = useMemo(
       () => buildCategoryAgg(practiceHistory),
-      [practiceHistory]
+      [practiceHistory],
    );
 
    const DISPLAY_BASE = START_ID - 1;
@@ -562,7 +566,7 @@ export default function PPStudentStatistics() {
             Number(agg.total) > 0
                ? ` • ${Math.min(
                     Number(agg.correct),
-                    Number(agg.total)
+                    Number(agg.total),
                  )}/${Number(agg.total)}`
                : "";
 
@@ -590,7 +594,7 @@ export default function PPStudentStatistics() {
       const qq = q.trim().toLowerCase();
       if (!qq) return ticketVm;
       return ticketVm.filter(
-         (t) => String(t.nr).includes(qq) || String(t.id).includes(qq)
+         (t) => String(t.nr).includes(qq) || String(t.id).includes(qq),
       );
    }, [ticketVm, q]);
 
@@ -598,17 +602,17 @@ export default function PPStudentStatistics() {
       const qq = q.trim().toLowerCase();
       if (!qq) return allCategoryRows;
       return allCategoryRows.filter((c) =>
-         `${c.name} ${c.id}`.toLowerCase().includes(qq)
+         `${c.name} ${c.id}`.toLowerCase().includes(qq),
       );
    }, [allCategoryRows, q]);
 
    const ticketsPassed = useMemo(
       () => ticketVm.filter((t) => t.state === "ok").length,
-      [ticketVm]
+      [ticketVm],
    );
    const ticketsFailed = useMemo(
       () => ticketVm.filter((t) => t.state === "bad").length,
-      [ticketVm]
+      [ticketVm],
    );
 
    const catStatById = useMemo(() => {
@@ -641,7 +645,7 @@ export default function PPStudentStatistics() {
 
    const catsPassed = useMemo(() => {
       return allCategoryRows.filter(
-         (c) => catStatById[String(c.id)]?.state === "ok"
+         (c) => catStatById[String(c.id)]?.state === "ok",
       ).length;
    }, [allCategoryRows, catStatById]);
 
@@ -870,8 +874,8 @@ export default function PPStudentStatistics() {
                                        (t.state === "ok"
                                           ? " practice__ticket--ok"
                                           : t.state === "bad"
-                                          ? " practice__ticket--bad"
-                                          : "");
+                                            ? " practice__ticket--bad"
+                                            : "");
 
                                     return (
                                        <button
@@ -930,7 +934,7 @@ export default function PPStudentStatistics() {
                                           0;
                                        const correctDisp =
                                           Number.isFinite(
-                                             Number(stat.correct)
+                                             Number(stat.correct),
                                           ) && Number(stat.correct) >= 0
                                              ? Number(stat.correct)
                                              : null;
@@ -939,7 +943,7 @@ export default function PPStudentStatistics() {
                                           correctDisp != null && totalDisp > 0
                                              ? `${Math.min(
                                                   correctDisp,
-                                                  totalDisp
+                                                  totalDisp,
                                                )}/${totalDisp}`
                                              : statusLabelRo(stat.st);
 

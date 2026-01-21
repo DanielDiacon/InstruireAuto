@@ -58,7 +58,7 @@ export async function getGroups() {
 export async function createGroups(payload) {
    const response = await apiClientService.post(
       "/groups",
-      JSON.stringify(payload)
+      JSON.stringify(payload),
    );
    await throwIfNotOk(response);
    return await response.json();
@@ -75,7 +75,7 @@ export async function patchGroup(id, payload) {
    const gid = ensurePositiveInt(id, "patchGroup: id");
    const response = await apiClientService.patch(
       `/groups/${gid}`,
-      JSON.stringify(payload)
+      JSON.stringify(payload),
    );
    await throwIfNotOk(response);
    return await response.json();
@@ -83,49 +83,65 @@ export async function patchGroup(id, payload) {
 
 /* ================= PROFESSOR endpoints ================= */
 
-
-/* ================= PROFESSOR endpoints ================= */
-
 export async function getMyGroupStudents() {
-  const res = await apiClientService.get("/groups/my-group/students");
-  await throwIfNotOk(res, "getMyGroupStudents failed");
-  return await res.json();
+   // ✅ Swagger: GET /api/groups/my-groups/students
+   const res = await apiClientService.get("/groups/my-groups/students");
+   await throwIfNotOk(res, "getMyGroupStudents failed");
+   return await res.json();
 }
 
 export async function getMyGroupOverview() {
-  const res = await apiClientService.get("/groups/my-group/overview");
-  await throwIfNotOk(res, "getMyGroupOverview failed");
-  return await res.json();
+   // ✅ GET /api/groups/my-group/overview -> { totalGroups, groups:[...] }
+   const res = await apiClientService.get("/groups/my-group/overview");
+   await throwIfNotOk(res, "getMyGroupOverview failed");
+   return await res.json();
 }
 
-export async function getStudentPracticeProgress({ studentId, page = 1, limit = 20 } = {}) {
-  const sid = ensurePositiveInt(studentId, "getStudentPracticeProgress: studentId");
+export async function getStudentPracticeProgress({
+   studentId,
+   page = 1,
+   limit = 20,
+} = {}) {
+   const sid = ensurePositiveInt(
+      studentId,
+      "getStudentPracticeProgress: studentId",
+   );
 
-  const p = clampInt(page, 1, 1, 999999);
-  const l = clampInt(limit, 20, 1, 200);
+   const p = clampInt(page, 1, 1, 999999);
+   const l = clampInt(limit, 20, 1, 200);
 
-  const qs = new URLSearchParams();
-  qs.set("page", String(p));
-  qs.set("limit", String(l));
+   const qs = new URLSearchParams();
+   qs.set("page", String(p));
+   qs.set("limit", String(l));
 
-  const url = `/groups/my-group/students/${sid}/practice-progress?${qs.toString()}`;
+   const url = `/groups/my-group/students/${sid}/practice-progress?${qs.toString()}`;
 
-  const res = await apiClientService.get(url);
-  await throwIfNotOk(res, "getStudentPracticeProgress failed");
-  return await res.json();
+   const res = await apiClientService.get(url);
+   await throwIfNotOk(res, "getStudentPracticeProgress failed");
+   return await res.json();
 }
 
-export async function getStudentDetailedPracticeSession({ studentId, practiceId, lang = "ro" } = {}) {
-  const sid = ensurePositiveInt(studentId, "getStudentDetailedPracticeSession: studentId");
-  const pid = ensurePositiveInt(practiceId, "getStudentDetailedPracticeSession: practiceId");
+export async function getStudentDetailedPracticeSession({
+   studentId,
+   practiceId,
+   lang = "ro",
+} = {}) {
+   const sid = ensurePositiveInt(
+      studentId,
+      "getStudentDetailedPracticeSession: studentId",
+   );
+   const pid = ensurePositiveInt(
+      practiceId,
+      "getStudentDetailedPracticeSession: practiceId",
+   );
 
-  const qs = new URLSearchParams();
-  qs.set("practiceId", String(pid));
-  qs.set("lang", safeLang(lang));
+   const qs = new URLSearchParams();
+   qs.set("practiceId", String(pid));
+   qs.set("lang", safeLang(lang));
 
-  const url = `/exams/practice/student/${sid}/detailed?${qs.toString()}`;
+   const url = `/exams/practice/student/${sid}/detailed?${qs.toString()}`;
 
-  const res = await apiClientService.get(url);
-  await throwIfNotOk(res, "getStudentDetailedPracticeSession failed");
-  return await res.json();
+   const res = await apiClientService.get(url);
+   await throwIfNotOk(res, "getStudentDetailedPracticeSession failed");
+   return await res.json();
 }

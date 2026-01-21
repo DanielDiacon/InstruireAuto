@@ -9,7 +9,6 @@ import Popup from "../../components/Utils/Popup";
 import Footer from "../../components/Footer";
 
 import { UserContext } from "../../UserContext";
-
 import { fetchStudents } from "../../store/studentsSlice";
 
 import {
@@ -28,9 +27,9 @@ import homeIcon from "../../assets/svg/material-symbols--home-outline.svg";
 import addIcon from "../../assets/svg/add-s.svg";
 import searchIcon from "../../assets/svg/search.svg";
 import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
-import studentsIcon from "../../assets/svg//graduate.svg";
+import studentsIcon from "../../assets/svg/graduate.svg";
 
-/* ================== ENV tickets (24 default) ================== */
+/* ================== ENV tickets ================== */
 const readEnv = (viteKey, craKey) =>
    (typeof import.meta !== "undefined" &&
       import.meta?.env &&
@@ -39,11 +38,11 @@ const readEnv = (viteKey, craKey) =>
    "";
 
 const COUNT = Number(
-   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 269 - 246 + 1
+   readEnv("VITE_TICKETS_COUNT", "REACT_APP_TICKETS_COUNT") || 269 - 246 + 1,
 );
 const TICKET_TOTAL = Math.max(0, COUNT);
 
-/* ================== STATUS helpers (ca în PPStudentStatistics) ================== */
+/* ================== STATUS helpers ================== */
 const STATUS = {
    PASSED: "PASSED",
    COMPLETED: "COMPLETED",
@@ -63,7 +62,7 @@ function normalizeStatus(s) {
    return STATUS.NOT_STARTED;
 }
 
-/* ================== parse helpers (din practiceHistory) ================== */
+/* ================== parse helpers ================== */
 function parseTicketNr(ticketName) {
    const s = String(ticketName || "");
    let m = s.match(/Practice\s*P\s*([0-9]+)/i);
@@ -102,7 +101,7 @@ function computeUniqueAttemptsFromHistory(practiceHistory) {
    for (const it of list) {
       const st = normalizeStatus(it?.status);
 
-      // ✅ vrem doar attempted (fără NOT_STARTED)
+      // attempted = PASSED/COMPLETED/FAILED/IN_PROGRESS
       if (
          st !== STATUS.PASSED &&
          st !== STATUS.COMPLETED &&
@@ -208,11 +207,72 @@ function normalizePagedResponse(raw) {
    return Array.isArray(items) ? items : [];
 }
 
-/* ================= Students list (AFIȘĂM DOAR STUDENȚII MEI) ================= */
+function extractMyGroups(res) {
+   const groups =
+      (Array.isArray(res?.groups) && res.groups) ||
+      (Array.isArray(res?.data?.groups) && res.data.groups) ||
+      (Array.isArray(res) && res) ||
+      [];
+   return groups.filter((g) => g && g.id != null);
+}
+
+function normalizeMyGroupsStudents(res) {
+   // { totalGroups, totalStudents, students:[...] }
+   const list = (Array.isArray(res?.students) && res.students) || [];
+   return list.filter((s) => s && s.id != null);
+}
+
+function escapeRegExp(str) {
+   return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/* ================= Groups summary ================= */
+function MyGroupsSummary({ groups, status }) {
+   if (status === "loading") return null;
+
+   if (!groups?.length) {
+      return (
+         <div style={{ padding: "10px 14px", opacity: 0.85 }}>
+            Nu ai grupe (sau backend-ul nu a întors grupe).
+         </div>
+      );
+   }
+
+   return (
+      <div style={{ padding: "10px 14px" }}>
+         <div style={{ marginBottom: 8, opacity: 0.9 }}>
+            <strong>Grupele primite ({groups.length}):</strong>
+         </div>
+
+         <div style={{ display: "grid", gap: 8 }}>
+            {groups.map((g) => (
+               <div
+                  key={g.id}
+                  style={{
+                     padding: "10px 12px",
+                     borderRadius: 12,
+                     border: "1px solid rgba(255,255,255,0.08)",
+                     background: "rgba(255,255,255,0.03)",
+                  }}
+               >
+                  <div style={{ fontWeight: 700 }}>
+                     {g?.name || `Grupa #${g.id}`}
+                  </div>
+                  <div style={{ marginTop: 4, opacity: 0.9 }}>
+                     Token: <strong>{String(g?.token || "—").trim()}</strong> •
+                     Studenți: <strong>{Number(g?.studentCount ?? 0)}</strong>
+                  </div>
+               </div>
+            ))}
+         </div>
+      </div>
+   );
+}
+
+/* ================= Students list ================= */
 function CourseStudentsList({
    students,
-   myGroupStudentIds,
-   overviewById,
+   groupNameById,
    progressById,
    attemptsById,
    loadingAll,
@@ -233,34 +293,31 @@ function CourseStudentsList({
 
    const filtered = useMemo(() => {
       const q = query.trim().toLowerCase();
-
-      let base = Array.isArray(students) ? students : [];
-      if (myGroupStatus !== "ok") base = [];
-
-      if (myGroupStudentIds?.size) {
-         base = base.filter((s) => myGroupStudentIds.has(String(s?.id)));
-      }
+      const base = Array.isArray(students) ? students : [];
 
       if (!q) return base;
 
-      return base.filter((s) =>
-         `${s.firstName} ${s.lastName} ${s.email} ${s.phone || ""}`
+      return base.filter((s) => {
+         const gName = groupNameById?.[String(s?.groupId)] || "";
+         return `${s.firstName || ""} ${s.lastName || ""} ${s.email || ""} ${s.phone || ""} ${gName}`
             .toLowerCase()
-            .includes(q)
-      );
-   }, [students, query, myGroupStudentIds, myGroupStatus]);
+            .includes(q);
+      });
+   }, [students, query, groupNameById]);
 
    const highlightText = (text, q) => {
-      if (!q) return text;
-      const parts = String(text || "").split(new RegExp(`(${q})`, "gi"));
+      const qq = q.trim();
+      if (!qq) return text;
+      const rx = new RegExp(`(${escapeRegExp(qq)})`, "gi");
+      const parts = String(text || "").split(rx);
       return parts.map((part, idx) =>
-         part.toLowerCase() === q.toLowerCase() ? (
+         part.toLowerCase() === qq.toLowerCase() ? (
             <i key={idx} className="highlight">
                {part}
             </i>
          ) : (
             part
-         )
+         ),
       );
    };
 
@@ -284,21 +341,14 @@ function CourseStudentsList({
          }
       }
 
-      const ov = overviewById?.[studentId] || null;
-      const total = Number(ov?.totalPractices ?? 0);
-      const done = Number(ov?.completedPractices ?? 0);
-      if (total > 0) {
-         const ok = (done / total) * 100;
-         return { ok, bad: 0, skip: 100 - ok };
-      }
-
       return { ok: 0, bad: 0, skip: 100 };
    };
 
-   const myGroupHint =
-      myGroupStatus === "none"
-         ? "Nu ai studenți afișați până nu ești asignat la o grupă."
-         : null;
+   const showNoneHint =
+      myGroupStatus === "none" &&
+      !loadingAll &&
+      !errorAll &&
+      (students?.length ?? 0) === 0;
 
    return (
       <div className="students">
@@ -319,9 +369,7 @@ function CourseStudentsList({
                      onClick={() => setSearchOpen((v) => !v)}
                   >
                      <ReactSVG
-                        className={`groups__icon ${
-                           searchOpen ? "rotate45" : ""
-                        }`}
+                        className={`groups__icon ${searchOpen ? "rotate45" : ""}`}
                         src={searchOpen ? addIcon : searchIcon}
                      />
                   </button>
@@ -329,9 +377,9 @@ function CourseStudentsList({
             </div>
          </div>
 
-         {myGroupHint && (
+         {showNoneHint && (
             <div style={{ padding: "10px 14px", opacity: 0.85 }}>
-               {myGroupHint}
+               Nu ești asignat la nicio grupă sau nu ai studenți în grupe.
             </div>
          )}
 
@@ -359,27 +407,39 @@ function CourseStudentsList({
                      const ticketsTried = Number(att?.tickets || 0);
                      const catsTried = Number(att?.categories || 0);
 
+                     const gName =
+                        groupNameById?.[String(student?.groupId)] ||
+                        `#${student?.groupId ?? "—"}`;
+
                      return (
                         <div
                            key={student.id}
                            className="students__item"
                            onClick={() =>
                               navigate(
-                                 `/professor/student/${student.id}/statistics`
+                                 `/professor/student/${student.id}/statistics`,
                               )
                            }
                         >
                            <div className="students__info">
                               <h3>
                                  {highlightText(
-                                    `${student.firstName} ${student.lastName}`,
-                                    query
+                                    `${student.firstName || ""} ${student.lastName || ""}`.trim() ||
+                                       `#${student.id}`,
+                                    query,
                                  )}
                               </h3>
 
-                              <p>{highlightText(student.email, query)}</p>
+                              <p>
+                                 {highlightText(student.email || "–", query)}
+                              </p>
                               <p>
                                  {highlightText(student.phone || "–", query)}
+                              </p>
+
+                              <p style={{ marginTop: 6, opacity: 0.85 }}>
+                                 Grupa:{" "}
+                                 <strong>{highlightText(gName, query)}</strong>
                               </p>
 
                               <p style={{ marginTop: 8, opacity: 0.9 }}>
@@ -401,17 +461,11 @@ function CourseStudentsList({
                      );
                   })}
 
-               {!loadingAll &&
-                  !errorAll &&
-                  myGroupStatus === "ok" &&
-                  filtered.length === 0 && (
-                     <p
-                        className="groups__empty"
-                        style={{ gridColumn: "1 / -1" }}
-                     >
-                        Nu ai studenți în grupă (sau nu se potrivesc filtrului).
-                     </p>
-                  )}
+               {!loadingAll && !errorAll && filtered.length === 0 && (
+                  <p className="groups__empty" style={{ gridColumn: "1 / -1" }}>
+                     Nu există studenți (sau nu se potrivesc filtrului).
+                  </p>
+               )}
             </div>
          </div>
       </div>
@@ -424,20 +478,20 @@ function PPStudents() {
 
    const studentsState = useSelector((state) => state.students || {});
    const allUsers = Array.isArray(studentsState.list) ? studentsState.list : [];
-
    const studentsLoading = !!studentsState.loading;
    const studentsError = studentsState.error || null;
 
-   const usersRoleUSER = useMemo(() => {
-      return allUsers.filter((u) => u?.role === "USER");
+   const usersById = useMemo(() => {
+      const m = new Map();
+      for (const u of allUsers) m.set(String(u?.id), u);
+      return m;
    }, [allUsers]);
 
    const [myGroupStatus, setMyGroupStatus] = useState("idle"); // idle | loading | ok | none | error
-   const [myGroupStudentIds, setMyGroupStudentIds] = useState(new Set());
+   const [myGroups, setMyGroups] = useState([]);
+   const [apiStudents, setApiStudents] = useState([]);
 
-   const [overviewById, setOverviewById] = useState({});
    const [progressById, setProgressById] = useState({});
-
    const [attemptsById, setAttemptsById] = useState({});
    const [categoriesTotal, setCategoriesTotal] = useState(null);
 
@@ -448,22 +502,23 @@ function PPStudents() {
 
    const inFlightRef = useRef(new Set());
 
-const links = useMemo(
+   const links = useMemo(
       () => [
          { link: "/professor", text: "Acasă", icon: homeIcon },
          { link: "/professor/students", text: "Studenți", icon: studentsIcon },
          { link: "/professor/groups", text: "Grupe", icon: groupsIcon },
          { popup: "profile", text: "Profil", icon: accIcon },
       ],
-      []
+      [],
    );
-   // 1) încărcăm lista de studenți (redux)
+
+   // 1) redux (opțional - îmbogățire doar)
    useEffect(() => {
       if (!user?.id) return;
       dispatch(fetchStudents());
    }, [dispatch, user?.id]);
 
-   // 2) load categories total (o singură dată)
+   // 2) total categorii
    useEffect(() => {
       let alive = true;
 
@@ -495,7 +550,7 @@ const links = useMemo(
       };
    }, []);
 
-   // 3) verifică "grupa mea" (professor endpoints)
+   // 3) load overview + students (API)
    useEffect(() => {
       let cancelled = false;
 
@@ -517,43 +572,22 @@ const links = useMemo(
 
             if (cancelled) return;
 
-            const gid = overviewRes?.groupId ?? studentsRes?.groupId ?? null;
+            const groups = extractMyGroups(overviewRes);
+            const stList = normalizeMyGroupsStudents(studentsRes);
 
-            const stList = Array.isArray(studentsRes?.students)
-               ? studentsRes.students
-               : [];
-            setMyGroupStudentIds(new Set(stList.map((s) => String(s.id))));
+            setMyGroups(groups);
+            setApiStudents(stList);
 
-            const ovList = Array.isArray(overviewRes?.overview)
-               ? overviewRes.overview
-               : [];
-            const ovMap = {};
-            for (const row of ovList) {
-               const sid =
-                  row?.student?.id ?? row?.studentId ?? row?.userId ?? null;
-               if (sid == null) continue;
-               ovMap[String(sid)] = {
-                  totalPractices: row?.totalPractices ?? 0,
-                  completedPractices: row?.completedPractices ?? 0,
-               };
-            }
-            setOverviewById(ovMap);
-
-            setMyGroupStatus(gid ? "ok" : "none");
-         } catch (e) {
+            // ✅ IMPORTANT: OK dacă ai ORI grupe ORI studenți
+            if (groups.length === 0 && stList.length === 0)
+               setMyGroupStatus("none");
+            else setMyGroupStatus("ok");
+         } catch {
             if (cancelled) return;
 
-            const msg = String(e?.message || e);
-            const lower = msg.toLowerCase();
-
-            if (lower.includes("not assigned")) {
-               setMyGroupStatus("none");
-            } else {
-               setMyGroupStatus("error");
-            }
-
-            setMyGroupStudentIds(new Set());
-            setOverviewById({});
+            setMyGroupStatus("error");
+            setMyGroups([]);
+            setApiStudents([]);
             setProgressById({});
             setAttemptsById({});
          }
@@ -564,16 +598,16 @@ const links = useMemo(
       };
    }, [user?.id, user?.role]);
 
-   // 4) ia practice-progress + practiceHistory (pentru UNIQUE attempted)
+   // 4) fetch practice-progress per student (din apiStudents)
    useEffect(() => {
       let cancelled = false;
 
       (async () => {
          if (myGroupStatus !== "ok") return;
-         if (!myGroupStudentIds.size) return;
+         if (!apiStudents.length) return;
 
-         const idsToFetch = Array.from(myGroupStudentIds)
-            .map((x) => Number(x))
+         const idsToFetch = apiStudents
+            .map((s) => Number(s?.id))
             .filter((id) => Number.isInteger(id) && id > 0)
             .filter((id) => {
                const key = String(id);
@@ -603,9 +637,8 @@ const links = useMemo(
                   ? res.practiceHistory
                   : [];
 
-               if (stats) {
+               if (stats)
                   setProgressById((prev) => ({ ...prev, [key]: stats }));
-               }
 
                const att = computeUniqueAttemptsFromHistory(hist);
                setAttemptsById((prev) => ({ ...prev, [key]: att }));
@@ -620,15 +653,38 @@ const links = useMemo(
       return () => {
          cancelled = true;
       };
-   }, [myGroupStatus, myGroupStudentIds]);
+   }, [myGroupStatus, apiStudents]);
 
-   const myStudentsOnly = useMemo(() => {
-      if (myGroupStatus !== "ok") return [];
-      if (!myGroupStudentIds?.size) return [];
-      return usersRoleUSER.filter((u) => myGroupStudentIds.has(String(u?.id)));
-   }, [usersRoleUSER, myGroupStudentIds, myGroupStatus]);
+   // groupId -> name
+   const groupNameById = useMemo(() => {
+      const m = {};
+      for (const g of myGroups) m[String(g.id)] = g?.name || `#${g.id}`;
+      return m;
+   }, [myGroups]);
 
-   const combinedStudentsError = studentsError ? String(studentsError) : null;
+   // ✅ lista afișată: API students (sigur), îmbogățit cu redux dacă există
+   const mergedStudents = useMemo(() => {
+      if (myGroupStatus !== "ok" && myGroupStatus !== "none") return [];
+
+      return apiStudents
+         .map((s) => {
+            const u = usersById.get(String(s?.id));
+            return {
+               ...s,
+               ...(u || {}),
+               // păstrează groupId din API (important!)
+               groupId: s?.groupId ?? u?.groupId,
+            };
+         })
+         .filter((x) => x && x.id != null);
+   }, [apiStudents, usersById, myGroupStatus]);
+
+   const combinedError =
+      myGroupStatus === "error"
+         ? "Nu am putut încărca studenții/grupele profesorului."
+         : studentsError
+           ? String(studentsError)
+           : null;
 
    return (
       <>
@@ -638,14 +694,17 @@ const links = useMemo(
 
          <main className="main">
             <section className="professor single">
+               {/* ✅ arată toate grupele primite */}
+               {/*<MyGroupsSummary groups={myGroups} status={myGroupStatus} />*/}
+
+               {/* ✅ arată toți studenții primiti */}
                <CourseStudentsList
-                  students={myStudentsOnly}
-                  myGroupStudentIds={myGroupStudentIds}
-                  overviewById={overviewById}
+                  students={mergedStudents}
+                  groupNameById={groupNameById}
                   progressById={progressById}
                   attemptsById={attemptsById}
                   loadingAll={studentsLoading || myGroupStatus === "loading"}
-                  errorAll={combinedStudentsError}
+                  errorAll={combinedError}
                   myGroupStatus={myGroupStatus}
                   categoriesTotal={categoriesTotal}
                />
