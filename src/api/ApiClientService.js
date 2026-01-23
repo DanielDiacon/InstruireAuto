@@ -14,7 +14,9 @@ const sendRequest = async (
    data = null,
    contentType = null,
 ) => {
-   const apiUrl = import.meta.env.API_URL;
+   const apiUrl = process.env.REACT_APP_API_URL;
+ 
+
    const defaultContentType = "application/json; charset=UTF-8";
    const token = getCookie("access_token");
    // după const token = getCookie("access_token");
@@ -61,9 +63,10 @@ const sendRequest = async (
    }
 
    try {
-      // safe text
-      const base = String(apiUrl).replace(/\/+$/, "");
-      const path = String(endpoint).startsWith("/") ? endpoint : `/${endpoint}`;
+      const base = String(apiUrl || "").replace(/\/+$/, "");
+      const path = String(endpoint || "").startsWith("/")
+         ? endpoint
+         : `/${endpoint}`;
       const url = `${base}${path}`;
 
       // DEBUG prietenos
