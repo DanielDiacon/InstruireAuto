@@ -12,20 +12,21 @@ const sendRequest = async (
    method,
    endpoint,
    data = null,
-   contentType = null
+   contentType = null,
 ) => {
+   const apiUrl = import.meta.env.API_URL;
    const defaultContentType = "application/json; charset=UTF-8";
    const token = getCookie("access_token");
    // după const token = getCookie("access_token");
    if (!token) {
       console.warn(
-         "[AUTH] Nu există access_token în cookies → Authorization nu va fi trimis."
+         "[AUTH] Nu există access_token în cookies → Authorization nu va fi trimis.",
       );
    } else {
       console.debug(
          "[AUTH] Token prezent. Primele 12 caractere:",
          token.slice(0, 12),
-         "..."
+         "...",
       );
    }
 
@@ -60,7 +61,10 @@ const sendRequest = async (
    }
 
    try {
-      const url = "https://instruireauto.site/api" + endpoint;
+      // safe text
+      const base = String(apiUrl).replace(/\/+$/, "");
+      const path = String(endpoint).startsWith("/") ? endpoint : `/${endpoint}`;
+      const url = `${base}${path}`;
 
       // DEBUG prietenos
       try {

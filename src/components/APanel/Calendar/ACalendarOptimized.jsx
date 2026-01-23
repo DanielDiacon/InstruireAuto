@@ -70,7 +70,7 @@ const toFloatingDate = (val) => {
    const m =
       typeof val === "string" &&
       val.match(
-         /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/
+         /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/,
       );
    if (m) {
       const [, Y, Mo, D, h = "0", mi = "0", s = "0"] = m;
@@ -102,7 +102,7 @@ function normalizeUsersList(users) {
 
 function isAdminOrManager(u) {
    const role = String(
-      u?.role ?? u?.userRole ?? u?.type ?? u?.profile?.role ?? ""
+      u?.role ?? u?.userRole ?? u?.type ?? u?.profile?.role ?? "",
    ).toUpperCase();
    return role === "ADMIN" || role === "MANAGER";
 }
@@ -183,7 +183,7 @@ function SimpleDropdown({
          onChange?.(val);
          setOpen(false);
       },
-      [onChange]
+      [onChange],
    );
 
    useEffect(() => {
@@ -316,11 +316,11 @@ export default function ACalendarOptimized({
                }
             });
       },
-      [dispatch]
+      [dispatch],
    );
 
    const [currentDate, setCurrentDate] = useState(() =>
-      date ? new Date(date) : new Date()
+      date ? new Date(date) : new Date(),
    );
 
    useEffect(() => {
@@ -399,9 +399,9 @@ export default function ACalendarOptimized({
    const isInteractiveTarget = useCallback(
       (el) =>
          !!el.closest?.(
-            "button, input, textarea, select, a, [data-dv-interactive='1']"
+            "button, input, textarea, select, a, [data-dv-interactive='1']",
          ),
-      []
+      [],
    );
 
    const [rowHeight, setRowHeight] = useState(0);
@@ -452,7 +452,7 @@ export default function ACalendarOptimized({
          setZoom(z);
          return z;
       },
-      [Z_MIN, Z_MAX]
+      [Z_MIN, Z_MAX],
    );
 
    useEffect(() => {
@@ -465,7 +465,7 @@ export default function ACalendarOptimized({
             value: String(p),
             label: `${p}%`,
          })),
-      []
+      [],
    );
 
    const currentZoomValue = useMemo(() => {
@@ -488,7 +488,7 @@ export default function ACalendarOptimized({
          const target = (p / 100) * Z_BASE;
          setZoomClamped(target);
       },
-      [setZoomClamped]
+      [setZoomClamped],
    );
 
    const suspendFlagsRef = useRef({ isInteracting: false });
@@ -511,12 +511,12 @@ export default function ACalendarOptimized({
    }, []);
 
    const [presenceByReservationUsers, setPresenceByReservationUsers] = useState(
-      () => new Map()
+      () => new Map(),
    );
    const [presenceVer, setPresenceVer] = useState(0);
 
    const [createDraftBySlotUsers, setCreateDraftBySlotUsers] = useState(
-      () => new Map()
+      () => new Map(),
    );
    const [createDraftVer, setCreateDraftVer] = useState(0);
 
@@ -735,8 +735,8 @@ export default function ACalendarOptimized({
                   entry0?.users instanceof Set
                      ? entry0.users
                      : entry0 instanceof Set
-                     ? entry0
-                     : new Set();
+                       ? entry0
+                       : new Set();
                const users1 = new Set(users0);
                users1.delete(uid);
 
@@ -756,8 +756,8 @@ export default function ACalendarOptimized({
                   entry0?.users instanceof Set
                      ? entry0.users
                      : entry0 instanceof Set
-                     ? entry0
-                     : new Set();
+                       ? entry0
+                       : new Set();
                const users1 = new Set(users0);
                users1.add(uid);
 
@@ -799,7 +799,7 @@ export default function ACalendarOptimized({
             type: isClear ? "create-clear" : "create-start",
          });
       },
-      [triggerRedraw]
+      [triggerRedraw],
    );
 
    /* ===================== PRESENCE (join/left) ===================== */
@@ -954,7 +954,7 @@ export default function ACalendarOptimized({
 
          socketApi?.joinReservation?.(rid);
       },
-      [socketApi, applyPresenceDelta]
+      [socketApi, applyPresenceDelta],
    );
 
    const leaveReservationSafe = useCallback(
@@ -969,7 +969,7 @@ export default function ACalendarOptimized({
 
          socketApi?.leaveReservation?.(rid);
       },
-      [socketApi, applyPresenceDelta]
+      [socketApi, applyPresenceDelta],
    );
 
    const startCreateDraftSafe = useCallback(
@@ -1000,7 +1000,7 @@ export default function ACalendarOptimized({
                },
                startedBy: { id: myUserIdRef.current },
             },
-            { forceClear: false }
+            { forceClear: false },
          );
 
          socketApi?.emitReservationCreateStarted?.({
@@ -1020,7 +1020,7 @@ export default function ACalendarOptimized({
             startedBy: { id: myUserIdRef.current },
          });
       },
-      [socketApi, applyCreateDraftPresence]
+      [socketApi, applyCreateDraftPresence],
    );
 
    const leaveCreateDraftSafe = useCallback(
@@ -1039,7 +1039,7 @@ export default function ACalendarOptimized({
                action: "clear",
                startedBy: { id: myUserIdRef.current },
             },
-            { forceClear: true }
+            { forceClear: true },
          );
 
          const parsed = parseDraftSlotKey(k);
@@ -1058,7 +1058,7 @@ export default function ACalendarOptimized({
             startedBy: { id: myUserIdRef.current },
          });
       },
-      [socketApi, applyCreateDraftPresence]
+      [socketApi, applyCreateDraftPresence],
    );
 
    const joinCreateDraftSafe = useCallback(
@@ -1073,7 +1073,7 @@ export default function ACalendarOptimized({
 
          startCreateDraftSafe(iid, iso, extra);
       },
-      [startCreateDraftSafe]
+      [startCreateDraftSafe],
    );
 
    useEffect(() => {
@@ -1117,7 +1117,7 @@ export default function ACalendarOptimized({
                   fetchReservationsForMonth({
                      date: currentDate,
                      extraFilters: extraFilters || {},
-                  })
+                  }),
                ),
                dispatch(fetchCars()),
                dispatch(fetchUsers()),
@@ -1139,7 +1139,7 @@ export default function ACalendarOptimized({
 
    const { instructorMeta, studentDict, instructorsGroupDict } = useSelector(
       selectCalendarDerivedData,
-      shallowEqual
+      shallowEqual,
    );
 
    const usersList = useMemo(() => normalizeUsersList(users), [users]);
@@ -1246,7 +1246,7 @@ export default function ACalendarOptimized({
          (reservationsLive?.length ?? 0) > 0 ||
          (students?.length ?? 0) > 0 ||
          (instructorsGroups?.length ?? 0) > 0,
-      [reservationsLive?.length, students?.length, instructorsGroups?.length]
+      [reservationsLive?.length, students?.length, instructorsGroups?.length],
    );
 
    const isDummyMode = !dataReady;
@@ -1265,12 +1265,12 @@ export default function ACalendarOptimized({
          "18:00",
          "19:30",
       ],
-      []
+      [],
    );
 
    const HIDDEN_INTERVALS = useMemo(
       () => [{ start: "13:00", end: "13:30" }],
-      []
+      [],
    );
 
    const mkStandardSlotsForDay = useCallback(
@@ -1305,11 +1305,11 @@ export default function ACalendarOptimized({
                   start >= dayStartLocal &&
                   end <= dayEndLocal &&
                   !hiddenLocal.some((hi) =>
-                     overlaps(start, end, hi.start, hi.end)
-                  )
+                     overlaps(start, end, hi.start, hi.end),
+                  ),
             );
       },
-      [timeMarks, HIDDEN_INTERVALS]
+      [timeMarks, HIDDEN_INTERVALS],
    );
 
    const allowedInstBySector = useMemo(() => {
@@ -1341,7 +1341,7 @@ export default function ACalendarOptimized({
          if (!instructorId) return null;
          return instructorGroupByInstId.get(String(instructorId)) || null;
       },
-      [instructorGroupByInstId]
+      [instructorGroupByInstId],
    );
 
    const studentDictRef = useRef(null);
@@ -1406,7 +1406,7 @@ export default function ACalendarOptimized({
    function localKeyFromTs(dateLike, timeZone = MOLDOVA_TZ_ID) {
       return `${ymdStrInTZ(dateLike, timeZone)}|${hhmmInTZ(
          dateLike,
-         timeZone
+         timeZone,
       )}`;
    }
 
@@ -1460,7 +1460,7 @@ export default function ACalendarOptimized({
                   r.startedAt ??
                   r.start_at ??
                   r.startDate ??
-                  r.start_date
+                  r.start_date,
             );
          if (!start || isNaN(start)) return null;
 
@@ -1496,8 +1496,8 @@ export default function ACalendarOptimized({
             ? gearboxNorm.includes("auto")
                ? "A"
                : gearboxNorm.includes("man")
-               ? "M"
-               : r.gearbox
+                 ? "M"
+                 : r.gearbox
             : null;
 
          const instPlateNorm = normPlate(instMetaLocal.plateRaw || "");
@@ -1519,7 +1519,7 @@ export default function ACalendarOptimized({
          const searchNorm = norm(
             [fullName, groupName, instMetaLocal?.name, allNotesRaw]
                .filter(Boolean)
-               .join(" ")
+               .join(" "),
          );
          const searchPhoneDigits = digitsOnly(
             phone ??
@@ -1527,7 +1527,7 @@ export default function ACalendarOptimized({
                r.phoneNumber ??
                r.phone ??
                r.telefon ??
-               ""
+               "",
          );
 
          return {
@@ -1556,7 +1556,7 @@ export default function ACalendarOptimized({
             searchPhoneDigits,
          };
       },
-      [instructorsGroupDict, instructorMeta]
+      [instructorsGroupDict, instructorMeta],
    );
 
    const eventsByDay = useMemo(() => {
@@ -1602,7 +1602,7 @@ export default function ACalendarOptimized({
 
       const meta = instructorMeta?.get?.(String(instId || "")) || {};
       const fromMeta = canonSector(
-         meta.sectorNorm || meta.sector || meta.location
+         meta.sectorNorm || meta.sector || meta.location,
       );
       if (fromMeta) return fromMeta;
 
@@ -1625,12 +1625,12 @@ export default function ACalendarOptimized({
             ev.groupId && ev.groupId !== "__ungrouped"
                ? String(ev.groupId)
                : instId
-               ? findGroupForInstructor(instId)
-               : null;
+                 ? findGroupForInstructor(instId)
+                 : null;
 
          const gObj =
             (instructorsGroups || []).find(
-               (g) => String(g.id) === String(grpId)
+               (g) => String(g.id) === String(grpId),
             ) || null;
 
          const sectorVal = resolveSectorForCreate({
@@ -1653,11 +1653,11 @@ export default function ACalendarOptimized({
          // ✅ trimitem explicit ziua/ora locală (ca popup să nu greșească ziua)
          const dLocal = new Date(ev.start);
          const initialDate = `${dLocal.getFullYear()}-${String(
-            dLocal.getMonth() + 1
+            dLocal.getMonth() + 1,
          ).padStart(2, "0")}-${String(dLocal.getDate()).padStart(2, "0")}`;
          const initialTime = `${String(dLocal.getHours()).padStart(
             2,
-            "0"
+            "0",
          )}:${String(dLocal.getMinutes()).padStart(2, "0")}`;
 
          // ✅ pornește draft presence imediat (instant vizual)
@@ -1694,7 +1694,7 @@ export default function ACalendarOptimized({
          instructorsGroups,
          findGroupForInstructor,
          startCreateDraftSafe,
-      ]
+      ],
    );
 
    /* ===================== BUS LISTENER (with blackouts-changed) ===================== */
@@ -1776,7 +1776,7 @@ export default function ACalendarOptimized({
 
    const monthRange = useMemo(
       () => getMonthRangeYMD(currentDate),
-      [currentMonthValue]
+      [currentMonthValue],
    );
 
    useEffect(() => {
@@ -1841,7 +1841,7 @@ export default function ACalendarOptimized({
             blackoutInFlightRef.current.delete(key);
          }
       },
-      [allowedKeysSet, monthRange]
+      [allowedKeysSet, monthRange],
    );
 
    // ✅ ținem ref actual pentru bus listener
@@ -1963,7 +1963,7 @@ export default function ACalendarOptimized({
          standardSlotsByDay,
          blackoutVer,
          blackoutKeyMapSnapshot,
-      ]
+      ],
    );
 
    const monthOptions = useMemo(() => {
@@ -2048,7 +2048,7 @@ export default function ACalendarOptimized({
       setVisibleDays((prev) => {
          const next = new Set(prev);
          const targetIdx = loadedDays.findIndex(
-            (d) => startOfDayTs(d) === targetDayTs
+            (d) => startOfDayTs(d) === targetDayTs,
          );
 
          if (targetIdx === -1) next.add(targetDayTs);
@@ -2085,7 +2085,7 @@ export default function ACalendarOptimized({
 
       if (typeof window !== "undefined") {
          window.requestAnimationFrame(() =>
-            window.requestAnimationFrame(doScrollX)
+            window.requestAnimationFrame(doScrollX),
          );
       }
    }, [
@@ -2111,7 +2111,7 @@ export default function ACalendarOptimized({
                fetchReservationsForMonth({
                   date: newDate,
                   extraFilters: extraFilters || {},
-               })
+               }),
             );
          } catch (e) {
             console.error("[DayView] fetchReservationsForMonth error", e);
@@ -2125,7 +2125,7 @@ export default function ACalendarOptimized({
          setSearchState({ query: "", hits: [], index: 0 });
          setVisibleDays(new Set());
       },
-      [monthOptions, extraFilters, onMonthChange, dispatch, disarmAutoScrollY]
+      [monthOptions, extraFilters, onMonthChange, dispatch, disarmAutoScrollY],
    );
 
    const sectorOptions = useMemo(
@@ -2135,7 +2135,7 @@ export default function ACalendarOptimized({
          { value: "Ciocana", label: "Ciocana" },
          { value: "Buiucani", label: "Buiucani" },
       ],
-      []
+      [],
    );
 
    const baseMetrics = useMemo(() => {
@@ -2155,7 +2155,7 @@ export default function ACalendarOptimized({
          "--font-scale": zoom,
          "--zoom": zoom,
       }),
-      [zoom]
+      [zoom],
    );
 
    const canvasInstructors = useMemo(() => {
@@ -2170,27 +2170,22 @@ export default function ACalendarOptimized({
          return true;
       });
 
+      // ✅ Sortare strict după numele din INSTRUCTOR (nu din user/meta)
       base.sort((a, b) => {
-         const idA = String(a.id || "");
-         const idB = String(b.id || "");
-         const nameA =
-            instructorMeta.get(idA)?.name ||
-            `${a.firstName ?? ""} ${a.lastName ?? ""}`.trim();
-         const nameB =
-            instructorMeta.get(idB)?.name ||
-            `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim();
+         const nameA = `${a.firstName ?? ""} ${a.lastName ?? ""}`.trim();
+         const nameB = `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim();
          return (nameA || "").localeCompare(nameB || "", "ro");
       });
 
       const mapped = base.map((i) => {
          const id = String(i.id || "");
-         const meta = instructorMeta.get(id);
+         const meta = instructorMeta.get(id); // păstrăm meta doar pt sector/gearbox/plate etc.
+
+         const full = `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim();
+
          return {
             id,
-            name:
-               meta?.name ||
-               `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim() ||
-               "Necunoscut",
+            name: full || "Necunoscut",
             sectorSlug: meta?.sectorNorm || null,
          };
       });
@@ -2219,7 +2214,7 @@ export default function ACalendarOptimized({
          setSearchInput(val);
          if (!val.trim()) clearSearch();
       },
-      [clearSearch]
+      [clearSearch],
    );
 
    const runSearch = useCallback(() => {
@@ -2329,7 +2324,7 @@ export default function ACalendarOptimized({
 
          const targetTs = hit.dayTs;
          const targetIdx = loadedDays.findIndex(
-            (d) => startOfDayTs(d) === targetTs
+            (d) => startOfDayTs(d) === targetTs,
          );
 
          if (targetIdx === -1) next.add(targetTs);
@@ -2684,8 +2679,8 @@ const ACalendarTrack = memo(function ACalendarTrack({
                if (allowedInstBySector && evs !== EMPTY_EVENTS) {
                   evs = evs.filter((ev) =>
                      allowedInstBySector.has(
-                        String(ev.instructorId ?? "__unknown")
-                     )
+                        String(ev.instructorId ?? "__unknown"),
+                     ),
                   );
                }
 
@@ -2743,7 +2738,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                               layout={{
                                  colWidth: baseMetrics.colw,
                                  colGap: 12 * zoom,
-                                 headerHeight: 40 * zoom,
+                                 headerHeight: 100 * zoom,
                                  slotHeight: 125 * zoom,
                                  colsPerRow: maxColsPerGroup,
                                  rowGap: 24 * zoom,
@@ -2755,8 +2750,8 @@ const ACalendarTrack = memo(function ACalendarTrack({
                                  DEBUG_CANVAS_EMPTY
                                     ? null
                                     : isDummyMode
-                                    ? null
-                                    : blackoutKeyMap
+                                      ? null
+                                      : blackoutKeyMap
                               }
                               blackoutVer={blackoutVer}
                               activeEventId={activeEventId}

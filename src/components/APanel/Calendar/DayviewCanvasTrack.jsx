@@ -55,7 +55,6 @@ import {
 } from "./globals";
 
 import {
-   digits,
    norm,
    formatHHMM,
    getNoteForDate,
@@ -154,7 +153,7 @@ function buildCanvasEventsSignature(events) {
       const endMs = _ms(ev.end ?? raw.endTime ?? raw.end) || startMs;
 
       const instId = String(
-         raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? ""
+         raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? "",
       );
 
       const userId = String(
@@ -163,7 +162,7 @@ function buildCanvasEventsSignature(events) {
             ev.userId ??
             ev.studentId ??
             raw.user?.id ??
-            ""
+            "",
       );
 
       const sector = String(raw.sector ?? ev.sector ?? "");
@@ -182,7 +181,10 @@ function buildCanvasEventsSignature(events) {
       // ⚠️ acestea schimbă text/inscripții desenate
       const phone = String(getStudentPhoneFromEv(ev) || "");
       const noteFromEvent = String(
-         raw.privateMessage ?? ev.privateMessage ?? ev.eventPrivateMessage ?? ""
+         raw.privateMessage ??
+            ev.privateMessage ??
+            ev.eventPrivateMessage ??
+            "",
       );
       const noteFromProfile = String(getStudentPrivateMessageFromEv(ev) || "");
       const notesHash = _hashStr(`${noteFromEvent}|${noteFromProfile}`);
@@ -203,7 +205,7 @@ function buildCanvasEventsSignature(events) {
             raw.version ??
             raw.rev ??
             raw._rev ??
-            ""
+            "",
       );
 
       parts.push(
@@ -225,7 +227,7 @@ function buildCanvasEventsSignature(events) {
             fromLateral,
             localSlotKey,
             ver,
-         ].join("|")
+         ].join("|"),
       );
    }
 
@@ -573,13 +575,13 @@ function normalizeRangeReservationsFromInstructorHistory(
    maps,
    fromMs,
    toMs,
-   fallbackInstructorId
+   fallbackInstructorId,
 ) {
    const list = Array.isArray(raw)
       ? raw
       : Array.isArray(raw?.items)
-      ? raw.items
-      : [];
+        ? raw.items
+        : [];
 
    const byId = new Map();
 
@@ -587,7 +589,7 @@ function normalizeRangeReservationsFromInstructorHistory(
       const snap = extractReservationSnapshotFromAny(
          it,
          maps,
-         fallbackInstructorId
+         fallbackInstructorId,
       );
       if (!snap) continue;
 
@@ -624,40 +626,35 @@ const CanvasInstructorHeader = memo(
             instructorsFull.find((x) => String(x.id) === String(inst?.id)) ||
             inst ||
             null,
-         [instructorsFull, inst]
+         [instructorsFull, inst],
       );
 
       const instructorUser = useMemo(() => {
          if (!instrFull) return null;
-         const directUid = instrFull.userId ?? instrFull.user_id;
+
+         const directUid =
+            instrFull.userId ?? instrFull.user_id ?? instrFull.user?.id ?? null;
+
          const roleInstr = (u) =>
             String(u.role ?? "").toUpperCase() === "INSTRUCTOR";
 
          if (directUid != null) {
             const byId = users.find(
-               (u) => String(u.id) === String(directUid) && roleInstr(u)
+               (u) => String(u.id) === String(directUid) && roleInstr(u),
             );
             if (byId) return byId;
          }
 
-         const phoneKey = digits(
-            instrFull.phone ?? instrFull.phoneNumber ?? ""
-         );
-         if (phoneKey) {
-            const byPhone = users.find(
-               (u) => roleInstr(u) && digits(u.phone ?? "") === phoneKey
-            );
-            if (byPhone) return byPhone;
-         }
-
+         // fallback doar după nume (fără telefon)
          const nameKey = norm(
-            `${instrFull.firstName ?? ""} ${instrFull.lastName ?? ""}`
+            `${instrFull.firstName ?? ""} ${instrFull.lastName ?? ""}`,
          );
+
          return (
             users.find(
                (u) =>
                   roleInstr(u) &&
-                  norm(`${u.firstName ?? ""} ${u.lastName ?? ""}`) === nameKey
+                  norm(`${u.firstName ?? ""} ${u.lastName ?? ""}`) === nameKey,
             ) || null
          );
       }, [instrFull, users]);
@@ -669,12 +666,17 @@ const CanvasInstructorHeader = memo(
       }, [cars, inst]);
 
       const displayName = useMemo(() => {
-         if (!inst && !instrFull) return "–";
+         if (!instrFull && !inst) return "–";
+
+         // ✅ prioritate: INSTRUCTOR first/last
+         const v =
+            `${instrFull?.firstName ?? ""} ${instrFull?.lastName ?? ""}`.trim();
+         if (v) return v;
+
+         // fallback la inst.name (care deja vine din instructors după fix-ul de mai sus)
          if (inst?.name && inst.name.trim()) return inst.name.trim();
-         const v = `${instrFull?.firstName ?? ""} ${
-            instrFull?.lastName ?? ""
-         }`.trim();
-         return v || "–";
+
+         return "–";
       }, [inst, instrFull]);
 
       const displayPlate = useMemo(() => {
@@ -682,15 +684,21 @@ const CanvasInstructorHeader = memo(
          return (carForInst.plateNumber ?? "").toString().trim();
       }, [carForInst]);
 
-      const displayInstPhone = useMemo(() => {
-         return (instructorUser?.phone ?? "").toString().trim();
-      }, [instructorUser]);
-
       const privateMsg = (instructorUser?.privateMessage ?? "").toString();
       const todaysText = useMemo(
          () => getNoteForDate(privateMsg, dayDate),
-         [privateMsg, dayDate]
+         [privateMsg, dayDate],
       );
+      const metaText = useMemo(() => {
+         const plate = (displayPlate || "").trim();
+         const subst = (todaysText || "").trim();
+
+         if (plate && subst) return `${plate} • ${subst}`;
+         if (plate) return plate;
+         if (subst) return subst;
+
+         return "—";
+      }, [displayPlate, todaysText]);
 
       const [isEditing, setIsEditing] = useState(false);
       const [inputText, setInputText] = useState("");
@@ -701,10 +709,10 @@ const CanvasInstructorHeader = memo(
          isPad && inst?.name && inst.name.trim()
             ? inst.name.trim()
             : isPad
-            ? String(inst?.id || "") === "__pad_1"
-               ? "Anulari"
-               : "Asteptari"
-            : null;
+              ? String(inst?.id || "") === "__pad_1"
+                 ? "Anulari"
+                 : "Asteptari"
+              : null;
 
       const openEditor = useCallback(() => {
          if (isPad) return;
@@ -730,7 +738,7 @@ const CanvasInstructorHeader = memo(
                updateUser({
                   id: String(instructorUser.id),
                   data: { privateMessage: nextPM },
-               })
+               }),
             );
          } finally {
             setIsEditing(false);
@@ -813,6 +821,7 @@ const CanvasInstructorHeader = memo(
                openEditor();
             }}
          >
+            {/* RÂND 1: nume instructor */}
             <div
                className="dv-inst-name"
                style={{
@@ -822,33 +831,36 @@ const CanvasInstructorHeader = memo(
                }}
             >
                {displayName || "\u00A0"}
-               {!isEditing && todaysText && (
-                  <span className="dv-inst-notes">
-                     {" / "}
-                     {todaysText}
-                  </span>
-               )}
             </div>
 
-            {!isEditing && (displayPlate || displayInstPhone) && (
+            {/* Editare: input pentru înlocuitor/notă (stă pe rândul 2) */}
+            {/* META (plăcuță + înlocuitor) ca paragraf 2 rânduri max */}
+            {!isEditing ? (
                <div
-                  className="dv-inst-plate"
+                  className="dv-inst-meta"
                   style={{
                      fontSize: `${plateFontSize}px`,
                      lineHeight: 1.2,
-                  }}
-               >
-                  {displayPlate}
-                  {displayInstPhone ? (
-                     <>
-                        {" • "}
-                        {displayInstPhone}
-                     </>
-                  ) : null}
-               </div>
-            )}
+                     opacity: metaText === "—" ? 0.55 : 0.9,
+                     width: "100%",
 
-            {isEditing && (
+                     // ✅ păstrează spațiul (2 rânduri)
+                     minHeight: `${plateFontSize * 1.2 * 2}px`,
+
+                     // ✅ 2 rânduri max cu "..."
+                     overflow: "hidden",
+                     display: "-webkit-box",
+                     WebkitBoxOrient: "vertical",
+                     WebkitLineClamp: 2,
+
+                     // fallback/ajutor pentru cuvinte lungi
+                     wordBreak: "break-word",
+                  }}
+                  title={metaText === "—" ? "" : metaText}
+               >
+                  {metaText}
+               </div>
+            ) : (
                <input
                   ref={inputRef}
                   className="dv-subst-input"
@@ -890,7 +902,7 @@ const CanvasInstructorHeader = memo(
          prev.users === next.users &&
          prev.zoom === next.zoom
       );
-   }
+   },
 );
 
 /* ================== COMPONENTA REACT ================== */
@@ -937,15 +949,15 @@ export default function DayviewCanvasTrack({
       !preGrid || preGrid.enabled === false
          ? 0
          : typeof preGrid.columns === "number"
-         ? preGrid.columns
-         : 3;
+           ? preGrid.columns
+           : 3;
 
    const preGridRows =
       !preGrid || preGrid.enabled === false
          ? 0
          : typeof preGrid.rows === "number"
-         ? preGrid.rows
-         : 3;
+           ? preGrid.rows
+           : 3;
 
    const hasPreGrid = preGridCols > 0 && preGridRows > 0;
 
@@ -953,7 +965,7 @@ export default function DayviewCanvasTrack({
    const [refreshTick, setRefreshTick] = useState(0);
 
    const [selectedEventId, setSelectedEventId] = useState(
-      getSelectedEvent()?.id ?? null
+      getSelectedEvent()?.id ?? null,
    );
 
    const [selectedSlot, setSelectedSlot] = useState(() => {
@@ -1138,7 +1150,7 @@ export default function DayviewCanvasTrack({
             console.warn("onReservationJoin error:", e);
          }
       },
-      [onReservationJoin]
+      [onReservationJoin],
    );
 
    const openReservationPopup = useCallback(
@@ -1152,7 +1164,7 @@ export default function DayviewCanvasTrack({
 
          openPopup("reservationEdit", { reservationId });
       },
-      [joinReservationSafe]
+      [joinReservationSafe],
    );
 
    const openStudentPopup = useCallback(
@@ -1208,7 +1220,7 @@ export default function DayviewCanvasTrack({
             openReservationPopup(ev);
          }
       },
-      [openReservationPopup]
+      [openReservationPopup],
    );
 
    /* ================== HISTORY + RANGE PANEL (COMUN) ================== */
@@ -1229,7 +1241,7 @@ export default function DayviewCanvasTrack({
 
    const mapsForHistory = useMemo(
       () => buildNameMaps({ users, instructorsFull }),
-      [users, instructorsFull]
+      [users, instructorsFull],
    );
 
    function initialsFromName(full) {
@@ -1368,7 +1380,7 @@ export default function DayviewCanvasTrack({
       const fromISO = from.toISOString();
       const label = `${fmtHistoryHeaderRO(
          fromISO,
-         MOLDOVA_TZ
+         MOLDOVA_TZ,
       )} – ${fmtTimeShortRO(to, MOLDOVA_TZ)}`;
 
       let alive = true;
@@ -1380,7 +1392,7 @@ export default function DayviewCanvasTrack({
       (async () => {
          try {
             const data = await getInstructorReservationHistory(
-               String(instructorId)
+               String(instructorId),
             );
 
             const normalized = normalizeRangeReservationsFromInstructorHistory(
@@ -1388,7 +1400,7 @@ export default function DayviewCanvasTrack({
                mapsForHistory,
                from.getTime(),
                to.getTime(),
-               String(instructorId)
+               String(instructorId),
             );
 
             if (!alive) return;
@@ -1397,7 +1409,7 @@ export default function DayviewCanvasTrack({
             if (!alive) return;
             setRangeError(
                e?.message ||
-                  "Nu am putut încărca istoricul instructorului pentru acest interval."
+                  "Nu am putut încărca istoricul instructorului pentru acest interval.",
             );
             setRangeItems([]);
          } finally {
@@ -1485,14 +1497,14 @@ export default function DayviewCanvasTrack({
 
             if (anyErr) {
                setRangeHistError(
-                  "Unele istorice nu au putut fi încărcate (dar restul sunt afișate)."
+                  "Unele istorice nu au putut fi încărcate (dar restul sunt afișate).",
                );
             }
          } catch (e) {
             if (!alive) return;
             setRangeHistError(
                e?.message ||
-                  "Nu am putut încărca istoricul rezervărilor din acest interval."
+                  "Nu am putut încărca istoricul rezervărilor din acest interval.",
             );
             setRangeHistoryById({});
          } finally {
@@ -1528,10 +1540,10 @@ export default function DayviewCanvasTrack({
          const list = Array.isArray(histPayload)
             ? histPayload
             : Array.isArray(histPayload?.items)
-            ? histPayload.items
-            : Array.isArray(histPayload?.history)
-            ? histPayload.history
-            : [];
+              ? histPayload.items
+              : Array.isArray(histPayload?.history)
+                ? histPayload.history
+                : [];
 
          if (!list.length) continue;
 
@@ -1559,8 +1571,8 @@ export default function DayviewCanvasTrack({
                action === "CREATE" || action === "CREATED"
                   ? ["Rezervarea a fost creată."]
                   : changes.length
-                  ? changesToLines(changes)
-                  : ["Modificare înregistrată (fără detalii)."];
+                    ? changesToLines(changes)
+                    : ["Modificare înregistrată (fără detalii)."];
 
             const initial = (who || "?").trim().slice(0, 1).toUpperCase();
 
@@ -1591,7 +1603,7 @@ export default function DayviewCanvasTrack({
 
    useEffect(() => {
       setHistoryIdx((i) =>
-         timelineCount ? Math.min(i, timelineCount - 1) : 0
+         timelineCount ? Math.min(i, timelineCount - 1) : 0,
       );
    }, [timelineCount]);
 
@@ -1668,7 +1680,7 @@ export default function DayviewCanvasTrack({
       return () =>
          window.removeEventListener(
             "dayview-selection-change",
-            handleSelChange
+            handleSelChange,
          );
    }, []);
 
@@ -1688,7 +1700,7 @@ export default function DayviewCanvasTrack({
       return () =>
          window.removeEventListener(
             "dayview-hidden-change",
-            handleHiddenChange
+            handleHiddenChange,
          );
    }, []);
 
@@ -1863,7 +1875,7 @@ export default function DayviewCanvasTrack({
                console.error(
                   "fetchWaitNotesRange error pentru ziua:",
                   fromStr,
-                  err
+                  err,
                );
                setWaitNotes({});
             });
@@ -1956,7 +1968,7 @@ export default function DayviewCanvasTrack({
       // ✅ dacă există filtru de sector, ținem doar sectorul ăla (nu mai combinăm cu altele)
       const realFiltered = activeSectorFilter
          ? realDayFiltered.filter(
-              (inst) => getInstructorSector(inst) === activeSectorFilter
+              (inst) => getInstructorSector(inst) === activeSectorFilter,
            )
          : realDayFiltered;
 
@@ -2178,7 +2190,7 @@ export default function DayviewCanvasTrack({
    // ✅ NEW: semnătură layout instructori (forțează redraw când se schimbă sector/ordinea)
    const instructorsLayoutSig = useMemo(
       () => buildInstructorsLayoutSignature(effectiveInstructors),
-      [effectiveInstructors]
+      [effectiveInstructors],
    );
 
    const headerMetrics = useMemo(() => {
@@ -2279,9 +2291,9 @@ export default function DayviewCanvasTrack({
    const padCancelColumns = useMemo(
       () =>
          effectiveInstructors.filter(
-            (inst) => inst && inst._padType === "cancel"
+            (inst) => inst && inst._padType === "cancel",
          ),
-      [effectiveInstructors]
+      [effectiveInstructors],
    );
 
    /* ================== eventsForCanvas (hidden + cancel pad + laterala) ================== */
@@ -2349,7 +2361,7 @@ export default function DayviewCanvasTrack({
                      raw.instructorId ??
                         raw.instructor_id ??
                         ev.instructorId ??
-                        ""
+                        "",
                   );
 
                   const row = instIdToRow.get(origInstId);
@@ -2359,7 +2371,7 @@ export default function DayviewCanvasTrack({
                         const padSlotIndex = Math.min(
                            lateralSlotRawIndex,
                            LATERAL_SLOTS_PER_COLUMN - 1,
-                           slotGeoms.length - 1
+                           slotGeoms.length - 1,
                         );
 
                         const padColumnIndex =
@@ -2472,7 +2484,7 @@ export default function DayviewCanvasTrack({
          Array.isArray(blockedKeyMap.blackouts)
       )
          normalizedBlocked = buildBlockedMapFromBlackoutsList(
-            blockedKeyMap.blackouts
+            blockedKeyMap.blackouts,
          );
       else if (typeof blockedKeyMap === "object") {
          const m = new Map();
@@ -2528,29 +2540,29 @@ export default function DayviewCanvasTrack({
    const eventsSig = useMemo(
       () => buildCanvasEventsSignature(eventsForCanvas),
       // ⚠️ refreshTick forțează recalcul chiar dacă upstream a păstrat aceleași referințe
-      [eventsForCanvas, refreshTick]
+      [eventsForCanvas, refreshTick],
    );
 
    const overlapSig = useMemo(
       () => buildCanvasEventsSignature(events || []),
-      [events, refreshTick]
+      [events, refreshTick],
    );
 
    const slotsSig = useMemo(() => buildSlotsSignature(slotGeoms), [slotGeoms]);
 
    const blockedSig = useMemo(
       () => buildBlockedSignature(blockedKeyMapForSlots, effectiveInstructors),
-      [blockedKeyMapForSlots, effectiveInstructors]
+      [blockedKeyMapForSlots, effectiveInstructors],
    );
 
    const canceledSig = useMemo(
       () => buildBlockedSignature(canceledSlotKeysByInst, effectiveInstructors),
-      [canceledSlotKeysByInst, effectiveInstructors]
+      [canceledSlotKeysByInst, effectiveInstructors],
    );
 
    const waitSig = useMemo(
       () => buildWaitNotesSignature(waitNotes),
-      [waitNotes]
+      [waitNotes],
    );
 
    /* ================== draw effect ================== */
@@ -2660,7 +2672,7 @@ export default function DayviewCanvasTrack({
       canvas.style.height = `${height}px`;
 
       setCanvasPx((prev) =>
-         prev.w === width && prev.h === height ? prev : { w: width, h: height }
+         prev.w === width && prev.h === height ? prev : { w: width, h: height },
       );
 
       const ctx = canvas.getContext("2d");
@@ -2781,7 +2793,7 @@ export default function DayviewCanvasTrack({
          (item) =>
             item.kind === "reservation" &&
             item.ev &&
-            String(item.ev.id) === String(activeEventId)
+            String(item.ev.id) === String(activeEventId),
       );
       if (!activeHit) return;
 
@@ -2819,7 +2831,7 @@ export default function DayviewCanvasTrack({
             } catch (err2) {
                console.error(
                   "fetchReservationsDelta după delete eșuat a eșuat și el:",
-                  err2
+                  err2,
                );
             }
             return;
@@ -2834,7 +2846,7 @@ export default function DayviewCanvasTrack({
          triggerCalendarRefresh();
          setGlobalSelection({ event: null, slot: null });
       },
-      [dispatch]
+      [dispatch],
    );
 
    useEffect(() => {
@@ -2888,7 +2900,7 @@ export default function DayviewCanvasTrack({
 
          return payload;
       },
-      [deleteReservationById]
+      [deleteReservationById],
    );
 
    /* ================== paste ================== */
@@ -2941,13 +2953,13 @@ export default function DayviewCanvasTrack({
             } catch (err2) {
                console.error(
                   "fetchReservationsDelta după paste a eșuat:",
-                  err2
+                  err2,
                );
             }
             triggerCalendarRefresh();
          }
       },
-      [dispatch]
+      [dispatch],
    );
 
    useEffect(() => {
@@ -2975,18 +2987,18 @@ export default function DayviewCanvasTrack({
 
       const existingId =
          prevNote && typeof prevNote === "object"
-            ? prevNote.id ??
+            ? (prevNote.id ??
               prevNote._id ??
               prevNote.noteId ??
               prevNote.note_id ??
-              null
+              null)
             : null;
 
       setWaitNotes((prev) => {
          const old = prev[slotIndex];
          const oldId =
             old && typeof old === "object"
-               ? old.id ?? old._id ?? old.noteId ?? old.note_id ?? existingId
+               ? (old.id ?? old._id ?? old.noteId ?? old.note_id ?? existingId)
                : existingId;
 
          const next = { ...prev };
@@ -3017,7 +3029,7 @@ export default function DayviewCanvasTrack({
       const dateIso = buildWaitNoteDateIsoForSlot(
          dayStart,
          slotIndex,
-         BUSY_KEYS_MODE
+         BUSY_KEYS_MODE,
       );
 
       const payload = { title, content: text, type: "wait-slot" };
@@ -3069,7 +3081,7 @@ export default function DayviewCanvasTrack({
                existingId
                   ? "notesService.updateNote (wait-slot) error"
                   : "notesService.createNote (wait-slot) error",
-               err
+               err,
             );
          })
          .finally(() => {
@@ -3587,7 +3599,7 @@ export default function DayviewCanvasTrack({
                value={waitEdit.text || ""}
                onChange={(e) =>
                   setWaitEdit((prev) =>
-                     prev ? { ...prev, text: e.target.value } : prev
+                     prev ? { ...prev, text: e.target.value } : prev,
                   )
                }
                onBlur={handleWaitBlur}
@@ -3658,7 +3670,10 @@ export default function DayviewCanvasTrack({
                            }
                            onClick={() =>
                               setHistoryIdx((i) =>
-                                 Math.min(Math.max(0, timelineCount - 1), i + 1)
+                                 Math.min(
+                                    Math.max(0, timelineCount - 1),
+                                    i + 1,
+                                 ),
                               )
                            }
                         >
