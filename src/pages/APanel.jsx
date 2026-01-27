@@ -71,11 +71,9 @@ function APanel() {
    ];
    const dispatch = useDispatch();
 
-   const [events, setEvents] = useState([]);
    const [reservations, setReservations] = useState([]);
    const [users, setUsers] = useState([]);
    const [groups, setGroups] = useState([]);
-   const [currentView, setCurrentView] = useState("month");
    const instructors = useSelector((state) => state.instructors.list);
 
    const { user } = useContext(UserContext);
@@ -105,16 +103,9 @@ function APanel() {
             //console.log(resData);
 
             const sortedGroups = groupData.sort(
-               (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+               (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
             );
             setGroups(sortedGroups);
-
-            const formattedEvents = resData.map((item) => {
-               const start = new Date(item.startTime);
-               const end = new Date(start.getTime() + 90 * 60 * 1000);
-               return { id: item.id, title: "Programare", start, end };
-            });
-            setEvents(formattedEvents);
          } catch (err) {
             console.error("Eroare la preluare:", err);
          }
@@ -123,68 +114,6 @@ function APanel() {
       fetchData();
    }, [user, dispatch]);
 
-   // Filter events for week view (one per hour)
-   const filterEventsForWeek = useCallback((events) => {
-      const seen = new Set();
-      return events.filter((event) => {
-         const key = `${event.start.getFullYear()}-${event.start.getMonth()}-${event.start.getDate()}-${event.start.getHours()}`;
-         if (seen.has(key)) return false;
-         seen.add(key);
-         return true;
-      });
-   }, []);
-
-   const eventsToShow =
-      currentView === "week" ? filterEventsForWeek(events) : events;
-
-   const findUserById = (id) => users.find((u) => u.id === id);
-   const findInstructorById = (id) =>
-      instructors.find((inst) => inst.id === id);
-
-   const getFormattedReservations = (reservations) => {
-      return reservations.map((res) => {
-         const start = new Date(res.startTime);
-         const end = new Date(start.getTime() + 90 * 60 * 1000);
-         const personUser = findUserById(res.userId);
-         const instructorObj = findInstructorById(res.instructorId);
-
-         const person = personUser
-            ? `${personUser.firstName} ${personUser.lastName}`
-            : "Anonim";
-         const instructor = instructorObj
-            ? `${instructorObj.firstName} ${instructorObj.lastName}`
-            : "Necunoscut";
-         const status = res.status || "pending";
-         const time = `${start.getHours()}:${start
-            .getMinutes()
-            .toString()
-            .padStart(2, "0")} - ${end.getHours()}:${end
-            .getMinutes()
-            .toString()
-            .padStart(2, "0")}`;
-
-         return { id: res.id, start, end, time, person, instructor, status };
-      });
-   };
-   const formattedReservations = getFormattedReservations(reservations);
-
-   // Calendar slot click
-   const handleDayClick = ({ start }) => {
-      openPopup("dayInfo", {
-         selectedDate: start,
-         programari: formattedReservations,
-      });
-   };
-
-   // Calendar event click
-   const handleEventClick = (event) => {
-      openPopup("dayInfo", {
-         selectedDate: event.start,
-         programari: formattedReservations,
-      });
-   };
-
-   const handleViewChange = (view) => setCurrentView(view);
    return (
       <>
          <Header links={links}>
@@ -192,6 +121,16 @@ function APanel() {
             <Popup />
          </Header>
          <main className="main">
+            <section className="home__admin">
+               <StudentsManager />
+               <GroupManager />
+               {/*<ClockDisplay />*/}
+            </section>
+            <PreloadAppData />
+
+            <Footer />
+         </main>
+         {/*<main className="main">
             <section className="intro admin">
                <StudentsManager />
                <div className="intro__right">
@@ -216,7 +155,7 @@ function APanel() {
                <InstructorsGroupManager></InstructorsGroupManager>
             </section>
             <Footer />
-         </main>
+         </main>*/}
       </>
    );
 }

@@ -47,7 +47,7 @@ function InstructorChooser({
                        ?.plateNumber || ""
                  )
                     .toLowerCase()
-                    .includes(q)
+                    .includes(q),
            )
          : instructors;
       return base.map((i) => {
@@ -163,7 +163,7 @@ export default function InstructorsGroupManager() {
 
    const handleGridChange = (index, instructorId) => {
       setGrid((prev) =>
-         prev.map((r, i) => (i === index ? { instructorId } : r))
+         prev.map((r, i) => (i === index ? { instructorId } : r)),
       );
    };
 
@@ -178,7 +178,7 @@ export default function InstructorsGroupManager() {
                sector: sectorCreate,
                instructors: [],
                cars: [],
-            })
+            }),
          ).unwrap();
          const groupId = group?.id ?? group?.data?.id;
          if (!groupId)
@@ -191,7 +191,7 @@ export default function InstructorsGroupManager() {
             if (seen.has(String(id))) continue;
             seen.add(String(id));
             await dispatch(
-               addInstructorToGrp({ groupId, instructorId: id })
+               addInstructorToGrp({ groupId, instructorId: id }),
             ).unwrap();
          }
 
@@ -233,8 +233,8 @@ export default function InstructorsGroupManager() {
                   .concat(
                      Array.from(
                         { length: Math.max(0, 3 - insts.length) },
-                        () => ({ instructorId: "" })
-                     )
+                        () => ({ instructorId: "" }),
+                     ),
                   ),
          },
       }));
@@ -252,7 +252,7 @@ export default function InstructorsGroupManager() {
          [groupId]: {
             ...prev[groupId],
             editGrid: prev[groupId].editGrid.map((r, i) =>
-               i === index ? { instructorId } : r
+               i === index ? { instructorId } : r,
             ),
          },
       }));
@@ -273,31 +273,31 @@ export default function InstructorsGroupManager() {
             updateGroup({
                id: groupId,
                data: { name: safeName, sector: newSector },
-            })
+            }),
          ).unwrap();
 
          // add/remove instructori
          const prevInstIds = new Set(
-            (currentGroup?.instructors || []).map((i) => String(i.id))
+            (currentGroup?.instructors || []).map((i) => String(i.id)),
          );
          const wantedRows = (eg?.editGrid || [])
             .map((r) => toNum(r.instructorId))
             .filter(Boolean);
          const newInstKeys = new Set(
-            Array.from(new Set(wantedRows.map(String)))
+            Array.from(new Set(wantedRows.map(String))),
          );
 
          for (const k of newInstKeys) {
             if (!prevInstIds.has(k)) {
                await dispatch(
-                  addInstructorToGrp({ groupId, instructorId: Number(k) })
+                  addInstructorToGrp({ groupId, instructorId: Number(k) }),
                ).unwrap();
             }
          }
          for (const k of prevInstIds) {
             if (!newInstKeys.has(k)) {
                await dispatch(
-                  removeInstructor({ groupId, instructorId: Number(k) })
+                  removeInstructor({ groupId, instructorId: Number(k) }),
                ).unwrap();
             }
          }
@@ -319,7 +319,7 @@ export default function InstructorsGroupManager() {
       const insts = group.instructors || [];
       const groupNameMatch = (group.name || "").toLowerCase().includes(q);
       const instructorMatch = insts.some((inst) =>
-         `${inst.firstName} ${inst.lastName}`.toLowerCase().includes(q)
+         `${inst.firstName} ${inst.lastName}`.toLowerCase().includes(q),
       );
       const carMatch = insts.some((inst) => {
          const car = cars.find((c) => c.instructorId === inst.id);
@@ -352,7 +352,7 @@ export default function InstructorsGroupManager() {
             </i>
          ) : (
             part
-         )
+         ),
       );
    };
 
@@ -364,7 +364,7 @@ export default function InstructorsGroupManager() {
          <div
             className={`instructorsgroup__header ${search.open ? "open" : ""}`}
          >
-            <h2>Toate Grupele</h2>
+            <h2>Grupe </h2>
             <div className="groups__right">
                <div className="groups__search">
                   <input
@@ -411,7 +411,7 @@ export default function InstructorsGroupManager() {
                            cars={cars}
                            excludeIds={grid
                               .map((r, idx) =>
-                                 idx === chooser.forRow ? null : r.instructorId
+                                 idx === chooser.forRow ? null : r.instructorId,
                               )
                               .filter(Boolean)}
                            onClose={() =>
@@ -558,7 +558,7 @@ export default function InstructorsGroupManager() {
                                        handleEditGroupField(
                                           group.id,
                                           "name",
-                                          e.target.value
+                                          e.target.value,
                                        )
                                     }
                                     placeholder={group.name || "Numele grupei"}
@@ -600,7 +600,7 @@ export default function InstructorsGroupManager() {
                                        .map((r, i) =>
                                           i === chooser.forRow
                                              ? null
-                                             : r.instructorId
+                                             : r.instructorId,
                                        )
                                        .filter(Boolean)}
                                     onClose={() =>
@@ -615,7 +615,7 @@ export default function InstructorsGroupManager() {
                                        handleEditGridChange(
                                           group.id,
                                           chooser.forRow,
-                                          String(inst.id)
+                                          String(inst.id),
                                        );
                                        setChooser({
                                           open: false,
@@ -646,12 +646,12 @@ export default function InstructorsGroupManager() {
                                                    })
                                                 }
                                                 title={instructorLabel(
-                                                   col.instructorId
+                                                   col.instructorId,
                                                 )}
                                                 style={{ textAlign: "left" }}
                                              >
                                                 {instructorLabel(
-                                                   col.instructorId
+                                                   col.instructorId,
                                                 )}
                                              </button>
                                           </div>
@@ -681,7 +681,7 @@ export default function InstructorsGroupManager() {
                                                 handleEditGroupField(
                                                    group.id,
                                                    "sector",
-                                                   e.target.value
+                                                   e.target.value,
                                                 )
                                              }
                                           />
@@ -701,7 +701,7 @@ export default function InstructorsGroupManager() {
                                                 handleEditGroupField(
                                                    group.id,
                                                    "sector",
-                                                   e.target.value
+                                                   e.target.value,
                                                 )
                                              }
                                           />
@@ -766,14 +766,14 @@ export default function InstructorsGroupManager() {
                               <ul className="instructorsgroup__list">
                                  {(insts || []).map((inst) => {
                                     const car = cars.find(
-                                       (c) => c.instructorId === inst.id
+                                       (c) => c.instructorId === inst.id,
                                     );
                                     return (
                                        <li key={inst.id}>
                                           <p>
                                              {highlightText(
                                                 `${inst.firstName} ${inst.lastName}`,
-                                                search.query
+                                                search.query,
                                              )}{" "}
                                              —
                                           </p>
@@ -781,7 +781,7 @@ export default function InstructorsGroupManager() {
                                           <p>
                                              {highlightText(
                                                 car?.plateNumber || "N/A",
-                                                search.query
+                                                search.query,
                                              )}
                                           </p>
                                        </li>

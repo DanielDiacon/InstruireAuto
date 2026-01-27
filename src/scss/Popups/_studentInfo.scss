@@ -130,6 +130,7 @@
          padding: 14px 20px;
          width: 100%;
          background: var(--black-p);
+         color: var(--white-p);
       }
       input:nth-child(5) {
          grid-column: 1 / -1;
@@ -161,7 +162,40 @@
    &__item {
       background: rgb(79, 103, 171);
    }
-
+   &.active {
+      .groups__item-input {
+         background: var(--black-s);
+         padding: 10px 16px 10px 16px;
+         visibility: visible;
+         top: -6px;
+         width: calc(100% + 6px);
+         left: -6px;
+      }
+      .groups__item-key {
+         opacity: 0;
+      }
+      .delete-btn {
+         visibility: visible;
+         opacity: 1;
+      }
+      .groups__item-right {
+         gap: 3px;
+      }
+      h3 {
+         padding: 4px 0 0 10px;
+         visibility: hidden;
+         opacity: 1;
+      }
+      p {
+         visibility: hidden;
+         opacity: 0;
+      }
+      .delete-btn.hidden {
+         opacity: 0;
+         visibility: hidden;
+         padding: 12px 10px;
+      }
+   }
    &__btn {
       border-radius: 25px;
       padding: 14px 20px;
@@ -170,12 +204,16 @@
       position: relative;
       width: auto;
       &:hover {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          border-radius: 16px;
          padding: 14px 22px;
       }
       &:active {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          transform: scale(0.95);
          padding: 14px 20px;
          border-radius: 32px;

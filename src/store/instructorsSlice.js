@@ -14,9 +14,9 @@ export const fetchInstructors = createAsyncThunk(
    async () => {
       const instructors = await getInstructors();
       return instructors.sort(
-         (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+         (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
       );
-   }
+   },
 );
 
 export const addInstructor = createAsyncThunk(
@@ -24,7 +24,7 @@ export const addInstructor = createAsyncThunk(
    async (payload) => {
       // payload poate conține și `password` la CREATE
       return await createInstructors(payload);
-   }
+   },
 );
 
 export const updateInstructor = createAsyncThunk(
@@ -32,7 +32,7 @@ export const updateInstructor = createAsyncThunk(
    async ({ id, data }) => {
       const updated = await patchInstructors(id, data);
       return { ...(updated || {}), id, ...data };
-   }
+   },
 );
 
 /* ===== Patch doar order (pozițiile coloanei) ===== */
@@ -40,16 +40,38 @@ export const updateInstructorOrder = createAsyncThunk(
    "instructors/updateOrder",
    async ({ id, order }, { rejectWithValue }) => {
       try {
+         // eslint-disable-next-line no-console
+         console.log("[Thunk] updateInstructorOrder start", { id, order });
+
          const updated = await patchInstructorOrder(id, order);
+
+         // eslint-disable-next-line no-console
+         console.log("[Thunk] updateInstructorOrder success", { id, updated });
+
          return { id, order: updated?.order ?? order };
       } catch (err) {
+         // axios error details (dacă folosești axios)
+         const status = err?.response?.status;
+         const data = err?.response?.data;
+
+         // eslint-disable-next-line no-console
+         console.log("[Thunk] updateInstructorOrder ERROR", {
+            id,
+            order,
+            status,
+            data,
+            err,
+         });
+
          return rejectWithValue({
             id,
             order,
+            status,
+            data,
             message: err?.message || "Failed to patch order",
          });
       }
-   }
+   },
 );
 
 export const removeInstructor = createAsyncThunk(
@@ -57,7 +79,7 @@ export const removeInstructor = createAsyncThunk(
    async (id) => {
       await deleteInstructors(id);
       return id;
-   }
+   },
 );
 
 /* ===== Back-compat: NU ȘTERGE — wrappers pe noul flux (fără user) ===== */
@@ -80,7 +102,7 @@ export const addInstructorWithUser = createAsyncThunk(
          ...(payload.userId ? { userId: payload.userId } : {}),
       });
       return instructor;
-   }
+   },
 );
 
 // update bazat doar pe instructor; dacă primește password, o trimitem pentru reset
@@ -100,7 +122,7 @@ export const updateInstructorWithUser = createAsyncThunk(
       };
       const updated = await patchInstructors(id, patch);
       return { ...(updated || {}), id, ...patch };
-   }
+   },
 );
 
 /* ===== Slice ===== */
@@ -125,13 +147,13 @@ const instructorsSlice = createSlice({
          })
          .addCase(updateInstructor.fulfilled, (s, a) => {
             const idx = s.list.findIndex(
-               (i) => String(i.id) === String(a.payload.id)
+               (i) => String(i.id) === String(a.payload.id),
             );
             if (idx !== -1) s.list[idx] = { ...s.list[idx], ...a.payload };
          })
          .addCase(updateInstructorOrder.fulfilled, (s, a) => {
             const idx = s.list.findIndex(
-               (i) => String(i.id) === String(a.payload.id)
+               (i) => String(i.id) === String(a.payload.id),
             );
             if (idx !== -1) {
                s.list[idx] = { ...s.list[idx], order: a.payload.order };
@@ -153,7 +175,7 @@ const instructorsSlice = createSlice({
          })
          .addCase(updateInstructorWithUser.fulfilled, (s, a) => {
             const idx = s.list.findIndex(
-               (i) => String(i.id) === String(a.payload.id)
+               (i) => String(i.id) === String(a.payload.id),
             );
             if (idx !== -1) s.list[idx] = { ...s.list[idx], ...a.payload };
          });

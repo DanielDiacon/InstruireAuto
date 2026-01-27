@@ -68,13 +68,13 @@ const formats = {
          return `${l.format(start, "d", culture)}–${l.format(
             end,
             "d",
-            culture
+            culture,
          )} ${shortMonth(start, l, culture)}`;
       }
       return `${l.format(start, "d", culture)} ${shortMonth(
          start,
          l,
-         culture
+         culture,
       )} – ${l.format(end, "d", culture)} ${shortMonth(end, l, culture)}`;
    },
    timeGutterFormat: "HH:mm",
@@ -119,14 +119,14 @@ function IPanel() {
          user?.role === "INSTRUCTOR"
             ? myInstructor?.firstName || user?.firstName || ""
             : user?.firstName || "",
-      [user, myInstructor]
+      [user, myInstructor],
    );
    const displayLastName = useMemo(
       () =>
          user?.role === "INSTRUCTOR"
             ? myInstructor?.lastName || user?.lastName || ""
             : user?.lastName || "",
-      [user, myInstructor]
+      [user, myInstructor],
    );
 
    const [nextLesson, setNextLesson] = useState(null);
@@ -229,19 +229,19 @@ function IPanel() {
                   try {
                      raw = await getInstructorReservations(
                         myInstructor.id,
-                        user.id
+                        user.id,
                      );
                   } catch (e) {
                      console.warn(
                         "[IPanel] /reservations/instructor/:id a eșuat, fallback la /reservations/all + filter",
-                        e
+                        e,
                      );
                      const all = await getAllReservations();
                      raw = all.filter(
                         (r) =>
                            String(r.instructorId || r?.instructor?.id) ===
                               String(myInstructor.id) ||
-                           String(r?.instructor?.userId) === String(user.id)
+                           String(r?.instructor?.userId) === String(user.id),
                      );
                   }
                } else {
@@ -282,7 +282,6 @@ function IPanel() {
    const MIN_TIME = new Date(1970, 0, 1, 7, 0, 0);
    const MAX_TIME = new Date(1970, 0, 1, 21, 0, 0);
 
-
    return (
       <>
          <Header links={links}>
@@ -290,7 +289,7 @@ function IPanel() {
          </Header>
 
          <main className="main">
-            <section className="intro admin">
+            <section className="home__instructor">
                <TodayInfo />
                <div className="intro__right">
                   <InstrGroups />
@@ -306,7 +305,7 @@ function IPanel() {
                </div>
             </section>
 
-            <section className="calendar ipanel">
+            <section className="calendar ipanel home__instructor-calendar">
                <SCalendar
                   localizer={localizer}
                   culture="ro-RO"

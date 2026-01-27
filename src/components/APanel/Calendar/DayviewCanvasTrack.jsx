@@ -106,6 +106,32 @@ const LONG_PRESS_MOVE_PX = 14;
 
 const RANGE_MINUTES = 90; // ✅ 90 min window
 /* ================== STRONG SIGNATURE HELPERS (REDRAW FIX) ================== */
+const MAX_GAPS_AFTER = 40;
+
+function parseOrderToken(v) {
+   const s = String(v ?? "").trim();
+   if (!s) return { pos: Number.POSITIVE_INFINITY, gapsAfter: 0, raw: s };
+
+   let m = s.match(/^(\d+)([xX]+)$/);
+   if (m) {
+      const pos = Math.max(1, parseInt(m[1], 10));
+      const gapsAfter = Math.max(0, Math.min(MAX_GAPS_AFTER, m[2].length));
+      return { pos, gapsAfter, raw: s };
+   }
+
+   m = s.match(/^(\d+)$/);
+   if (m) {
+      const pos = Math.max(1, parseInt(m[1], 10));
+      return { pos, gapsAfter: 0, raw: s };
+   }
+
+   const n = Number(s);
+   if (Number.isFinite(n) && n > 0) {
+      return { pos: Math.max(1, Math.round(n)), gapsAfter: 0, raw: s };
+   }
+
+   return { pos: Number.POSITIVE_INFINITY, gapsAfter: 0, raw: s };
+}
 
 function _hashStr(str) {
    const s = String(str || "");
@@ -1898,7 +1924,7 @@ export default function DayviewCanvasTrack({
       typeof layout.headerHeight === "number"
          ? layout.headerHeight
          : Number(layout.headerHeight) || 0;
-   const baseHeaderHeight = Math.max(baseHeaderHeightRaw || 0, 40);
+   const baseHeaderHeight = Math.max(baseHeaderHeightRaw || 0, 60);
 
    const layoutColsPerRow = Number(layout.colsPerRow) || 4;
    const layoutRowGap = layout.rowGap != null ? Number(layout.rowGap) || 0 : 24;
@@ -1919,14 +1945,87 @@ export default function DayviewCanvasTrack({
       const lateralPads = [];
       const real = [];
 
-      for (const inst of base) {
+      // helper: ia order din inst sau din instructorsFull (fallback)
+     const readOrderMeta = (inst) => {
+   const pick = (obj) =>
+      obj?.order ??
+      obj?.uiOrder ??
+      obj?.sortOrder ??
+      obj?.position ??
+      obj?.sort_index ??
+      null;
+
+   let v = pick(inst);
+
+   if (v == null && Array.isArray(instructorsFull) && inst?.id != null) {
+      const full = instructorsFull.find(
+         (x) => String(x?.id) === String(inst.id),
+      );
+      if (full) v = pick(full);
+   }
+
+   return parseOrderToken(v);
+};
+
+const readOrder = (inst) => readOrderMeta(inst).pos;
+
+
+      // ✅ NEW: injectează "găuri" (null) pentru lipsă de ordine: 1,3 => [inst1, null, inst3]
+    const applyOrderGaps = (list) => {
+   if (!Array.isArray(list) || !list.length) return [];
+
+   const finite = [];
+   const tail = [];
+
+   for (const inst of list) {
+      const meta = readOrderMeta(inst);
+      if (!Number.isFinite(meta.pos) || meta.pos === Number.POSITIVE_INFINITY) {
+         tail.push(inst);
+      } else {
+         finite.push({ inst, pos: meta.pos, gapsAfter: meta.gapsAfter });
+      }
+   }
+
+   finite.sort((a, b) => a.pos - b.pos);
+
+   const out = [];
+   let cursorPos = 1;
+
+   for (const it of finite) {
+      const pos = Math.max(1, Math.trunc(it.pos));
+
+      // gaps din lipsă de poziții
+      while (cursorPos < pos) {
+         out.push(null);
+         cursorPos += 1;
+      }
+
+      out.push(it.inst);
+      cursorPos += 1;
+
+      // gaps din token "XXX"
+      const g = Math.max(0, Math.min(MAX_GAPS_AFTER, it.gapsAfter || 0));
+      for (let k = 0; k < g; k += 1) {
+         out.push(null);
+         cursorPos += 1;
+      }
+   }
+
+   return out.concat(tail);
+};
+
+
+      // 1) Separăm PAD-urile vs reali
+      for (let srcIndex = 0; srcIndex < base.length; srcIndex++) {
+         const inst = base[srcIndex];
          if (!inst) continue;
+
          const id = String(inst.id ?? "");
          const nameLower = String(inst.name ?? "").toLowerCase();
          const isPad = id.startsWith("__pad_");
 
          if (!isPad) {
-            real.push(inst);
+            real.push({ ...inst, __srcIndex: srcIndex });
             continue;
          }
 
@@ -1949,73 +2048,44 @@ export default function DayviewCanvasTrack({
       const lateralTemplate =
          lateralPads[0] || waitPads[0] || cancelPads[0] || null;
 
-      // ✅ regula ta veche: buiucani doar marți/joi
-      // ✅ DAR: dacă ai filtru explicit buiucani, îl arătăm mereu
+      // 2) Regula Buiucani: doar Marți/Joi
       let showBuiucani = true;
-      if (!activeSectorFilter) {
-         if (dayStart instanceof Date) {
-            const wd = dayStart.getDay();
-            showBuiucani = wd === 2 || wd === 4;
-         }
-      } else if (activeSectorFilter === "buiucani") {
-         showBuiucani = true;
+      if (dayStart instanceof Date) {
+         const wd = dayStart.getDay(); // 0=Sun ... 6=Sat
+         showBuiucani = wd === 2 || wd === 4;
       }
 
-      const realDayFiltered = showBuiucani
+      const realFiltered = showBuiucani
          ? real
          : real.filter((inst) => !isBuiucaniInstructor(inst));
 
-      // ✅ dacă există filtru de sector, ținem doar sectorul ăla (nu mai combinăm cu altele)
-      const realFiltered = activeSectorFilter
-         ? realDayFiltered.filter(
-              (inst) => getInstructorSector(inst) === activeSectorFilter,
-           )
-         : realDayFiltered;
+      // 3) Sortare după order (global)
+      const sorted = realFiltered.slice().sort((a, b) => {
+         const ao = readOrder(a);
+         const bo = readOrder(b);
+         if (ao !== bo) return ao - bo;
 
-      const buckets = {
-         botanica: { auto: [], manual: [] },
-         ciocana: { auto: [], manual: [] },
-         buiucani: { auto: [], manual: [] },
-         other: { auto: [], manual: [] },
-      };
-
-      for (const inst of realFiltered) {
-         const sector = getInstructorSector(inst);
-         const isAuto = isAutoInstructor(inst, cars);
-         const gear = isAuto ? "auto" : "manual";
-         (buckets[sector] || buckets.other)[gear].push(inst);
-      }
-
-      const idx = {
-         botanica: { auto: 0, manual: 0 },
-         ciocana: { auto: 0, manual: 0 },
-         buiucani: { auto: 0, manual: 0 },
-         other: { auto: 0, manual: 0 },
-      };
-
-      const remainingCount = (sector) => {
-         const b = buckets[sector];
-         const i = idx[sector];
-         return b.auto.length - i.auto + (b.manual.length - i.manual);
-      };
-
-      const popFromSector = (sector, prefGear) => {
-         const b = buckets[sector];
-         const i = idx[sector];
-         if (!b) return null;
-
-         if (prefGear === "auto") {
-            if (i.auto < b.auto.length) return b.auto[i.auto++];
-            if (i.manual < b.manual.length) return b.manual[i.manual++];
-         } else {
-            if (i.manual < b.manual.length) return b.manual[i.manual++];
-            if (i.auto < b.auto.length) return b.auto[i.auto++];
+         // la egalitate: Buiucani cu prioritate (doar când e activ)
+         if (showBuiucani) {
+            const ab = isBuiucaniInstructor(a) ? 1 : 0;
+            const bb = isBuiucaniInstructor(b) ? 1 : 0;
+            if (ab !== bb) return bb - ab; // buiucani primul
          }
-         return null;
-      };
 
-      const rows = [];
+         // tie-break stabil: ordinea originală + id
+         const ai = a.__srcIndex ?? 0;
+         const bi = b.__srcIndex ?? 0;
+         if (ai !== bi) return ai - bi;
 
+         const aid = String(a.id ?? "");
+         const bid = String(b.id ?? "");
+         return aid < bid ? -1 : aid > bid ? 1 : 0;
+      });
+
+      // ✅ NEW: aplicăm gap-urile după "order"
+      const sortedWithGaps = applyOrderGaps(sorted);
+
+      // helper: clone pad cu index
       const makePad = (inst, padType, columnIndex) => {
          if (!inst) return null;
          return {
@@ -2025,6 +2095,7 @@ export default function DayviewCanvasTrack({
          };
       };
 
+      // 4) RÂNDUL 1 fix: 2 anulări + 2 așteptări
       const cancel1Base =
          cancelPads[0] ||
          cancelPads[1] ||
@@ -2037,6 +2108,7 @@ export default function DayviewCanvasTrack({
          waitPads[0] || waitPads[1] || lateralTemplate || cancel1Base || null;
       const wait2Base = waitPads[1] || waitPads[0] || wait1Base;
 
+      const rows = [];
       rows.push([
          makePad(cancel1Base, "cancel", 0),
          makePad(cancel2Base, "cancel", 1),
@@ -2044,148 +2116,30 @@ export default function DayviewCanvasTrack({
          makePad(wait2Base, "wait", 1),
       ]);
 
-      const addRealRow = (cols0to2) => {
-         const c0 = cols0to2[0] || null;
-         const c1 = cols0to2[1] || null;
-         const c2 = cols0to2[2] || null;
+      // 5) Rânduri 2+: 3 reali (cu gap-uri) + Laterala (coloana 4 mereu)
+      let i = 0;
 
-         const lateralClone = lateralTemplate
-            ? { ...lateralTemplate, _padType: "lateral", _clone: true }
-            : null;
-
-         rows.push([c0, c1, c2, lateralClone]);
+      const makeLateral = (rowIndex) => {
+         if (!lateralTemplate) return null;
+         return {
+            ...lateralTemplate,
+            _padType: "lateral",
+            _clone: true,
+            _padColumnIndex: rowIndex, // stabil per rând (1,2,3...)
+         };
       };
 
-      // ✅ MOD NOU: dacă ai filtru, generezi rânduri doar din sectorul ales
-      if (activeSectorFilter) {
-         const sec = activeSectorFilter;
+      while (i < sortedWithGaps.length) {
+         const c0 = sortedWithGaps[i++] ?? null; // poate fi null (gap)
+         const c1 = sortedWithGaps[i++] ?? null;
+         const c2 = sortedWithGaps[i++] ?? null;
 
-         while (remainingCount(sec) > 0) {
-            const row = [null, null, null];
-            row[0] = popFromSector(sec, "auto");
-            row[1] = popFromSector(sec, "manual");
-            row[2] = popFromSector(sec, "manual");
-            addRealRow(row);
-         }
-      } else {
-         // ✅ logica ta veche
-         const jsDay = dayStart instanceof Date ? dayStart.getDay() : null;
-         const isTueOrThu = jsDay === 2 || jsDay === 4;
-
-         if (isTueOrThu && remainingCount("buiucani") > 0) {
-            const buCount = remainingCount("buiucani");
-            const row = [null, null, null];
-
-            if (buCount >= 3) {
-               row[0] = popFromSector("buiucani", "auto");
-               row[1] = popFromSector("buiucani", "manual");
-               row[2] = popFromSector("buiucani", "manual");
-            } else if (buCount === 2) {
-               row[0] = popFromSector("buiucani", "auto");
-               row[1] = popFromSector("buiucani", "manual");
-               row[2] = popFromSector("botanica", "manual");
-            } else {
-               row[0] = popFromSector("buiucani", "auto");
-               row[1] = popFromSector("botanica", "manual");
-               row[2] = popFromSector("botanica", "manual");
-            }
-
-            addRealRow(row);
-         }
-
-         let sectorForNextRow = "botanica";
-         const anyMainSectorLeft = () =>
-            remainingCount("botanica") > 0 || remainingCount("ciocana") > 0;
-
-         while (anyMainSectorLeft()) {
-            let sector = sectorForNextRow;
-            const other = sector === "botanica" ? "ciocana" : "botanica";
-
-            if (remainingCount(sector) === 0 && remainingCount(other) > 0)
-               sector = other;
-            if (remainingCount(sector) === 0) break;
-
-            const row = [null, null, null];
-            row[0] = popFromSector(sector, "auto");
-            row[1] = popFromSector(sector, "manual");
-            row[2] = popFromSector(sector, "manual");
-            addRealRow(row);
-
-            sectorForNextRow = sector === "botanica" ? "ciocana" : "botanica";
-         }
-
-         while (remainingCount("buiucani") > 0) {
-            const row = [null, null, null];
-            row[0] = popFromSector("buiucani", "auto");
-            row[1] = popFromSector("buiucani", "manual");
-            row[2] = popFromSector("buiucani", "manual");
-            addRealRow(row);
-         }
-
-         while (remainingCount("other") > 0) {
-            const row = [null, null, null];
-            row[0] = popFromSector("other", "auto");
-            row[1] = popFromSector("other", "manual");
-            row[2] = popFromSector("other", "manual");
-            addRealRow(row);
-         }
+         const rowIndex = rows.length; // 1 pentru primul rând real (după pads)
+         rows.push([c0, c1, c2, makeLateral(rowIndex)]);
       }
 
-      const flat = rows.flat();
-      const enriched = [];
-      let cancelIndex = 0;
-      let waitIndex = 0;
-      let lateralIndex = 0;
-
-      for (const inst of flat) {
-         if (!inst) {
-            enriched.push(null);
-            continue;
-         }
-
-         const id = String(inst.id ?? "");
-         const nameLower = String(inst.name ?? "").toLowerCase();
-         const isPad = id.startsWith("__pad_");
-
-         let padType = inst._padType || null;
-         if (isPad && !padType) {
-            if (id === "__pad_1" || nameLower.includes("anular"))
-               padType = "cancel";
-            else if (id === LATERAL_PAD_ID || nameLower.includes("later"))
-               padType = "lateral";
-            else padType = "wait";
-         }
-
-         if (!isPad || !padType) {
-            enriched.push(inst);
-            continue;
-         }
-
-         if (padType === "cancel") {
-            enriched.push({
-               ...inst,
-               _padType: "cancel",
-               _padColumnIndex: cancelIndex++,
-            });
-         } else if (padType === "wait") {
-            enriched.push({
-               ...inst,
-               _padType: "wait",
-               _padColumnIndex: waitIndex++,
-            });
-         } else if (padType === "lateral") {
-            enriched.push({
-               ...inst,
-               _padType: "lateral",
-               _padColumnIndex: lateralIndex++,
-            });
-         } else {
-            enriched.push(inst);
-         }
-      }
-
-      return enriched;
-   }, [instructors, cars, dayStart, activeSectorFilter]);
+      return rows.flat();
+   }, [instructors, instructorsFull, dayStart]);
 
    // ✅ NEW: semnătură layout instructori (forțează redraw când se schimbă sector/ordinea)
    const instructorsLayoutSig = useMemo(
@@ -2198,7 +2152,7 @@ export default function DayviewCanvasTrack({
 
       const colWidth = layoutColWidth;
       const colGap = layoutColGap;
-      const headerHeight = Math.max(baseHeaderHeight * z, 40 * z);
+      const headerHeight = Math.max(baseHeaderHeight * z, 60 * z);
 
       const colsPerRow = layoutColsPerRow;
       const rowsCount = Math.max(1, Math.ceil(colsCount / colsPerRow));

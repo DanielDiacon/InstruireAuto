@@ -77,7 +77,9 @@
       background: var(--black-p);
       color: var(--white-p);
       cursor: pointer;
-      transition: all var(--elastic-s), background var(--classic-f);
+      transition:
+         all var(--elastic-s),
+         background var(--classic-f);
 
       svg {
          height: 20px;
@@ -117,7 +119,7 @@
       position: relative;
       display: flex;
       gap: var(--group-gap);
-      padding: 3px 12px;
+      padding: 8px 12px;
       overflow: auto;
    }
 
@@ -149,14 +151,16 @@
       min-width: calc(var(--cols) * var(--colw));
       display: flex;
       flex-direction: column;
-      gap: 3px;
+      gap: 8px;
       align-self: flex-start;
       flex: 0 0 auto;
       position: relative;
       overflow: visible;
       opacity: 0;
       transform: translateY(6px);
-      transition: opacity 160ms ease, transform 160ms ease;
+      transition:
+         opacity 160ms ease,
+         transform 160ms ease;
       will-change: opacity, transform;
 
       content-visibility: auto;
@@ -557,7 +561,9 @@
       background: var(--black-p);
       color: inherit;
       font-weight: 400;
-      transition: all var(--elastic-s), background var(--classic-s);
+      transition:
+         all var(--elastic-s),
+         background var(--classic-s);
       font-size: 13px;
       cursor: pointer;
       text-wrap: none;
@@ -707,7 +713,9 @@
          background: var(--black-p);
          color: var(--white-p);
          cursor: pointer;
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          svg {
             height: 17px;
             width: 17px;
@@ -925,7 +933,9 @@
       justify-content: center;
       cursor: default;
       opacity: 0.35;
-      transition: opacity 0.15s ease, transform 0.15s ease;
+      transition:
+         opacity 0.15s ease,
+         transform 0.15s ease;
       padding: 10px 8px;
    }
 
@@ -953,4 +963,209 @@
          height: 18px;
       }
    }
+}
+// modal de editare timp real ///////////////////////////////////
+.dv-order-editor {
+   padding: 4px 0px;
+}
+.dv-order-editor__panel {
+   height: 100%;
+   border-radius: 16px;
+   display: flex;
+   flex-direction: column;
+   gap: 12px;
+}
+
+.dv-order-editor__top {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 6px;
+   margin: -4px;
+}
+
+.dv-order-editor__actions {
+   display: flex;
+   gap: 6px;
+}
+
+.dv-order-btn {
+   padding: 6px 12px;
+   border-radius: 30px;
+   color: var(--white-p);
+   cursor: pointer;
+   backdrop-filter: blur(10px) saturate(150%);
+   transition: var(--elastic-s);
+   background: var(--black-p);
+}
+.dv-track-edit-btn:hover {
+   letter-spacing: 1.2px;
+}
+.dv-order-btn--primary {
+   background: #9cf680;
+   color: #0d3700;
+}
+.dv-order-btn--ghost {
+   background: var(--black-p);
+}
+
+.dv-order-day-wrapper {
+   display: grid;
+   flex: 1 1 auto;
+   grid-template-columns: 1fr 1fr;
+   gap: 6px;
+}
+.dv-order-day {
+   border-radius: 14px;
+   overflow: hidden;
+   display: flex;
+   flex-direction: column;
+   gap: 3px;
+}
+
+.dv-order-day__head {
+   padding: 10px 12px;
+   background: var(--black-p);
+   border-radius: 6px;
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+}
+
+.dv-order-day__title {
+   font-size: 13px;
+   font-weight: 600;
+   color: var(--white-p);
+}
+.dv-order-day__sub {
+   font-weight: 500;
+   color: var(--white-t);
+   margin-left: 6px;
+   font-size: 12px;
+}
+
+.dv-order-day__body {
+   background: var(--black-p);
+   border-radius: 6px;
+   padding: 12px;
+   flex: 1 1 auto;
+}
+
+/* 3 coloane */
+.dv-order-grid {
+   display: grid;
+   gap: 12px;
+}
+.dv-order-grid--3 {
+   grid-template-columns: 1fr 1fr 1fr;
+}
+@media (max-width: 980px) {
+   .dv-order-grid--3 {
+      grid-template-columns: 1fr 1fr 1fr;
+   }
+}
+@media (max-width: 640px) {
+   .dv-order-grid--3 {
+      grid-template-columns: 1fr;
+   }
+}
+
+/* Card minimalist */
+.dv-order-card {
+   border-radius: 14px;
+   padding: 6px;
+   background: var(--black-s);
+   user-select: none;
+}
+
+.dv-order-card__top {
+   display: flex;
+   align-items: center;
+   gap: 6px;
+}
+
+.dv-order-card__handle {
+   text-align: center;
+   color: var(--white-p);
+   padding: 0 3px;
+}
+
+.dv-order-card__title {
+   min-width: 0;
+   color: var(--white-p);
+   flex: 1 1 auto;
+}
+
+.dv-order-card__name {
+   color: var(--white-p);
+   white-space: nowrap;
+   overflow: hidden;
+   text-align: left;
+   text-overflow: ellipsis;
+}
+
+.dv-order-card__sub {
+   display: flex;
+   gap: 8px;
+   align-items: center;
+   font-size: 11px;
+   color: var(--white-s);
+}
+
+.dv-order-card__tag {
+   color: var(--white-s);
+}
+
+/* Buiucani = verde */
+.dv-order-card.is-buiucani {
+   background: var(--event-green);
+}
+
+/* Botanica = ROZ */
+.dv-order-card.is-botanica {
+   background: var(--event-blue);
+}
+
+/* Ciocana = ALBASTRU */
+.dv-order-card.is-ciocana {
+   background: var(--event-pink);
+}
+
+/* Fallback */
+.dv-order-card.is-other {
+   border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Mini “programări” */
+.dv-mini {
+   display: grid;
+   grid-template-columns: repeat(1, 1fr);
+   gap: 6px;
+}
+.dv-mini__slot {
+   height: 20px;
+   border-radius: 6px;
+}
+.dv-mini__slot.is-yellow {
+   background: var(--event-default);
+}
+.dv-mini__slot.is-red {
+   background: var(--event-red);
+}
+
+// buton de editare
+.dv-track-edit-btn {
+   position: absolute;
+   left: 8px;
+   top: 8px;
+   z-index: 10;
+   padding: 6px 12px;
+   border-radius: 30px;
+   cursor: pointer;
+   transition: var(--elastic-s);
+   background: #80d1f6;
+   color: #002c41;
+}
+.dv-track-edit-btn:hover {
+   letter-spacing: 1.2px;
 }

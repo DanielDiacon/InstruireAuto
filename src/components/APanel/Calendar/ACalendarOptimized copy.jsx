@@ -50,94 +50,94 @@ import { getInstructorBlackouts } from "../../../api/instructorsService";
 
 /* ================= HELPERE GENERALE ================= */
 const LS_DV_MONTH_KEY = "__DV_CALENDAR_MONTH"; // salvează "YYYY-MM"
-const LS_DV_ZOOM_KEY = "__DV_CALENDAR_ZOOM_PCT"; // ex: "50","75","100","125","150"
-const LS_DV_SCROLL_STATE_KEY = "__DV_CALENDAR_SCROLL_STATE_V1";
-// JSON: { [monthKey]: { x:number, y:number, t:number } }
-const DV_SCROLL_KEEP = 12;
+/* ================== PERSIST PAN (X/Y) ON REFRESH ================== */
+const LS_DV_PAN_PREFIX = "__DV_PAN_V1"; // per-lună (și opțional per-filtru)
+/* ================== PERSIST ZOOM ================== */
+const LS_DV_ZOOM_KEY = "__DV_ZOOM_V1";
 
-function safeReadScrollStateMap() {
-   if (typeof window === "undefined") return {};
-   try {
-      const raw = localStorage.getItem(LS_DV_SCROLL_STATE_KEY);
-      if (!raw) return {};
-      const obj = JSON.parse(raw);
-      if (!obj || typeof obj !== "object") return {};
-      return obj;
-   } catch {
-      return {};
-   }
-}
-
-function safeWriteScrollStateMap(map) {
-   if (typeof window === "undefined") return;
-   try {
-      localStorage.setItem(LS_DV_SCROLL_STATE_KEY, JSON.stringify(map || {}));
-   } catch {}
-}
-
-function safeReadScrollXY(monthKey) {
-   if (typeof window === "undefined") return null;
-   const key = String(monthKey || "").trim();
-   if (!key) return null;
-
-   const map = safeReadScrollStateMap();
-   const entry = map?.[key];
-   if (!entry) return null;
-
-   const x = Number(entry.x);
-   const y = Number(entry.y);
-
-   return {
-      x: Number.isFinite(x) ? x : 0,
-      y: Number.isFinite(y) ? y : 0,
-   };
-}
-
-function safeWriteScrollXY(monthKey, x, y) {
-   if (typeof window === "undefined") return;
-   const key = String(monthKey || "").trim();
-   if (!key) return;
-
-   const map0 = safeReadScrollStateMap();
-   const map = map0 && typeof map0 === "object" ? { ...map0 } : {};
-
-   const entry = {
-      x: Math.max(0, Math.trunc(Number(x) || 0)),
-      y: Math.max(0, Math.trunc(Number(y) || 0)),
-      t: Date.now(),
-   };
-
-   map[key] = entry;
-
-   // prune: păstrăm ultimele DV_SCROLL_KEEP luni folosite
-   const sorted = Object.entries(map).sort(
-      (a, b) => Number(b?.[1]?.t || 0) - Number(a?.[1]?.t || 0),
-   );
-
-   const pruned = {};
-   for (let i = 0; i < sorted.length && i < DV_SCROLL_KEEP; i++) {
-      pruned[sorted[i][0]] = sorted[i][1];
-   }
-
-   safeWriteScrollStateMap(pruned);
-}
-
-function safeReadZoomPercent() {
+function safeReadZoom() {
    if (typeof window === "undefined") return null;
    try {
       const raw = localStorage.getItem(LS_DV_ZOOM_KEY);
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : null;
+      if (!raw) return null;
+
+      // acceptă fie număr simplu, fie JSON {z:...}
+      let z = null;
+      if (raw.trim().startsWith("{")) {
+         const obj = JSON.parse(raw);
+         z = Number(obj?.z);
+      } else {
+         z = Number(raw);
+      }
+
+      return Number.isFinite(z) ? z : null;
    } catch {
       return null;
    }
 }
 
-function safeWriteZoomPercent(pct) {
+function safeWriteZoom(z) {
    if (typeof window === "undefined") return;
    try {
-      localStorage.setItem(LS_DV_ZOOM_KEY, String(pct));
+      localStorage.setItem(
+         LS_DV_ZOOM_KEY,
+         JSON.stringify({ z: Number(z) || 0, t: Date.now() }),
+      );
    } catch {}
+}
+
+function makePanKey(monthKey, sectorKey = "") {
+   // sectorKey e optional; dacă nu vrei per-sector, lasă-l ""
+   const mk = String(monthKey || "").trim() || "unknown-month";
+   const sk = String(sectorKey || "").trim() || "all";
+   return `${LS_DV_PAN_PREFIX}:${mk}:${sk}`;
+}
+
+function safeReadPan(key) {
+   if (typeof window === "undefined") return null;
+   try {
+      const raw = localStorage.getItem(String(key));
+      if (!raw) return null;
+      const obj = JSON.parse(raw);
+      const x = Number(obj?.x);
+      const y = Number(obj?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      return { x, y };
+   } catch {
+      return null;
+   }
+}
+
+function safeWritePan(key, x, y) {
+   if (typeof window === "undefined") return;
+   try {
+      localStorage.setItem(
+         String(key),
+         JSON.stringify({
+            x: Math.max(0, Number(x) || 0),
+            y: Math.max(0, Number(y) || 0),
+            t: Date.now(),
+         }),
+      );
+   } catch {}
+}
+
+function clampPanToScroller(scroller, x, y) {
+   if (!scroller) return { x: 0, y: 0 };
+
+   const maxLeft = Math.max(
+      0,
+      (scroller.scrollWidth || 0) - (scroller.clientWidth || 0),
+   );
+   const maxTop = Math.max(
+      0,
+      (scroller.scrollHeight || 0) - (scroller.clientHeight || 0),
+   );
+
+   const cx = Math.max(0, Math.min(Number(x) || 0, maxLeft));
+   const cy = Math.max(0, Math.min(Number(y) || 0, maxTop));
+
+   return { x: cx, y: cy };
 }
 
 function monthKeyToDate(key) {
@@ -372,21 +372,13 @@ const DUMMY_INSTRUCTORS = Array.from({ length: 10 }).map((_, idx) => {
 /* === CONSTANTE PENTRU LAYOUT / ZOOM / TIMING === */
 
 const Z_BASE = 0.6;
-const ZOOM_PERCENT_LEVELS = [50, 75, 100, 125, 150];
-function closestZoomPercentFromZoom(zoomVal) {
-   const currentPercent = (zoomVal / Z_BASE) * 100;
-   let best = ZOOM_PERCENT_LEVELS[0];
-   let bestDiff = Infinity;
+const Z_MIN = Z_BASE * 0.5;
+const Z_MAX = Z_BASE * 2.0;
 
-   for (const p of ZOOM_PERCENT_LEVELS) {
-      const diff = Math.abs(p - currentPercent);
-      if (diff < bestDiff) {
-         bestDiff = diff;
-         best = p;
-      }
-   }
-   return best;
-}
+const clampZoom = (val) =>
+   Math.max(Z_MIN, Math.min(Z_MAX, Number(val) || Z_BASE));
+
+const ZOOM_PERCENT_LEVELS = [50, 75, 100, 125, 150];
 
 const EMPTY_EVENTS = [];
 
@@ -498,6 +490,7 @@ export default function ACalendarOptimized({
 
    const scrollRef = useRef(null);
    const dayRefs = useRef(new Map());
+
    const scrollLazyRafRef = useRef(null);
 
    const [visibleDays, setVisibleDays] = useState(() => new Set());
@@ -607,41 +600,45 @@ export default function ACalendarOptimized({
       return () => mql.removeEventListener?.("change", apply);
    }, []);
 
-   const Z_MIN = Z_BASE * 0.5;
-   const Z_MAX = Z_BASE * 2.0;
    const [zoom, setZoom] = useState(() => {
-      const Z_MIN0 = Z_BASE * 0.5;
-      const Z_MAX0 = Z_BASE * 2.0;
+      if (typeof window === "undefined") return Z_BASE;
 
-      const savedPct = safeReadZoomPercent();
-      const pct = Number.isFinite(savedPct) ? savedPct : 100;
+      // pe mobil rămânem pe Z_BASE (și NU stricăm preferința desktop)
+      const isPhone =
+         window.matchMedia?.("(max-width: 768px)")?.matches ?? false;
+      if (isPhone) return Z_BASE;
 
-      const z0 = (pct / 100) * Z_BASE;
-      return Math.max(Z_MIN0, Math.min(Z_MAX0, z0));
+      const saved = safeReadZoom();
+      return saved != null ? clampZoom(saved) : Z_BASE;
    });
 
-   const setZoomClamped = useCallback(
-      (val) => {
-         const z = Math.max(Z_MIN, Math.min(Z_MAX, val));
-         setZoom(z);
-         return z;
-      },
-      [Z_MIN, Z_MAX],
-   );
+   const setZoomClamped = useCallback((val) => {
+      const z = clampZoom(val);
+      setZoom(z);
+      return z;
+   }, []);
 
+   // dacă intrăm pe mobile => forțăm Z_BASE, dar NU salvăm peste zoom-ul desktop
    useEffect(() => {
-      if (isMobile) {
-         setZoomClamped(Z_BASE);
-         return;
-      }
+      if (isMobile) setZoom(Z_BASE);
+   }, [isMobile]);
 
-      // când treci din mobile -> desktop, restaurăm preferința salvată
-      const savedPct = safeReadZoomPercent();
-      if (savedPct != null) {
-         const target = (Number(savedPct) / 100) * Z_BASE;
-         setZoomClamped(target);
-      }
-   }, [isMobile, setZoomClamped]);
+   // dacă ieșim din mobile (resize/orientare) => re-hidratăm o singură dată din LS
+   const zoomHydratedRef = useRef(false);
+   useEffect(() => {
+      if (isMobile) return;
+      if (zoomHydratedRef.current) return;
+      zoomHydratedRef.current = true;
+
+      const saved = safeReadZoom();
+      if (saved != null) setZoom(clampZoom(saved));
+   }, [isMobile]);
+
+   // persistă zoom-ul doar pe desktop
+   useEffect(() => {
+      if (isMobile) return;
+      safeWriteZoom(zoom);
+   }, [zoom, isMobile]);
 
    const zoomOptions = useMemo(
       () =>
@@ -674,11 +671,6 @@ export default function ACalendarOptimized({
       },
       [setZoomClamped],
    );
-   useEffect(() => {
-      if (isMobile) return; // NU suprascriem setarea desktop când mobile forțează Z_BASE
-      const pct = closestZoomPercentFromZoom(zoom);
-      safeWriteZoomPercent(pct);
-   }, [zoom, isMobile]);
 
    const suspendFlagsRef = useRef({ isInteracting: false });
 
@@ -2053,6 +2045,90 @@ export default function ACalendarOptimized({
       return `${y}-${String(m + 1).padStart(2, "0")}`;
    }, [currentDate]);
 
+   /* ================== PAN RESTORE + SAVE ================== */
+
+   // ✅ cheie per lună + per sector (ca să nu încurce layout-ul)
+   const panStorageKey = useMemo(() => {
+      // dacă NU vrei per sector, pune doar: makePanKey(currentMonthValue, "")
+      return makePanKey(currentMonthValue, sectorFilterNorm);
+   }, [currentMonthValue, sectorFilterNorm]);
+
+   const panRestoredKeyRef = useRef(null); // memorează ce key am restaurat
+
+   const savePanNow = useCallback(() => {
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+
+      safeWritePan(panStorageKey, scroller.scrollLeft, scroller.scrollTop);
+   }, [panStorageKey]);
+
+   // ✅ restore după refresh (o singură dată pe key)
+   useLayoutEffect(() => {
+      if (orderEditOpen) return;
+
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+
+      const key = panStorageKey;
+
+      // ✅ restore doar o dată per cheie
+      if (panRestoredKeyRef.current === key) return;
+      panRestoredKeyRef.current = key;
+
+      const saved = safeReadPan(key);
+      if (!saved) return;
+
+      let raf1 = 0;
+      let raf2 = 0;
+
+      raf1 = requestAnimationFrame(() => {
+         raf2 = requestAnimationFrame(() => {
+            const s = scrollRef.current;
+            if (!s) return;
+
+            const { x, y } = clampPanToScroller(s, saved.x, saved.y);
+            s.scrollLeft = x;
+            s.scrollTop = y;
+
+            // ✅ sync imediat (ca să nu “revină” după)
+            safeWritePan(key, x, y);
+         });
+      });
+
+      return () => {
+         if (raf1) cancelAnimationFrame(raf1);
+         if (raf2) cancelAnimationFrame(raf2);
+      };
+   }, [panStorageKey, rowHeight, orderEditOpen]);
+
+   // ✅ salvează X/Y la scroll (throttle pe RAF) + beforeunload
+   useEffect(() => {
+      if (orderEditOpen) return; // nu salva scrollul din editor
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+
+      let raf = 0;
+
+      const onScroll = () => {
+         if (raf) return;
+         raf = requestAnimationFrame(() => {
+            raf = 0;
+            savePanNow();
+         });
+      };
+
+      const onBeforeUnload = () => savePanNow();
+
+      scroller.addEventListener("scroll", onScroll, { passive: true });
+      window.addEventListener("beforeunload", onBeforeUnload);
+
+      return () => {
+         scroller.removeEventListener("scroll", onScroll);
+         window.removeEventListener("beforeunload", onBeforeUnload);
+         if (raf) cancelAnimationFrame(raf);
+      };
+   }, [savePanNow, orderEditOpen]);
+
    useEffect(() => {
       if (typeof window === "undefined") return;
       try {
@@ -2070,89 +2146,6 @@ export default function ACalendarOptimized({
       blackoutInFlightRef.current = new Set();
       setBlackoutVer((v) => v + 1);
    }, [currentMonthValue]);
-   // ✅ Scroll state (X/Y) per lună — persist + restore din localStorage
-   const scrollPosRef = useRef({ x: 0, y: 0 });
-   const scrollSaveTimerRef = useRef(null);
-
-   // ca să nu re-restaurăm la infinit
-   const restoredScrollRef = useRef({ monthKey: null, dataReady: null });
-
-   const persistScrollNow = useCallback(() => {
-      if (orderEditOpen) return; // NU salvăm când e editorul deschis
-      const x = scrollPosRef.current.x || 0;
-      const y = scrollPosRef.current.y || 0;
-      safeWriteScrollXY(currentMonthValue, x, y);
-   }, [currentMonthValue, orderEditOpen]);
-
-   const schedulePersistScroll = useCallback(
-      (x, y) => {
-         scrollPosRef.current = { x, y };
-
-         if (orderEditOpen) return;
-         if (scrollSaveTimerRef.current)
-            clearTimeout(scrollSaveTimerRef.current);
-
-         scrollSaveTimerRef.current = setTimeout(() => {
-            persistScrollNow();
-         }, 180);
-      },
-      [orderEditOpen, persistScrollNow],
-   );
-
-   useEffect(() => {
-      return () => {
-         if (scrollSaveTimerRef.current) {
-            clearTimeout(scrollSaveTimerRef.current);
-            scrollSaveTimerRef.current = null;
-         }
-      };
-   }, []);
-
-   // ✅ RESTORE din localStorage (o dată per lună; re-aplică când treci din dummy -> real)
-   useLayoutEffect(() => {
-      const el = scrollRef.current;
-      if (!el) return;
-      if (orderEditOpen) return;
-
-      const prev = restoredScrollRef.current;
-
-      const shouldApply =
-         prev.monthKey !== currentMonthValue ||
-         (prev.monthKey === currentMonthValue &&
-            prev.dataReady === false &&
-            dataReady === true);
-
-      if (!shouldApply) return;
-
-      const saved = safeReadScrollXY(currentMonthValue);
-
-      restoredScrollRef.current = {
-         monthKey: currentMonthValue,
-         dataReady,
-      };
-
-      if (!saved) return;
-
-      const apply = () => {
-         const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
-         const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
-
-         const x = Math.max(0, Math.min(saved.x || 0, maxLeft));
-         const y = Math.max(0, Math.min(saved.y || 0, maxTop));
-
-         el.scrollLeft = x;
-         el.scrollTop = y;
-
-         scrollPosRef.current = { x, y };
-         // ajută la visibleDays după restore
-         try {
-            recomputeVisibleDays();
-         } catch {}
-      };
-
-      // 2 rAF = layout stabil (după ce se calculează width/height)
-      requestAnimationFrame(() => requestAnimationFrame(apply));
-   }, [currentMonthValue, orderEditOpen, dataReady, recomputeVisibleDays]);
 
    const instIdsAll = useMemo(() => {
       if (isDummyMode) return [];
@@ -2512,24 +2505,10 @@ export default function ACalendarOptimized({
             console.error("[DayView] fetchReservationsForMonth error", e);
          }
 
-         // ✅ Nu mai forța 0; dacă există poziție salvată pt luna aleasă, o folosim
-         try {
-            const newMonthKey = `${newDate.getFullYear()}-${pad2(newDate.getMonth() + 1)}`;
-            const saved = safeReadScrollXY(newMonthKey);
-
-            // resetăm “marker”-ul de restore ca să permită aplicarea pentru luna nouă
-            restoredScrollRef.current = { monthKey: null, dataReady: null };
-
-            const el = scrollRef.current;
-            if (el) {
-               el.scrollLeft = saved?.x ?? 0;
-               el.scrollTop = saved?.y ?? 0;
-               scrollPosRef.current = {
-                  x: el.scrollLeft || 0,
-                  y: el.scrollTop || 0,
-               };
-            }
-         } catch {}
+         if (scrollRef.current) {
+            scrollRef.current.scrollLeft = 0;
+            scrollRef.current.scrollTop = 0;
+         }
 
          disarmAutoScrollY();
          setAutoFocusEventId(null);
@@ -2666,14 +2645,7 @@ export default function ACalendarOptimized({
             });
          });
 
-         // ✅ IMPORTANT: armează Y înainte de primul render cu activeEventId
-         if (hits.length) {
-            const firstId = String(hits[0].eventId);
-            activeEventIdRef.current = firstId; // ca gate-ul să nu pice pe "activeId null"
-            armAutoScrollYOnce(firstId, `search-init:${raw}:${Date.now()}`);
-         }
-
-         setSearchState({ query: raw, hits, index: 0 });
+         setSearchState({ query: raw, hits, index: hits.length ? 0 : 0 });
       };
 
       if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -2681,7 +2653,7 @@ export default function ACalendarOptimized({
       } else {
          setTimeout(doWork, 0);
       }
-   }, [searchInput, loadedDays, eventsByDay, clearSearch, armAutoScrollYOnce]);
+   }, [searchInput, loadedDays, eventsByDay, clearSearch]);
 
    const searchHits = searchState.hits;
    const searchTotal = searchHits.length;
@@ -2796,10 +2768,6 @@ export default function ACalendarOptimized({
       if (!scroller) return;
 
       const onScroll = () => {
-         const el = scroller;
-         // ✅ memorează poziția curentă
-         schedulePersistScroll(el.scrollLeft || 0, el.scrollTop || 0);
-
          if (scrollLazyRafRef.current) return;
          scrollLazyRafRef.current = requestAnimationFrame(() => {
             scrollLazyRafRef.current = null;
@@ -2824,7 +2792,7 @@ export default function ACalendarOptimized({
             scrollLazyRafRef.current = null;
          }
       };
-   }, [recomputeVisibleDays, schedulePersistScroll]);
+   }, [recomputeVisibleDays]);
 
    return (
       <div className="dayview__wrapper">
@@ -3209,7 +3177,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                                     layout={{
                                        colWidth: baseMetrics.colw,
                                        colGap: 12 * zoom,
-                                       headerHeight: 100 * zoom,
+                                       headerHeight: 60 * zoom,
                                        slotHeight: 125 * zoom,
                                        colsPerRow: maxColsPerGroup,
                                        rowGap: 24 * zoom,

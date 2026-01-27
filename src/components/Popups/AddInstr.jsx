@@ -27,7 +27,7 @@ import AlertPills from "../Utils/AlertPills";
 /* helpers */
 const clean = (o = {}) =>
    Object.fromEntries(
-      Object.entries(o).filter(([_, v]) => v !== undefined && v !== "")
+      Object.entries(o).filter(([_, v]) => v !== undefined && v !== ""),
    );
 
 const normPlate = (s) =>
@@ -64,7 +64,7 @@ function extractServerErrors(err) {
             .replace(/^\s*Error:\s*/i, "")
             .replace(/Bad Request/gi, "")
             .replace(/Conflict/gi, "")
-            .trim()
+            .trim(),
       )
       .filter(Boolean);
 }
@@ -95,8 +95,8 @@ function toIsoUtcRaw(localDateObj, timeStrHHMM) {
          hh,
          mm,
          0,
-         0
-      )
+         0,
+      ),
    ).toISOString();
 }
 
@@ -178,7 +178,7 @@ function highlightText(text, query) {
          </i>
       ) : (
          part
-      )
+      ),
    );
 }
 
@@ -205,13 +205,13 @@ function AddInstr() {
             id: Date.now() + Math.random(),
             text,
             type: "error",
-         }))
+         })),
       );
    }, []);
    const clearPills = useCallback(() => setPillMessages([]), []);
    const popPill = useCallback(
       () => setPillMessages((prev) => prev.slice(0, -1)),
-      []
+      [],
    );
 
    // creare instructor
@@ -221,7 +221,8 @@ function AddInstr() {
       phone: "",
       email: "",
       password: "",
-      sector: "", // ✅ input liber
+      sector: "",
+      order: "",
       isActive: true,
       instructorsGroupId: null,
       carPlate: "",
@@ -249,7 +250,7 @@ function AddInstr() {
    }, []);
    const popEditPill = useCallback(
       () => setEditPills((prev) => prev.slice(0, -1)),
-      []
+      [],
    );
 
    const getUserByIdFromStore = (id) =>
@@ -260,7 +261,7 @@ function AddInstr() {
          const u = inst?.userId ? getUserByIdFromStore(inst.userId) : null;
          return u?.email || inst.email || "";
       },
-      [users]
+      [users],
    );
 
    useEffect(() => {
@@ -281,7 +282,7 @@ function AddInstr() {
          const phone = String(inst.phone || "").toLowerCase();
          const sector = String(inst.sector || "").toLowerCase();
          const car = cars.find(
-            (c) => String(c.instructorId) === String(inst.id)
+            (c) => String(c.instructorId) === String(inst.id),
          );
          const plate = String(car?.plateNumber || "").toLowerCase();
          return (
@@ -298,7 +299,7 @@ function AddInstr() {
    const upsertCarForInstructor = async ({ instructorId, plate, gearbox }) => {
       const normalizedPlate = normPlate(plate);
       const existing = cars.find(
-         (c) => String(c.instructorId) === String(instructorId)
+         (c) => String(c.instructorId) === String(instructorId),
       );
 
       if (!normalizedPlate) {
@@ -335,7 +336,7 @@ function AddInstr() {
       if (e) {
          const dupInUsers = users.some((u) => normEmail(u.email) === e);
          const dupInInstructors = instructors.some(
-            (i) => !i.userId && normEmail(i.email) === e
+            (i) => !i.userId && normEmail(i.email) === e,
          );
          if (dupInUsers || dupInInstructors)
             errs.push("Emailul este deja folosit.");
@@ -353,7 +354,7 @@ function AddInstr() {
       const p = normPhone(editInstr.phone);
       if (p) {
          const dupPhone = instructors.some(
-            (i) => String(i.id) !== String(id) && normPhone(i.phone) === p
+            (i) => String(i.id) !== String(id) && normPhone(i.phone) === p,
          );
          if (dupPhone)
             errs.push("Telefonul este deja folosit de alt instructor.");
@@ -361,13 +362,13 @@ function AddInstr() {
       const e = normEmail(editInstr.email);
       if (e) {
          const dupInUsers = users.some(
-            (u) => String(u.id) !== String(uid) && normEmail(u.email) === e
+            (u) => String(u.id) !== String(uid) && normEmail(u.email) === e,
          );
          const dupInInstructors = instructors.some(
             (i) =>
                String(i.id) !== String(id) &&
                !i.userId &&
-               normEmail(i.email) === e
+               normEmail(i.email) === e,
          );
          if (dupInUsers || dupInInstructors)
             errs.push("Emailul este deja folosit de alt utilizator.");
@@ -377,7 +378,7 @@ function AddInstr() {
          const dupPlate = cars.some(
             (c) =>
                String(c.instructorId) !== String(id) &&
-               normPlate(c.plateNumber) === plate
+               normPlate(c.plateNumber) === plate,
          );
          if (dupPlate) errs.push("Numărul de înmatriculare este deja folosit.");
       }
@@ -417,7 +418,7 @@ function AddInstr() {
          });
 
          const createdInstr = await dispatch(
-            addInstructor(instrPayload)
+            addInstructor(instrPayload),
          ).unwrap();
          createdId = createdInstr?.id ?? createdInstr?.data?.id;
 
@@ -466,7 +467,7 @@ function AddInstr() {
                ? msgs
                : [
                     "Eroare la creare instructor (verifică email/telefon/parolă).",
-                 ]
+                 ],
          );
       } finally {
          setSaving(false);
@@ -491,7 +492,7 @@ function AddInstr() {
    const [periodEnd, setPeriodEnd] = useState(""); // obligatoriu
    const [weeklyDay, setWeeklyDay] = useState(1); // 1 = Lun
    const [weeklySelection, setWeeklySelection] = useState(() =>
-      initWeeklySelection()
+      initWeeklySelection(),
    );
 
    const periodState = useMemo(() => {
@@ -572,8 +573,8 @@ function AddInstr() {
                      e?.message || e?.toString?.() || JSON.stringify(e || {});
                   if (/not\s*found/i.test(msg)) return null; // ignorăm 404
                   throw e;
-               })
-            )
+               }),
+            ),
          );
 
          await dispatch(fetchInstructors());
@@ -592,8 +593,8 @@ function AddInstr() {
                   id: Date.now() + Math.random(),
                   text: t,
                   type: "error",
-               })
-            )
+               }),
+            ),
          );
       } finally {
          setSaving(false);
@@ -695,7 +696,7 @@ function AddInstr() {
 
          // Best-effort: per item, ca să nu pice tot batch-ul la conflict
          const results = await Promise.allSettled(
-            items.map((it) => addInstructorBlackouts([it]))
+            items.map((it) => addInstructorBlackouts([it])),
          );
 
          const rejected = results.filter((r) => r.status === "rejected");
@@ -709,7 +710,7 @@ function AddInstr() {
                   id: Date.now() + Math.random(),
                   text: t,
                   type: "error",
-               }))
+               })),
             );
          }
 
@@ -733,8 +734,8 @@ function AddInstr() {
                   id: Date.now() + Math.random(),
                   text: t,
                   type: "error",
-               })
-            )
+               }),
+            ),
          );
       } finally {
          setSaving(false);
@@ -764,7 +765,7 @@ function AddInstr() {
                id: Date.now() + Math.random(),
                text: t,
                type: "error",
-            }))
+            })),
          );
          setSaving(false);
          return;
@@ -780,10 +781,11 @@ function AddInstr() {
             phone: editInstr.phone?.trim(),
             email: editInstr.email?.trim(),
             sector: editInstr.sector,
+            order: editInstr.order?.trim(),
          });
 
          await dispatch(
-            updateInstructor({ id: editingId, data: instrPayload })
+            updateInstructor({ id: editingId, data: instrPayload }),
          ).unwrap();
 
          await upsertCarForInstructor({
@@ -805,8 +807,8 @@ function AddInstr() {
                   id: Date.now() + Math.random(),
                   text: t,
                   type: "error",
-               })
-            )
+               }),
+            ),
          );
          setSaving(false);
          return;
@@ -823,7 +825,7 @@ function AddInstr() {
          return;
       try {
          const existing = cars.find(
-            (c) => String(c.instructorId) === String(id)
+            (c) => String(c.instructorId) === String(id),
          );
          if (existing) await dispatch(removeCar(existing.id)).unwrap();
       } catch {}
@@ -959,7 +961,21 @@ function AddInstr() {
                                              </div>
 
                                              {/* rând 3 */}
-
+                                             {/*<div className="instructors-popup__form-row">
+                                                <input
+                                                   type="text"
+                                                   className="instructors-popup__input"
+                                                   placeholder="Order (ex: 1)"
+                                                   value={editInstr.order}
+                                                   onChange={(e) =>
+                                                      setEditInstr((s) => ({
+                                                         ...s,
+                                                         order: e.target.value,
+                                                      }))
+                                                   }
+                                                   autoComplete="off"
+                                                />
+                                             </div>*/}
                                              {/* rând 4 */}
                                              <div className="instructors-popup__form-row">
                                                 <input
@@ -1096,7 +1112,7 @@ function AddInstr() {
                                                    className="instructors-popup__form-button instructors-popup__form-button--cancel"
                                                    onClick={() =>
                                                       setShowBlackoutList(
-                                                         (v) => !v
+                                                         (v) => !v,
                                                       )
                                                    }
                                                    disabled={
@@ -1131,34 +1147,34 @@ function AddInstr() {
                                                                (b) => {
                                                                   const baseIso =
                                                                      getBlackoutDT(
-                                                                        b
+                                                                        b,
                                                                      );
                                                                   const dow =
                                                                      baseIso
                                                                         ? dowFromIsoUTC(
-                                                                             baseIso
+                                                                             baseIso,
                                                                           )
                                                                         : null;
                                                                   const hhmm =
                                                                      baseIso
                                                                         ? hhmmFromIso(
-                                                                             baseIso
+                                                                             baseIso,
                                                                           )
                                                                         : null;
 
                                                                   const startLbl =
                                                                      formatLocalDate(
                                                                         b.startDateTime ||
-                                                                           b.dateTime
+                                                                           b.dateTime,
                                                                      );
                                                                   const endLbl =
                                                                      formatLocalDate(
-                                                                        b.endDateTime
+                                                                        b.endDateTime,
                                                                      );
 
                                                                   const isMarked =
                                                                      blkRemoveIds.has(
-                                                                        b.id
+                                                                        b.id,
                                                                      );
 
                                                                   return (
@@ -1179,11 +1195,11 @@ function AddInstr() {
                                                                                  null &&
                                                                               hhmm
                                                                                  ? `${weekdayShortLabel(
-                                                                                      dow
+                                                                                      dow,
                                                                                    )} · ${hhmm} `
                                                                                  : String(
                                                                                       b.type ||
-                                                                                         ""
+                                                                                         "",
                                                                                    ).toUpperCase()}
                                                                            </span>
                                                                         </div>
@@ -1210,7 +1226,7 @@ function AddInstr() {
                                                                            className="instructors-popup__form-button instructors-popup__form-button--delete blackouts__list-delete-btn"
                                                                            onClick={() =>
                                                                               toggleDeleteId(
-                                                                                 b.id
+                                                                                 b.id,
                                                                               )
                                                                            }
                                                                            disabled={
@@ -1224,7 +1240,7 @@ function AddInstr() {
                                                                         </button>
                                                                      </li>
                                                                   );
-                                                               }
+                                                               },
                                                             )}
                                                          </ul>
                                                       )}
@@ -1252,7 +1268,7 @@ function AddInstr() {
                                                          className="instructors-popup__form-button instructors-popup__form-button--cancel"
                                                          onClick={() =>
                                                             setShowBlackoutList(
-                                                               false
+                                                               false,
                                                             )
                                                          }
                                                          disabled={
@@ -1275,7 +1291,8 @@ function AddInstr() {
                                                             value={periodStart}
                                                             onChange={(e) =>
                                                                setPeriodStart(
-                                                                  e.target.value
+                                                                  e.target
+                                                                     .value,
                                                                )
                                                             }
                                                             disabled={
@@ -1294,7 +1311,8 @@ function AddInstr() {
                                                             value={periodEnd}
                                                             onChange={(e) =>
                                                                setPeriodEnd(
-                                                                  e.target.value
+                                                                  e.target
+                                                                     .value,
                                                                )
                                                             }
                                                             disabled={
@@ -1347,7 +1365,7 @@ function AddInstr() {
                                                             }`}
                                                             onClick={() =>
                                                                setWeeklyDay(
-                                                                  d.key
+                                                                  d.key,
                                                                )
                                                             }
                                                             disabled={
@@ -1364,7 +1382,7 @@ function AddInstr() {
                                                    {(() => {
                                                       const setForCreate =
                                                          weeklySelection.get(
-                                                            weeklyDay
+                                                            weeklyDay,
                                                          ) || new Set();
 
                                                       return (
@@ -1373,7 +1391,7 @@ function AddInstr() {
                                                                (ora) => {
                                                                   const selected =
                                                                      setForCreate.has(
-                                                                        ora.oraStart
+                                                                        ora.oraStart,
                                                                      );
 
                                                                   const className =
@@ -1384,10 +1402,10 @@ function AddInstr() {
                                                                            : "",
                                                                      ]
                                                                         .filter(
-                                                                           Boolean
+                                                                           Boolean,
                                                                         )
                                                                         .join(
-                                                                           " "
+                                                                           " ",
                                                                         );
 
                                                                   return (
@@ -1407,7 +1425,7 @@ function AddInstr() {
                                                                         onClick={() =>
                                                                            toggleWeeklySlotCreateOnly(
                                                                               weeklyDay,
-                                                                              ora.oraStart
+                                                                              ora.oraStart,
                                                                            )
                                                                         }
                                                                         title={
@@ -1421,7 +1439,7 @@ function AddInstr() {
                                                                         }
                                                                      </button>
                                                                   );
-                                                               }
+                                                               },
                                                             )}
                                                          </div>
                                                       );
@@ -1450,10 +1468,10 @@ function AddInstr() {
                                                          onClick={() => {
                                                             setEditingId(null);
                                                             setEditingMode(
-                                                               null
+                                                               null,
                                                             );
                                                             setEditingUserId(
-                                                               null
+                                                               null,
                                                             );
                                                          }}
                                                          disabled={saving}
@@ -1474,25 +1492,25 @@ function AddInstr() {
                                                 `${inst.firstName || ""} ${
                                                    inst.lastName || ""
                                                 }`,
-                                                search
+                                                search,
                                              )}
                                           </h3>
                                           <p>
                                              {highlightText(
                                                 inst.phone || "",
-                                                search
+                                                search,
                                              )}
                                           </p>
                                           <p>
                                              {highlightText(
                                                 mergedEmail(inst),
-                                                search
+                                                search,
                                              )}
                                           </p>
                                           <p>
                                              {highlightText(
                                                 inst.sector || "",
-                                                search
+                                                search,
                                              )}
                                           </p>
                                           <p>
@@ -1500,9 +1518,9 @@ function AddInstr() {
                                                 cars.find(
                                                    (c) =>
                                                       String(c.instructorId) ===
-                                                      String(inst.id)
+                                                      String(inst.id),
                                                 )?.plateNumber || "—",
-                                                search
+                                                search,
                                              )}
                                           </p>
                                           <p>
@@ -1510,9 +1528,9 @@ function AddInstr() {
                                                 cars.find(
                                                    (c) =>
                                                       String(c.instructorId) ===
-                                                      String(inst.id)
+                                                      String(inst.id),
                                                 )?.gearbox || "—",
-                                                search
+                                                search,
                                              )}
                                           </p>
                                        </div>
@@ -1533,13 +1551,13 @@ function AddInstr() {
                                                 setEditingId(inst.id);
                                                 setEditingMode("details");
                                                 setEditingUserId(
-                                                   inst.userId || null
+                                                   inst.userId || null,
                                                 );
 
                                                 const car = cars.find(
                                                    (c) =>
                                                       String(c.instructorId) ===
-                                                      String(inst.id)
+                                                      String(inst.id),
                                                 );
 
                                                 setEditInstr({
@@ -1552,10 +1570,11 @@ function AddInstr() {
                                                       mergedEmail(inst) || "",
                                                    sector:
                                                       inst.sector || "Botanica",
+                                                   order: inst.order || "",
                                                    carPlate:
                                                       car?.plateNumber || "",
                                                    gearbox: toApiGearbox(
-                                                      car?.gearbox || "manual"
+                                                      car?.gearbox || "manual",
                                                    ),
                                                 });
 
@@ -1571,7 +1590,7 @@ function AddInstr() {
                                                 setEditingId(inst.id);
                                                 setEditingMode("schedule");
                                                 setEditingUserId(
-                                                   inst.userId || null
+                                                   inst.userId || null,
                                                 );
                                                 resetBlackoutsUI();
                                              }}

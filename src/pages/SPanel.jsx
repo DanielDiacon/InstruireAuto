@@ -26,7 +26,7 @@ import addIcon from "../assets/svg/mdi--calendar-plus-outline.svg";
 import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
 import testIcon from "../assets/svg/material-symbols--book-outline.svg";
 import examIcon from "../assets/svg/mdi--book-clock-outline.svg";
-import homeIcon from "../assets/svg/material-symbols--home-outline.svg"; // 👈 nou
+import homeIcon from "../assets/svg/material-symbols--home-outline.svg";
 
 import { openPopup } from "../components/Utils/popupStore";
 import Footer from "../components/Footer";
@@ -56,20 +56,18 @@ function toFloatingDate(val) {
          val.getHours(),
          val.getMinutes(),
          val.getSeconds(),
-         val.getMilliseconds()
+         val.getMilliseconds(),
       );
    }
 
    if (typeof val === "string") {
-      // 2025-10-07T13:30, 2025-10-07 13:30:00.000Z, 2025-10-07T13:30:00+03:00
       const m = val.match(
-         /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?$/
+         /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?$/,
       );
       if (m) {
          const [, Y, Mo, D, h, mi, s] = m;
          return new Date(+Y, +Mo - 1, +D, +h, +mi, s ? +s : 0, 0);
       }
-      // doar data
       const m2 = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (m2) {
          const [, Y, Mo, D] = m2;
@@ -86,42 +84,76 @@ function toFloatingDate(val) {
          d.getHours(),
          d.getMinutes(),
          d.getSeconds(),
-         d.getMilliseconds()
+         d.getMilliseconds(),
       );
    }
    return null;
 }
 
-// format dublu-rând "24\nlun" în Week view + titlu corect
+/* ====== Helpers pentru format scurt (fără punct) ====== */
+const shortWeekday = (date, l, culture) =>
+   l.format(date, "EEE", culture).replaceAll(".", "");
+
 const shortMonth = (date, l, culture) =>
    l.format(date, "MMM", culture).replaceAll(".", "");
 
+const dayCell2Lines = (date, culture, l) => {
+   const d = l.format(date, "d", culture);
+   const w = shortWeekday(date, l, culture);
+   return `${d}\n${w}`;
+};
+
+/* ====== Formate consistente Week/Day/Month ====== */
 const formats = {
-   dayFormat: (date, culture, l) => {
-      const d = l.format(date, "d", culture);
-      const z = l.format(date, "EEE", culture).replaceAll(".", "");
-      return `${d}\n${z}`;
-   },
-   weekdayFormat: (date, culture, l) =>
-      l.format(date, "EEE", culture).replaceAll(".", ""),
+   // WEEK: header-ul pe zile (dublu rând)
+   dayFormat: dayCell2Lines,
+   weekdayFormat: (date, culture, l) => shortWeekday(date, l, culture),
+
+   // label în toolbar pentru Week view
    dayRangeHeaderFormat: ({ start, end }, culture, l) => {
       const sameMonth =
          l.format(start, "M", culture) === l.format(end, "M", culture);
+
       if (sameMonth) {
          return `${l.format(start, "d", culture)}–${l.format(
             end,
             "d",
-            culture
+            culture,
          )} ${shortMonth(start, l, culture)}`;
       }
+
       return `${l.format(start, "d", culture)} ${shortMonth(
          start,
          l,
-         culture
+         culture,
       )} – ${l.format(end, "d", culture)} ${shortMonth(end, l, culture)}`;
    },
+
+   // DAY: label în toolbar pentru Day view (scurt + fără punct)
+   dayHeaderFormat: (date, culture, l) => {
+      const d = l.format(date, "d", culture);
+      const m = shortMonth(date, l, culture);
+      const y = l.format(date, "yyyy", culture);
+      const w = shortWeekday(date, l, culture);
+      return `${d} ${m} ${y} · ${w}`;
+   },
+
+   // MONTH: label în toolbar pentru Month view (scurt + fără punct)
+   monthHeaderFormat: (date, culture, l) =>
+      `${shortMonth(date, l, culture)} ${l.format(date, "yyyy", culture)}`,
+
+   // TIME
    timeGutterFormat: "HH:mm",
    eventTimeRangeFormat: ({ start, end }, culture, l) =>
+      `${l.format(start, "HH:mm", culture)}–${l.format(end, "HH:mm", culture)}`,
+
+   // AGENDA (opțional, consistent)
+   agendaHeaderFormat: ({ start, end }, culture, l) =>
+      formats.dayRangeHeaderFormat({ start, end }, culture, l),
+   agendaDateFormat: (date, culture, l) =>
+      `${l.format(date, "d", culture)} ${shortMonth(date, l, culture)}`,
+   agendaTimeFormat: "HH:mm",
+   agendaTimeRangeFormat: ({ start, end }, culture, l) =>
       `${l.format(start, "HH:mm", culture)}–${l.format(end, "HH:mm", culture)}`,
 };
 
@@ -145,7 +177,6 @@ const messagesRO = {
 
 function SPanel() {
    const links = [
-      // 👇 nou: Acasă pentru student, ca să fie root /student
       { link: "/student", text: "Acasă", icon: homeIcon },
       { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "sAddProg", text: "Programare", icon: addIcon },
@@ -168,7 +199,6 @@ function SPanel() {
             const now = new Date();
 
             const formatted = data.map((item) => {
-               // IMPORTANT: păstrăm ora exactă din string (fără TZ)
                const start = toFloatingDate(item.startTime);
                const end = item.endTime
                   ? toFloatingDate(item.endTime)
@@ -210,7 +240,6 @@ function SPanel() {
       openPopup("eventInfo", { event });
    };
 
-   // Week view: 07:00–21:00
    const MIN_TIME = new Date(1970, 0, 1, 7, 0, 0);
    const MAX_TIME = new Date(1970, 0, 1, 21, 0, 0);
 
@@ -238,12 +267,12 @@ function SPanel() {
                </div>
             </section>
 
-            <section className="calendar">
+            <section className="calendar student">
                <SCalendar
                   localizer={localizer}
                   culture="ro-RO"
                   events={events}
-                  formats={formats}
+                  formats={formats} // ✅ aici e schimbarea
                   messages={messagesRO}
                   defaultView="week"
                   views={["week", "day", "agenda", "month"]}
@@ -254,6 +283,7 @@ function SPanel() {
                   onSelectEvent={handleEventClick}
                />
             </section>
+
             <Footer />
          </main>
       </>

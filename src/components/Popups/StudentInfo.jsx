@@ -1,5 +1,5 @@
 // src/components/Popups/StudentInfoPopup.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { fetchUserReservations } from "../../store/reservationsSlice";
 import { updateStudent, removeStudent } from "../../store/studentsSlice";
@@ -68,7 +68,6 @@ function getReservationStartMs(r) {
    if (v == null) return 0;
 
    if (typeof v === "string") {
-      // Dacă e în format "YYYY-MM-DDTHH:MM..." sau "YYYY-MM-DD HH:MM..."
       const m = v.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
       if (m) {
          const Y = Number(m[1]);
@@ -76,7 +75,6 @@ function getReservationStartMs(r) {
          const D = Number(m[3]);
          const h = Number(m[4]);
          const min = Number(m[5]);
-         // Considerăm valorile ca UTC pentru o ordine stabilă.
          return Date.UTC(Y, M, D, h, min, 0, 0);
       }
       const p = Date.parse(v);
@@ -115,6 +113,20 @@ function isReservationCancelled(r) {
    return st === "cancelled" || st === "canceled";
 }
 
+const clampInt = (n, min = 0, max = Number.POSITIVE_INFINITY) => {
+   const x = Number(n);
+   if (!Number.isFinite(x)) return min;
+   return Math.max(min, Math.min(max, Math.trunc(x)));
+};
+
+const parseAbsences = (v) => {
+   const s = String(v ?? "").trim();
+   if (!s) return 0;
+   // păstrăm doar cifre
+   const only = s.replace(/[^\d]/g, "");
+   return clampInt(only === "" ? 0 : parseInt(only, 10), 0);
+};
+
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
 
@@ -149,6 +161,19 @@ export default function StudentInfoPopup({ student, onClose }) {
    const [downloadingId, setDownloadingId] = useState(null);
    const [downloadError, setDownloadError] = useState("");
 
+   // ===== NEW: user extras (PATCH /api/users/{id}) =====
+   const [userExtras, setUserExtras] = useState({
+      medical_documents: false,
+      individual_work: false,
+      number_of_absences: 0,
+   });
+   const [extrasSaving, setExtrasSaving] = useState(false);
+   const [extrasError, setExtrasError] = useState("");
+
+   const [absencesDraft, setAbsencesDraft] = useState("0");
+   const [absencesEditing, setAbsencesEditing] = useState(false);
+   const lastExtrasSnapshotRef = useRef(null);
+
    const safeClose = () => {
       if (typeof onClose === "function") onClose();
       else {
@@ -174,6 +199,12 @@ export default function StudentInfoPopup({ student, onClose }) {
 
    const targetUserId = targetUser?.id || student?.userId || null;
 
+   const getUserExtrasFromUser = (u) => ({
+      medical_documents: Boolean(u?.medical_documents),
+      individual_work: Boolean(u?.individual_work),
+      number_of_absences: clampInt(u?.number_of_absences ?? 0, 0),
+   });
+
    useEffect(() => {
       dispatch(fetchUsers());
 
@@ -188,6 +219,13 @@ export default function StudentInfoPopup({ student, onClose }) {
       setLiveStudent(student || {});
       setConfirmDelete(false);
       setTab("reservations");
+      setIsEditing(false);
+      setIsEditingNote(false);
+
+      // reset extras UI state
+      setExtrasError("");
+      setExtrasSaving(false);
+      setAbsencesEditing(false);
    }, [student, dispatch]);
 
    useEffect(() => {
@@ -202,6 +240,27 @@ export default function StudentInfoPopup({ student, onClose }) {
       }
    }, [targetUser?.email, isEditing]);
 
+   // Sync userExtras from store user (dar nu suprascriem când salvează sau când user editează absences)
+   useEffect(() => {
+      if (!targetUserId) return;
+      if (extrasSaving) return;
+
+      const next = getUserExtrasFromUser(targetUser);
+      setUserExtras(next);
+
+      if (!absencesEditing) {
+         setAbsencesDraft(String(next.number_of_absences ?? 0));
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [
+      targetUserId,
+      targetUser?.medical_documents,
+      targetUser?.individual_work,
+      targetUser?.number_of_absences,
+      extrasSaving,
+      absencesEditing,
+   ]);
+
    const handleEditToggle = () => setIsEditing(!isEditing);
 
    const handleChange = (e) => {
@@ -212,8 +271,9 @@ export default function StudentInfoPopup({ student, onClose }) {
    const handleSave = async () => {
       try {
          const dataToSend = { ...formData };
+
          const updated = await dispatch(
-            updateStudent({ id: student.id, data: dataToSend })
+            updateStudent({ id: student.id, data: dataToSend }),
          ).unwrap();
 
          const newEmail = normEmail(dataToSend.email);
@@ -228,7 +288,14 @@ export default function StudentInfoPopup({ student, onClose }) {
          }
 
          setLiveStudent(updated);
-         setFormData(updated);
+         setFormData({
+            firstName: updated?.firstName ?? dataToSend.firstName ?? "",
+            lastName: updated?.lastName ?? dataToSend.lastName ?? "",
+            email: updated?.email ?? dataToSend.email ?? "",
+            phone: updated?.phone ?? dataToSend.phone ?? "",
+            privateMessage:
+               updated?.privateMessage ?? dataToSend.privateMessage ?? "",
+         });
          setIsEditing(false);
       } catch (err) {
          console.error("Eroare la salvare:", err);
@@ -242,7 +309,7 @@ export default function StudentInfoPopup({ student, onClose }) {
             updateStudent({
                id: student.id,
                data: { privateMessage: noteValue },
-            })
+            }),
          ).unwrap();
       } catch {
          alert("Nu s-a putut salva notița!");
@@ -349,19 +416,17 @@ export default function StudentInfoPopup({ student, onClose }) {
          setAttemptsLoading(true);
          setAttemptsError("");
          try {
-            // 1) încercăm endpointul nou: /exams/history/student/{studentId}
             const all = await getExamHistoryForStudentIdAll(
                String(targetUserId),
                {
                   pageSize: 50,
                   maxPages: 10,
-               }
+               },
             );
 
             const uid = String(targetUserId);
             const normalized = all
                .map(normalizeAttempt)
-               // Dacă serverul nu pune userId în fiecare item, nu mai filtrăm strict.
                .filter((a) => !a.attemptUserId || a.attemptUserId === uid)
                .sort((a, b) => {
                   const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
@@ -371,7 +436,6 @@ export default function StudentInfoPopup({ student, onClose }) {
 
             if (!cancelled) setAttempts(normalized);
          } catch (e) {
-            // 2) fallback: vechiul "smart" (în caz de 404/405 sau backend vechi)
             try {
                const pageSize = 50;
                let page = 1;
@@ -382,7 +446,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                      {
                         page,
                         limit: pageSize,
-                     }
+                     },
                   );
                   const items = Array.isArray(batch)
                      ? batch
@@ -417,14 +481,14 @@ export default function StudentInfoPopup({ student, onClose }) {
                   const msg = String(
                      e?.message ||
                         e2?.message ||
-                        "Nu am putut încărca încercările."
+                        "Nu am putut încărca încercările.",
                   );
                   const friendly =
                      msg === "AUTH_401"
                         ? "Nu ești autentificat (401)."
                         : msg === "AUTH_403"
-                        ? "Doar Manager/Admin pot vedea încercările acestui student (403)."
-                        : msg;
+                          ? "Doar Manager/Admin pot vedea încercările acestui student (403)."
+                          : msg;
                   setAttemptsError(friendly);
                }
             }
@@ -446,13 +510,80 @@ export default function StudentInfoPopup({ student, onClose }) {
       setDownloadError("");
       setDownloadingId(examId);
       try {
-         await downloadExamPdf(examId /*, `rezultat-exam-${examId}.pdf` */);
+         await downloadExamPdf(examId);
       } catch (e) {
          console.error("Download PDF failed:", e);
          setDownloadError(e?.message || "Descărcarea a eșuat.");
       } finally {
          setDownloadingId(null);
       }
+   };
+
+   // ===== NEW: PATCH helpers for extras =====
+   const patchUserExtras = async (partial) => {
+      if (!targetUserId) return;
+
+      setExtrasError("");
+      const prev = { ...userExtras };
+      lastExtrasSnapshotRef.current = prev;
+
+      const next = {
+         medical_documents: Boolean(
+            partial?.medical_documents ?? userExtras.medical_documents,
+         ),
+         individual_work: Boolean(
+            partial?.individual_work ?? userExtras.individual_work,
+         ),
+         number_of_absences: clampInt(
+            partial?.number_of_absences ?? userExtras.number_of_absences,
+            0,
+         ),
+      };
+
+      // optimistic UI
+      setUserExtras(next);
+      if (!absencesEditing) setAbsencesDraft(String(next.number_of_absences));
+
+      setExtrasSaving(true);
+      try {
+         await updateUser(targetUserId, next); // PATCH /api/users/{id}
+         dispatch(fetchUsers());
+      } catch (e) {
+         console.error("Update user extras failed:", e);
+         setExtrasError("Nu s-au putut salva modificările (user).");
+         // rollback
+         const snap = lastExtrasSnapshotRef.current;
+         if (snap) {
+            setUserExtras(snap);
+            if (!absencesEditing)
+               setAbsencesDraft(String(snap.number_of_absences ?? 0));
+         }
+      } finally {
+         setExtrasSaving(false);
+      }
+   };
+
+   const canEditExtras = Boolean(targetUserId) && !extrasSaving;
+
+   const incAbs = () => {
+      const n = clampInt(userExtras.number_of_absences ?? 0, 0) + 1;
+      setAbsencesEditing(false);
+      patchUserExtras({ number_of_absences: n });
+   };
+
+   const decAbs = () => {
+      const n = Math.max(
+         0,
+         clampInt(userExtras.number_of_absences ?? 0, 0) - 1,
+      );
+      setAbsencesEditing(false);
+      patchUserExtras({ number_of_absences: n });
+   };
+
+   const commitAbsences = () => {
+      const n = parseAbsences(absencesDraft);
+      setAbsencesEditing(false);
+      patchUserExtras({ number_of_absences: n });
    };
 
    return (
@@ -529,9 +660,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                      <div className="students__item-delete">
                         <button
                            onClick={() => setConfirmDelete(true)}
-                           className={`delete-btn ${
-                              confirmDelete ? "hidden" : ""
-                           }`}
+                           className={`delete-btn ${confirmDelete ? "hidden" : ""}`}
                         >
                            Șterge
                         </button>
@@ -566,12 +695,150 @@ export default function StudentInfoPopup({ student, onClose }) {
                      />
                      {displayEmail}
                   </div>
+
                   <div className="students-info__field">
                      <ReactSVG
                         src={phoneIcon}
                         className="students-info__icon"
                      />
                      {liveStudent.phone || "–"}
+                  </div>
+
+                  {/* ===== NEW: 3 elemente (fără Edit mode) într-un rând, PATCH /api/users/{id} ===== */}
+                  <div className="students-info__field students-info__field--extras">
+                     <div
+                        className="students-info__extras-row"
+                        style={{
+                           display: "flex",
+                           gap: 12,
+                           alignItems: "center",
+                           flexWrap: "wrap",
+                           width: "100%",
+                        }}
+                     >
+                        <label
+                           className="students-info__toggle"
+                           style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                           }}
+                           title="medical_documents"
+                        >
+                           <input
+                              type="checkbox"
+                              checked={Boolean(userExtras.medical_documents)}
+                              disabled={!canEditExtras}
+                              onChange={(e) =>
+                                 patchUserExtras({
+                                    medical_documents: e.target.checked,
+                                 })
+                              }
+                           />
+                           <span>Doc. medicale</span>
+                        </label>
+
+                        <label
+                           className="students-info__toggle"
+                           style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                           }}
+                           title="individual_work"
+                        >
+                           <input
+                              type="checkbox"
+                              checked={Boolean(userExtras.individual_work)}
+                              disabled={!canEditExtras}
+                              onChange={(e) =>
+                                 patchUserExtras({
+                                    individual_work: e.target.checked,
+                                 })
+                              }
+                           />
+                           <span>Individual</span>
+                        </label>
+
+                        <div
+                           className="students-info__absences"
+                           style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                           }}
+                           title="number_of_absences"
+                        >
+                           <span style={{ opacity: 0.9 }}>Absențe</span>
+
+                           <button
+                              type="button"
+                              className="students-info__btn students-info__btn--normal"
+                              onClick={decAbs}
+                              disabled={!canEditExtras}
+                              style={{ padding: "4px 10px" }}
+                           >
+                              –
+                           </button>
+
+                           <input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              value={absencesDraft}
+                              disabled={!Boolean(targetUserId)}
+                              onFocus={() => setAbsencesEditing(true)}
+                              onChange={(e) => {
+                                 setAbsencesDraft(e.target.value);
+                              }}
+                              onKeyDown={(e) => {
+                                 if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    commitAbsences();
+                                 }
+                              }}
+                              onBlur={commitAbsences}
+                              style={{
+                                 width: 80,
+                                 padding: "6px 8px",
+                              }}
+                           />
+
+                           <button
+                              type="button"
+                              className="students-info__btn students-info__btn--normal"
+                              onClick={incAbs}
+                              disabled={!canEditExtras}
+                              style={{ padding: "4px 10px" }}
+                           >
+                              +
+                           </button>
+
+                           {extrasSaving && (
+                              <span style={{ fontSize: 12, opacity: 0.8 }}>
+                                 Salvez...
+                              </span>
+                           )}
+                        </div>
+                     </div>
+
+                     {extrasError && (
+                        <div
+                           className="students-info__error"
+                           style={{ marginTop: 8 }}
+                        >
+                           {extrasError}
+                        </div>
+                     )}
+
+                     {!targetUserId && (
+                        <div
+                           style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}
+                        >
+                           Nu am găsit userId pentru acest student (nu pot salva
+                           extras).
+                        </div>
+                     )}
                   </div>
 
                   <div className="students-info__note-section">
@@ -834,10 +1101,10 @@ export default function StudentInfoPopup({ student, onClose }) {
                                  a.scorePct != null
                                     ? `${Math.round(a.scorePct)}%`
                                     : a.correct != null && a.total != null
-                                    ? `${a.correct}/${a.total}`
-                                    : a.correct != null && a.wrong != null
-                                    ? `${a.correct} corecte / ${a.wrong} greșite`
-                                    : "–";
+                                      ? `${a.correct}/${a.total}`
+                                      : a.correct != null && a.wrong != null
+                                        ? `${a.correct} corecte / ${a.wrong} greșite`
+                                        : "–";
 
                               const eid = a.examId ?? a.id;
 

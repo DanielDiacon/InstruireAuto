@@ -1,11 +1,14 @@
 // src/components/Groups/GroupManager.jsx
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { ReactSVG } from "react-svg";
+
 import addIcon from "../../assets/svg/add-s.svg"; // folosit și ca close (rotate45)
 import editIcon from "../../assets/svg/edit.svg";
 import eyeIcon from "../../assets/svg/eye.svg";
 import keyIcon from "../../assets/svg/key.svg";
 import searchIcon from "../../assets/svg/search.svg";
+import arrowIcon from "../../assets/svg/arrow-s.svg";
+
 import { UserContext } from "../../UserContext";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -16,17 +19,23 @@ import {
 } from "../../store/groupsSlice";
 import { openPopup } from "../Utils/popupStore";
 
-/* ===== Utils ===== */
+/* ===================== Utils ===================== */
 const toNum = (v) =>
    v === null || v === undefined || v === "" || Number.isNaN(Number(v))
       ? undefined
       : Number(v);
 
+const escapeRegExp = (s = "") =>
+   String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const highlightText = (text, query) => {
    const t = String(text ?? "");
    const q = String(query ?? "");
    if (!q) return t;
-   const parts = t.split(new RegExp(`(${q})`, "gi"));
+
+   const safe = escapeRegExp(q);
+   const parts = t.split(new RegExp(`(${safe})`, "gi"));
+
    return parts.map((part, index) =>
       part.toLowerCase() === q.toLowerCase() ? (
          <i key={index} className="highlight">
@@ -34,7 +43,7 @@ const highlightText = (text, query) => {
          </i>
       ) : (
          part
-      )
+      ),
    );
 };
 
@@ -44,7 +53,73 @@ const isProtectedToken = (token) =>
       .trim()
       .toUpperCase() === "ABCD1234";
 
-/* ====== Chooser (aceleași clase), DAR pentru PROFESSOR ====== */
+/* ===================== Student avatar helpers (ca în StudentsManager) ===================== */
+const firstLetter = (v) =>
+   String(v || "")
+      .trim()
+      .charAt(0) || "";
+function getInitials(student) {
+   const fn = String(student?.firstName || "").trim();
+   const ln = String(student?.lastName || "").trim();
+
+   const a = firstLetter(fn);
+   const b = firstLetter(ln);
+
+   if (a && b) return (a + b).toUpperCase();
+
+   const two = fn.slice(0, 2);
+   if (two) return two.toUpperCase();
+
+   return "–";
+}
+
+function hashStringToUInt(str) {
+   let h = 0;
+   for (let i = 0; i < str.length; i++) {
+      h = (h * 31 + str.charCodeAt(i)) | 0;
+   }
+   return h >>> 0;
+}
+
+const AVATAR_HUES = [
+   { h: 70, s: 75 }, // lime
+   { h: 0, s: 100 }, // red
+   { h: 30, s: 100 }, // orange
+   { h: 54, s: 95 }, // yellow
+   { h: 130, s: 65 }, // green
+   { h: 210, s: 90 }, // blue
+   { h: 255, s: 98 }, // indigo
+   { h: 285, s: 100 }, // purple
+   { h: 330, s: 96 }, // pink
+];
+
+const AVATAR_LIGHTNESSES = [94, 92, 90, 88, 86, 84, 82, 80, 78, 76, 74];
+
+const AVATAR_COLORS = AVATAR_HUES.flatMap(({ h, s }) =>
+   AVATAR_LIGHTNESSES.map((l) => `hsl(${h} ${s}% ${l}%)`),
+);
+
+function getRandomAvatarColor() {
+   return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+}
+
+/**
+ * Culoare din nume:
+ * - dacă are cel puțin o literă -> deterministic
+ * - dacă nu are litere -> null (intră pe random)
+ */
+function getAvatarColorFromName(student) {
+   const fullName =
+      `${student?.firstName || ""} ${student?.lastName || ""}`.trim();
+   const hasLetter = /\p{L}/u.test(fullName);
+   if (!hasLetter) return null;
+
+   const normalized = fullName.normalize("NFKD");
+   const idx = hashStringToUInt(normalized) % AVATAR_COLORS.length;
+   return AVATAR_COLORS[idx];
+}
+
+/* ====== Chooser pentru PROFESSOR ====== */
 function ProfessorChooser({
    professors,
    excludeIds = [],
@@ -121,9 +196,9 @@ function ProfessorChooser({
                   title={
                      p.disabled
                         ? "Deja selectat"
-                        : `${p.firstName || ""} ${p.lastName || ""} ${
-                             p.phone || "—"
-                          } ${p.email || ""}`
+                        : `${p.firstName || ""} ${p.lastName || ""} ${p.phone || "—"} ${
+                             p.email || ""
+                          }`
                   }
                   onClick={() => !p.disabled && onPick(p)}
                >
@@ -144,9 +219,9 @@ function GroupForm({
    mode, // "create" | "edit"
    values, // { name, token, professorLabel }
    setValues, // (patch) => void
-   onSubmit, // () => void
-   onCancel, // () => void
-   openPicker, // () => void
+   onSubmit,
+   onCancel,
+   openPicker,
 
    showDelete = true,
    isConfirmingDelete = false,
@@ -263,13 +338,12 @@ function GroupManager() {
    const groups = Array.isArray(groupsState.list) ? groupsState.list : [];
    const users = Array.isArray(groupsState.users) ? groupsState.users : [];
 
-   // ✅ PROFESORI = user.role === "PROFESSOR"
    const professors = useMemo(
       () =>
          users.filter(
-            (u) => String(u?.role || "").toUpperCase() === "PROFESSOR"
+            (u) => String(u?.role || "").toUpperCase() === "PROFESSOR",
          ),
-      [users]
+      [users],
    );
 
    const [search, setSearch] = useState({ open: false, query: "" });
@@ -287,7 +361,7 @@ function GroupManager() {
 
    useEffect(() => {
       dispatch(fetchGroups());
-   }, [dispatch, user]);
+   }, [dispatch, user?.id]);
 
    const professorLabel = (id) => {
       if (!id) return "Selectează profesor";
@@ -299,7 +373,12 @@ function GroupManager() {
    const groupedUsersByGroup = useMemo(() => {
       return groups.map((group) => ({
          ...group,
-         members: users.filter((u) => String(u.groupId) === String(group.id)),
+         // ✅ membri doar USER (studenți), nu profesor
+         members: users.filter(
+            (u) =>
+               String(u.groupId) === String(group.id) &&
+               String(u?.role || "").toUpperCase() === "USER",
+         ),
       }));
    }, [groups, users]);
 
@@ -312,36 +391,22 @@ function GroupManager() {
                .includes(q) ||
             String(g.token || "")
                .toLowerCase()
-               .includes(q)
+               .includes(q),
       );
    }, [groupedUsersByGroup, search.query]);
 
    const patchFormValues = (patch) =>
       setForm((f) => ({ ...f, values: { ...f.values, ...patch } }));
 
-   /* CREATE */
-   const openCreate = () =>
-      setForm({
-         open: true,
-         mode: "create",
-         groupId: null,
-         values: { name: "", token: "", professorId: "" },
-      });
+   const runThunk = async (thunkAction) => {
+      const res = await dispatch(thunkAction);
+      if (res?.error) throw res.error;
+      return res?.payload;
+   };
 
-   const submitCreate = () => {
-      const { name, token, professorId } = form.values;
-      if (!String(name || "").trim()) return;
-
-      const pid = toNum(professorId);
-
-      dispatch(
-         addGroup({
-            name: String(name).trim(),
-            token: token || "",
-            professorId: pid,
-         })
-      );
-
+   const cancelForm = () => {
+      setPicker({ open: false });
+      setConfirmDeleteId(null);
       setForm({
          open: false,
          mode: null,
@@ -350,8 +415,45 @@ function GroupManager() {
       });
    };
 
+   /* CREATE */
+   const openCreate = () => {
+      setPicker({ open: false });
+      setConfirmDeleteId(null);
+      setForm({
+         open: true,
+         mode: "create",
+         groupId: null,
+         values: { name: "", token: "", professorId: "" },
+      });
+   };
+
+   const submitCreate = async () => {
+      const { name, token, professorId } = form.values;
+      if (!String(name || "").trim()) return;
+
+      const pid = toNum(professorId);
+
+      try {
+         await runThunk(
+            addGroup({
+               name: String(name).trim(),
+               token: token || "",
+               professorId: pid,
+            }),
+         );
+         await runThunk(fetchGroups());
+      } catch (e) {
+         // optional
+      } finally {
+         setPicker({ open: false });
+         cancelForm();
+      }
+   };
+
    /* EDIT */
-   const openEdit = (group) =>
+   const openEdit = (group) => {
+      setPicker({ open: false });
+      setConfirmDeleteId(null);
       setForm({
          open: true,
          mode: "edit",
@@ -359,62 +461,87 @@ function GroupManager() {
          values: {
             name: group.name || "",
             token: group.token || "",
-            // ✅ suportăm ambele câmpuri: professorId (nou) / instructorId (vechi)
             professorId: group.professorId
                ? String(group.professorId)
                : group.instructorId
-               ? String(group.instructorId)
-               : "",
+                 ? String(group.instructorId)
+                 : "",
          },
       });
-
-   const submitEdit = () => {
-      const { name, token, professorId } = form.values;
-      const pid = toNum(professorId);
-
-      dispatch(
-         updateGroup({
-            id: form.groupId,
-            name: String(name ?? "").trim(),
-            token: token ?? "",
-            professorId: pid,
-         })
-      );
-
-      cancelForm();
    };
 
-   const cancelForm = () =>
-      setForm({
-         open: false,
-         mode: null,
-         groupId: null,
-         values: { name: "", token: "", professorId: "" },
-      });
+   const submitEdit = async () => {
+      const { name, token, professorId } = form.values;
+      if (!String(name ?? "").trim()) return;
+
+      const pid = toNum(professorId);
+
+      try {
+         await runThunk(
+            updateGroup({
+               id: form.groupId,
+               name: String(name ?? "").trim(),
+               token: token ?? "",
+               professorId: pid,
+            }),
+         );
+         await runThunk(fetchGroups());
+      } catch (e) {
+         // optional
+      } finally {
+         setPicker({ open: false });
+         cancelForm();
+      }
+   };
 
    /* DELETE */
-   const handleDeleteGroup = (id) => {
+   const handleDeleteGroup = async (id) => {
       const g = groups.find((x) => x.id === id);
       if (isProtectedToken(g?.token)) {
          setConfirmDeleteId(null);
          return;
       }
-      dispatch(removeGroup(id));
-      setConfirmDeleteId(null);
-      if (form.mode === "edit" && form.groupId === id) cancelForm();
+
+      try {
+         await runThunk(removeGroup(id));
+         await runThunk(fetchGroups());
+      } catch (e) {
+         // optional
+      } finally {
+         setConfirmDeleteId(null);
+         setPicker({ open: false });
+         if (form.mode === "edit" && form.groupId === id) cancelForm();
+      }
    };
 
-   const handleOpenStudentPopup = (student) =>
+   const handleOpenStudentPopup = (student) => {
       openPopup("studentDetails", { student });
+   };
+
+   /* ====== culori pentru membrii din DETAILS (stabil cât timp lista nu se schimbă) ====== */
+   const detailMembers =
+      viewMode.mode === "details" && viewMode.group
+         ? viewMode.group.members || []
+         : [];
+   const detailColorByKey = useMemo(() => {
+      const m = new Map();
+
+      detailMembers.forEach((s, idx) => {
+         const key = String(s.id ?? s.phone ?? s.email ?? `__idx_${idx}`);
+         const det = getAvatarColorFromName(s);
+         m.set(key, det || getRandomAvatarColor());
+      });
+
+      return m;
+   }, [detailMembers]);
 
    return (
       <div className="groups instructorsgroup">
          <div
-            className={`groups__header instructorsgroup__header ${
-               search.open ? "open" : ""
-            }`}
+            className={`groups__header instructorsgroup__header ${search.open ? "open" : ""}`}
          >
             <h2>Grupe</h2>
+
             <div className="groups__right">
                <div className="groups__search">
                   <input
@@ -432,9 +559,7 @@ function GroupManager() {
                      }
                   >
                      <ReactSVG
-                        className={`groups__icon instructorsgroup__icon react-icon ${
-                           search.open ? "rotate45" : ""
-                        }`}
+                        className={`groups__icon instructorsgroup__icon react-icon ${search.open ? "rotate45" : ""}`}
                         src={search.open ? addIcon : searchIcon}
                      />
                   </button>
@@ -457,7 +582,7 @@ function GroupManager() {
 
          <div className="groups__grid-wrapper instructorsgroup__grid-wrapper">
             <div className="groups__grid instructorsgroup__grid">
-               {/* ===== CREATE (formular sus) ===== */}
+               {/* ===== CREATE ===== */}
                {form.open && form.mode === "create" && (
                   <>
                      {picker.open ? (
@@ -480,7 +605,7 @@ function GroupManager() {
                               values={{
                                  ...form.values,
                                  professorLabel: professorLabel(
-                                    form.values.professorId
+                                    form.values.professorId,
                                  ),
                               }}
                               setValues={(p) => patchFormValues(p)}
@@ -493,7 +618,7 @@ function GroupManager() {
                   </>
                )}
 
-               {/* ===== LISTĂ; la edit înlocuim cardul cu formular ===== */}
+               {/* ===== LISTĂ ===== */}
                {viewMode.mode === "list" &&
                   filteredGroups.map((group) => {
                      const isEditingThis =
@@ -527,7 +652,7 @@ function GroupManager() {
                                     values={{
                                        ...form.values,
                                        professorLabel: professorLabel(
-                                          form.values.professorId
+                                          form.values.professorId,
                                        ),
                                     }}
                                     setValues={(p) => patchFormValues(p)}
@@ -557,7 +682,7 @@ function GroupManager() {
                         professors.find(
                            (x) =>
                               String(x.id) ===
-                              String(group.professorId ?? group.instructorId)
+                              String(group.professorId ?? group.instructorId),
                         ) || null;
 
                      const pLabel = p
@@ -578,7 +703,7 @@ function GroupManager() {
                                     <ReactSVG src={keyIcon} />
                                     {highlightText(
                                        group.token || "",
-                                       search.query
+                                       search.query,
                                     )}
                                  </span>
                               </div>
@@ -612,7 +737,7 @@ function GroupManager() {
                      );
                   })}
 
-               {/* DETALII GRUP */}
+               {/* ===== DETALII GRUP (studenți cu avatar + culoare, fără email) ===== */}
                {viewMode.mode === "details" && viewMode.group && (
                   <>
                      <button
@@ -624,20 +749,62 @@ function GroupManager() {
                         Înapoi la grupe
                      </button>
 
-                     {viewMode.group.members.length > 0 ? (
-                        viewMode.group.members.map((student) => (
-                           <div
-                              key={student.id}
-                              className="students__item"
-                              onClick={() => handleOpenStudentPopup(student)}
-                           >
-                              <h3>
-                                 {student.firstName} {student.lastName}
-                              </h3>
-                              <h3>{student.email}</h3>
-                              <p>{student.phone || "–"}</p>
-                           </div>
-                        ))
+                     {detailMembers.length > 0 ? (
+                        detailMembers.map((student, idx) => {
+                           const key = String(
+                              student.id ??
+                                 student.phone ??
+                                 student.email ??
+                                 `__idx_${idx}`,
+                           );
+                           const color =
+                              detailColorByKey.get(key) ||
+                              getRandomAvatarColor();
+
+                           return (
+                              <div
+                                 key={student.id ?? key}
+                                 className="students__item"
+                                 onClick={() => handleOpenStudentPopup(student)}
+                                 role="button"
+                                 tabIndex={0}
+                                 onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                       e.preventDefault();
+                                       handleOpenStudentPopup(student);
+                                    }
+                                 }}
+                              >
+                                 <div
+                                    className="students__avatar"
+                                    aria-hidden="true"
+                                    style={{
+                                       background: color,
+                                       color: "var(--black-p)",
+                                    }}
+                                 >
+                                    <span>{getInitials(student)}</span>
+                                 </div>
+
+                                 <div className="students__info">
+                                    <h3>
+                                       {student.firstName} {student.lastName}
+                                    </h3>
+                                    <p>{student.phone || "–"}</p>
+                                 </div>
+
+                                 <div
+                                    className="students__chev"
+                                    aria-hidden="true"
+                                 >
+                                    <ReactSVG
+                                       className="students__chev-icon"
+                                       src={arrowIcon}
+                                    />
+                                 </div>
+                              </div>
+                           );
+                        })
                      ) : (
                         <p
                            className="groups__empty"

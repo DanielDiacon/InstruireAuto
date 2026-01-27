@@ -1,29 +1,13 @@
 .groups {
-   border-radius: 35px;
    padding: 0 12px;
    overflow: hidden;
    position: relative;
-   background: var(--black-s);
    z-index: 0;
    display: flex;
    flex-direction: column;
    height: 100%;
-   //&::after {
-   //   content: "";
-   //   position: absolute;
-   //   top: -80%;
-   //   left: -80%;
-   //   width: 150%;
-   //   height: 150%;
-   //   background: radial-gradient(
-   //      circle,
-   //      rgba(243, 252, 121, 0.2),
-   //      transparent
-   //   );
-   //   filter: blur(40px);
-   //   pointer-events: none;
-   //   z-index: 1;
-   //}
+   background: var(--black-s) !important;
+   border-radius: 35px !important;
    &__header {
       padding: 12px 0 0px 12px;
       display: flex;
@@ -109,13 +93,17 @@
       width: auto;
       user-select: none;
       &:hover {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          color: var(--accent-l);
          border-radius: 16px;
          padding: 14px 22px;
       }
       &:active {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          transform: scale(0.95);
          padding: 14px 20px;
          border-radius: 32px;
@@ -237,7 +225,9 @@
          color: var(--white-p);
          width: calc(100%);
          padding: 0px;
-         transition: all var(--elastic-s), background var(--classic-f);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-f);
          line-height: 1.4;
          //visibility: hidden;
       }
@@ -285,8 +275,8 @@
          cursor: pointer;
          background: var(--black-s);
          color: var(--white-s);
-         border-radius: 16px;
-         padding: 11px 6px;
+         border-radius: 32px;
+         padding: 12px 6px;
          transition: var(--elastic-s);
          font-weight: 500;
          display: flex;
@@ -302,13 +292,13 @@
             height: 18px;
          }
          &.edit {
-            border-radius: 16px 16px 8px 8px;
+            border-radius: 16px;
          }
          &.see {
-            border-radius: 8px 8px 16px 16px;
+            border-radius: 16px;
          }
          &.save {
-            border-radius: 16px 16px 8px 8px;
+            border-radius: 16px;
          }
          &.edit {
             //color: #0d3700;
@@ -325,10 +315,8 @@
             }
          }
          &:hover {
-            border-radius: 23px;
-            padding: 13px 6px;
-            margin: -2px 0;
-            svg {
+background: var(--black-t);
+          svg {
                //scale: 1.05;
             }
          }

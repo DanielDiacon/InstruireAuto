@@ -3,81 +3,15 @@
    padding: 0 12px;
    overflow: hidden;
    position: relative;
-   background: var(--black-s);
+   background: var(--black-s) !important;
    z-index: 0;
    display: flex;
    flex-direction: column;
    height: 100%;
-   //&::after {
-   //   content: "";
-   //   position: absolute;
-   //   top: -80%;
-   //   left: -80%;
-   //   width: 150%;
-   //   height: 150%;
-   //   background: radial-gradient(
-   //      circle,
-   //      rgba(243, 252, 121, 0.2),
-   //      transparent
-   //   );
-   //   filter: blur(40px);
-   //   pointer-events: none;
-   //   z-index: 1;
-   //}
-   &__header {
-      padding: 12px 0 0px 12px;
-      display: flex;
-      justify-content: space-between;
-      position: relative;
-      z-index: 20;
-   }
-   &__right {
-      z-index: 10;
-      display: flex;
-      position: absolute;
-      width: 100%;
-      gap: 6px;
-      right: 0;
-   }
-   &__search {
-      width: 100%;
-      display: flex;
-      justify-content: flex-end;
-      gap: 6px;
-   }
-   &__input {
-      transition: var(--elastic-s);
-      background: var(--black-p);
-      color: var(--white-p);
-      border-radius: 25px;
-      width: 00%;
-      right: 0;
-      display: block;
-      top: 12px;
-      opacity: 0;
-      padding: 12px 0px;
-      margin-left: -100px;
-   }
-   &__icon {
-      div {
-         display: flex;
-         align-items: center;
-         justify-content: center;
-      }
-      &.rotate45 svg {
-         rotate: 45deg;
-      }
-   }
-   &__header.open {
-      .groups__input {
-         opacity: 1;
-         padding: 12px 20px;
-         margin-left: 0px;
-         width: 100%;
-      }
-   }
+
+   /* Title (în header) */
    h2 {
-      padding: 8px 0 0 0px;
+      padding: 8px 0 0 0;
       font-size: 32px;
       line-height: 1;
       color: var(--white-p);
@@ -88,6 +22,8 @@
       flex-shrink: 0;
       white-space: nowrap;
    }
+
+   /* Buttons (ex: search toggle, load more dacă folosește aceleași stiluri) */
    button {
       background: var(--black-p);
       color: var(--white-s);
@@ -97,201 +33,110 @@
       z-index: 2;
       position: relative;
       width: auto;
+
       &:hover {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          color: var(--accent-l);
          border-radius: 16px;
          padding: 14px 22px;
       }
+
       &:active {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          transform: scale(0.95);
          padding: 14px 20px;
          border-radius: 32px;
       }
    }
 
-   &-info__form {
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      gap: 3px;
-      input {
-         border-radius: 16px;
-         padding: 10px 16px 11px 16px;
-         font-size: 14px;
-         background: var(--black-s);
-         color: var(--white-p);
-         background: red;
-         width: 100%;
-      }
-   }
+   /* Grid wrapper */
    &__grid-wrapper {
       z-index: 2;
       position: relative;
       height: 100%;
       overflow: hidden;
-      position: relative;
       margin-top: -12px;
       flex-grow: 1;
    }
+
+   /* Grid list */
    &__grid {
       mask-image: linear-gradient(
          to top,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         #000,
-         rgba(0, 0, 0, 0)
+         #000 0,
+         #000 calc(100% - 24px),
+         rgba(0, 0, 0, 0) 100%
       );
+
       &::-webkit-scrollbar {
          display: none;
       }
+
       position: absolute;
-      height: 100%;
-      width: 100%;
+      inset: 0;
       overflow-y: auto;
       display: grid;
       padding-top: 24px;
       padding-bottom: 12px;
       grid-template-columns: 1fr 1fr;
       grid-auto-rows: min-content;
+      width: 100%;
       gap: 6px;
    }
+
+   /* Student card */
    &__item {
-      border-radius: 22px;
+      cursor: pointer;
+      border-radius: 35px;
       background: var(--black-p);
-      display: flex;
-      flex: 0;
-      justify-content: space-between;
       position: relative;
       height: auto;
-      overflow: hidden;
-      &-left {
-         display: flex;
-         flex-direction: column;
-         width: 100%;
-         padding: 12px 0px 12px 12px;
+      padding: 6px;
+      transition: all 0.25s ease;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      @media only screen and (max-width: $mobile) {
+         gap: 6px;
       }
-      &-left-top {
-         position: relative;
-         width: 100%;
-      }
-      &-input {
-         position: absolute;
-         top: 0px;
-         left: 0px;
-         border-radius: 16px;
-         font-size: 14px;
-         background: transparent;
-         color: var(--white-p);
-         width: calc(100%);
-         padding: 0px;
-         transition: all var(--elastic-s), background var(--classic-f);
-         visibility: hidden;
+      &:hover {
+         background: var(--black-t);
       }
 
-      &-right {
-         display: grid;
-         grid-template-rows: repeat(1fr);
-         padding: 6px;
-         gap: 6px;
+      &:active {
+         transform: scale(0.98);
       }
 
       h3 {
          color: var(--white-p);
+         margin: 0;
          padding: 0;
          transition: var(--elastic-s);
+         font-weight: 500;
          font-size: 14px;
          opacity: 1;
-      }
-      p {
-         transition: 0.3s;
-         color: var(--white-s);
-         text-overflow: ellipsis;
-         width: 100%;
+         display: block;
+         width: auto;
+         white-space: nowrap;
          overflow: hidden;
+         text-overflow: ellipsis;
       }
-      &-key {
-         color: var(--white-s);
-         display: flex;
-         align-items: center;
-         position: absolute;
-         bottom: 12px;
-         left: 16px;
-         gap: 3px;
-         font-size: 12px;
+
+      p {
+         margin: 0;
          transition: 0.3s;
-         div {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-         }
-         svg {
-            width: 14px;
-            height: 14px;
-         }
-      }
-      &-icon {
-         cursor: pointer;
-         background: var(--black-s);
          color: var(--white-s);
-         border-radius: 16px;
-         padding: 11px 6px;
-         transition: var(--elastic-s);
-         font-weight: 500;
-         display: flex;
-         align-items: center;
-         justify-content: center;
-         div {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-         }
-         svg {
-            transition: var(--elastic-s);
-            height: 18px;
-         }
-         &.edit {
-            border-radius: 16px 16px 8px 8px;
-         }
-         &.see {
-            border-radius: 8px 8px 16px 16px;
-         }
-         &.save {
-            border-radius: 16px 16px 8px 8px;
-         }
-         &.edit {
-            //color: #0d3700;
-            //background: #9cf680;
-         }
-
-         &.rotate45 {
-            //color: hsl(35, 87%, 13%);
-            //background: hsl(35, 94%, 73%);
-            border-radius: 8px 8px 16px 16px;
-
-            svg {
-               rotate: 45deg;
-            }
-         }
-         &:hover {
-            border-radius: 32px;
-            svg {
-               scale: 1.05;
-            }
-         }
-         &:active {
-            scale: 0.9;
-         }
+         font-weight: 400;
+         text-overflow: ellipsis;
+         width: auto;
+         min-width: 0;
+         overflow: hidden;
+         white-space: nowrap;
       }
       &-delete {
          button {
@@ -300,7 +145,9 @@
             border-radius: 20px;
             align-self: flex-end;
             padding: 14px 20px;
-            transition: all var(--elastic-s), background var(--classic-s);
+            transition:
+               all var(--elastic-s),
+               background var(--classic-s);
             &:hover {
                padding: 14px 24px;
                color: hsl(0, 100%, 11%);
@@ -332,7 +179,9 @@
             }
          }
          .delete-confirm {
-            transition: all var(--elastic-s), background var(--classic-f);
+            transition:
+               all var(--elastic-s),
+               background var(--classic-f);
 
             &:hover {
                padding: 14px 24px;
@@ -386,27 +235,436 @@
          }
       }
    }
-   &__item {
-      cursor: pointer;
-      border-radius: 22px;
-      background: var(--black-p);
+   &__chev-icon {
+      width: 36px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      @media only screen and (max-width: $mobile) {
+         display: none;
+      }
+      div {
+         display: grid;
+         place-items: center;
+      }
+      svg {
+         width: 16px;
+         height: 16px;
+         color: var(--white-s);
+         rotate: 180deg;
+      }
+   }
+   /* Avatar */
+   &__avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 999px;
       display: flex;
-      flex: 0;
-      justify-content: space-between;
-      position: relative;
-      height: auto;
-      padding: 14px;
-      transition: all 0.25s ease;
-      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      background: var(--black-p);
+      span {
+         font-weight: 600;
+         letter-spacing: 0.5px;
+         line-height: 1;
+         color: black;
+         user-select: none;
+      }
+   }
+
+   /* Info block (în JSX există) */
+   &__info {
       display: flex;
       flex-direction: column;
-      gap: 0px;
-      &:hover {
-         border-radius: 16px;
+      gap: 2px;
+      min-width: 0; /* ca ellipsis să funcționeze */
+      flex: 1 1 auto;
+   }
+}
+
+/* ============================
+   Search header (în JSX e groups__*)
+   îl legăm de containerul .students ca să nu afecteze altundeva
+   ============================ */
+.students {
+   .groups__header {
+      padding: 12px 0 0 12px;
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+      z-index: 20;
+   }
+
+   .groups__right {
+      z-index: 10;
+      display: flex;
+      position: absolute;
+      width: 100%;
+      gap: 6px;
+      right: 0;
+   }
+
+   .groups__search {
+      width: 100%;
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+   }
+
+   .groups__input {
+      transition: var(--elastic-s);
+      background: var(--black-p);
+      color: var(--white-p);
+      border-radius: 25px;
+
+      width: 0%;
+      opacity: 0;
+
+      padding: 12px 0;
+      margin-left: -100px;
+   }
+
+   .groups__icon {
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
       }
-      &:active {
-         border-radius: 22px;
-         scale: 0.98;
+
+      &.rotate45 svg {
+         rotate: 45deg;
+      }
+   }
+
+   .groups__header.open {
+      .groups__input {
+         opacity: 1;
+         padding: 12px 20px;
+         margin-left: 0;
+         width: 100%;
       }
    }
 }
+
+//.students {
+//   border-radius: 35px;
+//   padding: 0 12px;
+//   overflow: hidden;
+//   position: relative;
+//   background: var(--black-s);
+//   z-index: 0;
+//   display: flex;
+//   flex-direction: column;
+//   height: 100%;
+//   //&::after {
+//   //   content: "";
+//   //   position: absolute;
+//   //   top: -80%;
+//   //   left: -80%;
+//   //   width: 150%;
+//   //   height: 150%;
+//   //   background: radial-gradient(
+//   //      circle,
+//   //      rgba(243, 252, 121, 0.2),
+//   //      transparent
+//   //   );
+//   //   filter: blur(40px);
+//   //   pointer-events: none;
+//   //   z-index: 1;
+//   //}
+//   &__header {
+//      padding: 12px 0 0px 12px;
+//      display: flex;
+//      justify-content: space-between;
+//      position: relative;
+//      z-index: 20;
+//   }
+//   &__right {
+//      z-index: 10;
+//      display: flex;
+//      position: absolute;
+//      width: 100%;
+//      gap: 6px;
+//      right: 0;
+//   }
+//   &__search {
+//      width: 100%;
+//      display: flex;
+//      justify-content: flex-end;
+//      gap: 6px;
+//   }
+//   &__input {
+//      transition: var(--elastic-s);
+//      background: var(--black-p);
+//      color: var(--white-p);
+//      border-radius: 25px;
+//      width: 00%;
+//      right: 0;
+//      display: block;
+//      top: 12px;
+//      opacity: 0;
+//      padding: 12px 0px;
+//      margin-left: -100px;
+//   }
+//   &__icon {
+//      div {
+//         display: flex;
+//         align-items: center;
+//         justify-content: center;
+//      }
+//      &.rotate45 svg {
+//         rotate: 45deg;
+//      }
+//   }
+//   &__header.open {
+//      .groups__input {
+//         opacity: 1;
+//         padding: 12px 20px;
+//         margin-left: 0px;
+//         width: 100%;
+//      }
+//   }
+//   h2 {
+//      padding: 8px 0 0 0px;
+//      font-size: 32px;
+//      line-height: 1;
+//      color: var(--white-p);
+//      font-family: "Clash Display";
+//      font-weight: 500;
+//      position: relative;
+//      z-index: 2;
+//      flex-shrink: 0;
+//      white-space: nowrap;
+//   }
+//   button {
+//      background: var(--black-p);
+//      color: var(--white-s);
+//      border-radius: 25px;
+//      padding: 14px 20px;
+//      transition: var(--classic-s);
+//      z-index: 2;
+//      position: relative;
+//      width: auto;
+//      &:hover {
+//         transition: all var(--elastic-s), background var(--classic-s);
+//         color: var(--accent-l);
+//         border-radius: 16px;
+//         padding: 14px 22px;
+//      }
+//      &:active {
+//         transition: all var(--elastic-s), background var(--classic-s);
+//         transform: scale(0.95);
+//         padding: 14px 20px;
+//         border-radius: 32px;
+//      }
+//   }
+//
+//   &-info__form {
+//      display: flex;
+//      flex-direction: column;
+//      justify-content: space-between;
+//      gap: 3px;
+//      input {
+//         border-radius: 16px;
+//         padding: 10px 16px 11px 16px;
+//         font-size: 14px;
+//         background: var(--black-s);
+//         color: var(--white-p);
+//         background: red;
+//         width: 100%;
+//      }
+//   }
+//   &__grid-wrapper {
+//      z-index: 2;
+//      position: relative;
+//      height: 100%;
+//      overflow: hidden;
+//      position: relative;
+//      margin-top: -12px;
+//      flex-grow: 1;
+//   }
+//   &__grid {
+//      mask-image: linear-gradient(
+//         to top,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         #000,
+//         rgba(0, 0, 0, 0)
+//      );
+//      &::-webkit-scrollbar {
+//         display: none;
+//      }
+//      position: absolute;
+//      height: 100%;
+//      width: 100%;
+//      overflow-y: auto;
+//      display: grid;
+//      padding-top: 24px;
+//      padding-bottom: 12px;
+//      grid-template-columns: 1fr 1fr;
+//      grid-auto-rows: min-content;
+//      gap: 6px;
+//   }
+//   &__item {
+//      border-radius: 22px;
+//      background: var(--black-p);
+//      display: flex;
+//      flex: 0;
+//      justify-content: space-between;
+//      position: relative;
+//      height: auto;
+//      overflow: hidden;
+//      &-left {
+//         display: flex;
+//         flex-direction: column;
+//         width: 100%;
+//         padding: 12px 0px 12px 12px;
+//      }
+//      &-left-top {
+//         position: relative;
+//         width: 100%;
+//      }
+//      &-input {
+//         position: absolute;
+//         top: 0px;
+//         left: 0px;
+//         border-radius: 16px;
+//         font-size: 14px;
+//         background: transparent;
+//         color: var(--white-p);
+//         width: calc(100%);
+//         padding: 0px;
+//         transition: all var(--elastic-s), background var(--classic-f);
+//         visibility: hidden;
+//      }
+//
+//      &-right {
+//         display: grid;
+//         grid-template-rows: repeat(1fr);
+//         padding: 6px;
+//         gap: 6px;
+//      }
+//
+//      h3 {
+//         color: var(--white-p);
+//         padding: 0;
+//         transition: var(--elastic-s);
+//         font-size: 14px;
+//         opacity: 1;
+//      }
+//      p {
+//         transition: 0.3s;
+//         color: var(--white-s);
+//         text-overflow: ellipsis;
+//         width: 100%;
+//         overflow: hidden;
+//      }
+//      &-key {
+//         color: var(--white-s);
+//         display: flex;
+//         align-items: center;
+//         position: absolute;
+//         bottom: 12px;
+//         left: 16px;
+//         gap: 3px;
+//         font-size: 12px;
+//         transition: 0.3s;
+//         div {
+//            display: flex;
+//            align-items: center;
+//            justify-content: center;
+//         }
+//         svg {
+//            width: 14px;
+//            height: 14px;
+//         }
+//      }
+//      &-icon {
+//         cursor: pointer;
+//         background: var(--black-s);
+//         color: var(--white-s);
+//         border-radius: 16px;
+//         padding: 11px 6px;
+//         transition: var(--elastic-s);
+//         font-weight: 500;
+//         display: flex;
+//         align-items: center;
+//         justify-content: center;
+//         div {
+//            display: flex;
+//            align-items: center;
+//            justify-content: center;
+//         }
+//         svg {
+//            transition: var(--elastic-s);
+//            height: 18px;
+//         }
+//         &.edit {
+//            border-radius: 16px 16px 8px 8px;
+//         }
+//         &.see {
+//            border-radius: 8px 8px 16px 16px;
+//         }
+//         &.save {
+//            border-radius: 16px 16px 8px 8px;
+//         }
+//         &.edit {
+//            //color: #0d3700;
+//            //background: #9cf680;
+//         }
+//
+//         &.rotate45 {
+//            //color: hsl(35, 87%, 13%);
+//            //background: hsl(35, 94%, 73%);
+//            border-radius: 8px 8px 16px 16px;
+//
+//            svg {
+//               rotate: 45deg;
+//            }
+//         }
+//         &:hover {
+//            border-radius: 32px;
+//            svg {
+//               scale: 1.05;
+//            }
+//         }
+//         &:active {
+//            scale: 0.9;
+//         }
+//      }
+//
+//   }
+//   &__item {
+//      cursor: pointer;
+//      border-radius: 22px;
+//      background: var(--black-p);
+//      display: flex;
+//      flex: 0;
+//      justify-content: space-between;
+//      position: relative;
+//      height: auto;
+//      padding: 14px;
+//      transition: all 0.25s ease;
+//      cursor: pointer;
+//      display: flex;
+//      flex-direction: column;
+//      gap: 0px;
+//      &:hover {
+//         border-radius: 16px;
+//      }
+//      &:active {
+//         border-radius: 22px;
+//         scale: 0.98;
+//      }
+//   }
+//}
