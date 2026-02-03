@@ -415,6 +415,7 @@ function CourseStudentsList({
                         <div
                            key={student.id}
                            className="students__item"
+                           style={{ padding: "14px", borderRadius: "22px" }}
                            onClick={() =>
                               navigate(
                                  `/professor/student/${student.id}/statistics`,
@@ -688,9 +689,7 @@ function PPStudents() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
+        
 
          <main className="main">
             <section className="professor single">

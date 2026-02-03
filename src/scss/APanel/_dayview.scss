@@ -968,6 +968,14 @@
 .dv-order-editor {
    padding: 4px 0px;
 }
+@media only screen and (max-width: $mobile) {
+   .dv-order-editor {
+      display: none;
+   }
+   .dv-track-edit-btn {
+      display: none;
+   }
+}
 .dv-order-editor__panel {
    height: 100%;
    border-radius: 16px;
@@ -1015,6 +1023,11 @@
    grid-template-columns: 1fr 1fr;
    gap: 6px;
 }
+@media only screen and (max-width: 1200px) {
+   .dv-order-day-wrapper {
+      grid-template-columns: 1fr;
+   }
+}
 .dv-order-day {
    border-radius: 14px;
    overflow: hidden;
@@ -1049,25 +1062,17 @@
    border-radius: 6px;
    padding: 12px;
    flex: 1 1 auto;
+   width: 100%;
 }
 
 /* 3 coloane */
 .dv-order-grid {
    display: grid;
+   width: 100%;
    gap: 12px;
 }
 .dv-order-grid--3 {
    grid-template-columns: 1fr 1fr 1fr;
-}
-@media (max-width: 980px) {
-   .dv-order-grid--3 {
-      grid-template-columns: 1fr 1fr 1fr;
-   }
-}
-@media (max-width: 640px) {
-   .dv-order-grid--3 {
-      grid-template-columns: 1fr;
-   }
 }
 
 /* Card minimalist */
@@ -1094,6 +1099,7 @@
    min-width: 0;
    color: var(--white-p);
    flex: 1 1 auto;
+   font-size: 12px;
 }
 
 .dv-order-card__name {
@@ -1108,7 +1114,7 @@
    display: flex;
    gap: 8px;
    align-items: center;
-   font-size: 11px;
+   font-size: 10px;
    color: var(--white-s);
 }
 
@@ -1129,6 +1135,10 @@
 /* Ciocana = ALBASTRU */
 .dv-order-card.is-ciocana {
    background: var(--event-pink);
+}
+/* altul = ALBASTRU */
+.dv-order-card.is-other {
+   background: var(--event-red);
 }
 
 /* Fallback */

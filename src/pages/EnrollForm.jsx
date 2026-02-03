@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ReactSVG } from "react-svg";
 import DarkModeToggle from "../components/Header/DarkModeToggle";
-import M3Link from "../components/UI/M3Link";
+import M3Link from "../components/Common/M3Link";
 import AlertPills from "../components/Utils/AlertPills";
 import { enrollStudent } from "../api/authService";
 
@@ -11,6 +11,7 @@ import arrowIcon from "../assets/svg/arrow.svg";
 import resetIcon from "../assets/svg/reset.svg";
 import waveSegmentIcon from "../assets/svg/waveSegment.svg";
 import waveSegmentEndIcon from "../assets/svg/waveSegmentEnd.svg";
+import FooterSign from "../components/FooterSign";
 
 const LS_KEY = "enroll_course_draft_v1";
 const digits = (s = "") => String(s).replace(/\D+/g, "");
@@ -235,14 +236,14 @@ export default function EnrollForm() {
          setLoading(true);
          addMessage(
             "Se trimit datele pentru generarea contractelor...",
-            "info"
+            "info",
          );
          const payload = buildEnrollPayload(form);
          await enrollStudent(payload);
 
          addMessage(
             "Gata! Cererea de înscriere și contractul au fost generate și expediate pe email.",
-            "success"
+            "success",
          );
 
          try {
@@ -255,7 +256,7 @@ export default function EnrollForm() {
             `Nu am putut genera contractele: ${
                e?.message || "eroare necunoscută"
             }`,
-            "error"
+            "error",
          );
       } finally {
          setLoading(false);
@@ -270,681 +271,717 @@ export default function EnrollForm() {
       step === 1
          ? "Categoria B — Date personale"
          : step === 2
-         ? "Categoria B — Domiciliu & Preferințe"
-         : "Categoria B — Acorduri";
+           ? "Categoria B — Domiciliu & Preferințe"
+           : "Categoria B — Acorduri";
    // după useEffect(...), înainte de const subtitleByStep =
    const canSubmit = form.agreeTerms && form.agreeGDPR && !loading;
 
    return (
-      <main className="main-sign">
-         <div className="container">
-            <AlertPills messages={messages} onDismiss={clearMessages} />
-            <div className="sign">
-               {/* stânga */}
-               <div className="sign__left">
-                  <M3Link
-                     className="sign__img-btn"
-                     type="accent"
-                     icon={arrowIcon}
-                     link="https://instruire-auto.md/"
-                  >
-                     <span>Acasă</span>
-                  </M3Link>
-               </div>
-
-              <ul className="header__settings settings ">
-                  <DarkModeToggle />
-               </ul>
-               {/* dreapta */}
-               <div className="sign__right">
-                  <h1 className="sign__title">Înscriere la curs</h1>
-                  <p className="sign__subtitle">{subtitleByStep}</p>
-
-                  {/* === STEPPER SUS === */}
-                  <div
-                     className="sign__steps-wrapper"
-                     role="toolbar"
-                     aria-label="Etape înscriere"
-                  >
-                     <div className="sign__step-buttons">
-                        {[1, 2, 3].map((n) => {
-                           const btnClass =
-                              "sign__step-button " +
-                              (step > n
-                                 ? "is-done"
-                                 : step === n
-                                 ? "is-current"
-                                 : "");
-                           const connClass =
-                              "sign__step-connector" +
-                              (step === n ? " is-active" : "");
-                           return (
-                              <React.Fragment key={n}>
-                                 <button
-                                    type="button"
-                                    className={btnClass}
-                                    onClick={() => jumpTo(n)}
-                                    aria-current={
-                                       step === n ? "step" : undefined
-                                    }
-                                    aria-label={`Etapa ${n}`}
-                                    title={`Etapa ${n}`}
-                                 >
-                                    {n}
-                                 </button>
-                                 {n < 3 && (
-                                    <span className={connClass} aria-hidden />
-                                 )}
-                              </React.Fragment>
-                           );
-                        })}
-                     </div>
+      <>
+         <main className="main-sign">
+            <div className="container">
+               <AlertPills messages={messages} onDismiss={clearMessages} />
+               <div className="sign">
+                  {/* stânga */}
+                  <div className="sign__left">
+                     <M3Link
+                        className="sign__img-btn"
+                        type="accent"
+                        icon={arrowIcon}
+                        link="https://instruire-auto.md/"
+                     >
+                        <span>Acasă</span>
+                     </M3Link>
                   </div>
 
-                  {/* === SWITCHER === */}
-                  <div className={`sign__switcher etapa${step}`}>
-                     {/* === ETAPA 1 === */}
+                  <ul className="header__settings settings ">
+                     <DarkModeToggle />
+                  </ul>
+                  {/* dreapta */}
+                  <div className="sign__right">
+                     <h1 className="sign__title">Înscriere la curs</h1>
+                     <p className="sign__subtitle">{subtitleByStep}</p>
+
+                     {/* === STEPPER SUS === */}
                      <div
-                        className={`sign__form-wrapper ${
-                           step === 1
-                              ? "sign__form--active"
-                              : "sign__form--leave"
-                        }`}
+                        className="sign__steps-wrapper"
+                        role="toolbar"
+                        aria-label="Etape înscriere"
                      >
-                        <form
-                           className="sign__form"
-                           onSubmit={(e) => {
-                              e.preventDefault();
-                              goNext();
-                           }}
-                        >
-                           {/* Nume / Prenume */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="lastName"
-                                    className="sign__label"
-                                 >
-                                    Nume
-                                 </label>
-                                 <input
-                                    id="lastName"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="Popescu"
-                                    value={form.lastName}
-                                    onChange={(e) =>
-                                       setField("lastName", e.target.value)
-                                    }
-                                    required
-                                 />
-                              </div>
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="firstName"
-                                    className="sign__label"
-                                 >
-                                    Prenume
-                                 </label>
-                                 <input
-                                    id="firstName"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="Ion"
-                                    value={form.firstName}
-                                    onChange={(e) =>
-                                       setField("firstName", e.target.value)
-                                    }
-                                    required
-                                 />
-                              </div>
-                           </div>
-
-                           {/* Cetățenia / Data nașterii */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="citizenship"
-                                    className="sign__label"
-                                 >
-                                    Cetățenia
-                                 </label>
-                                 <input
-                                    id="citizenship"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="Republica Moldova"
-                                    value={form.citizenship}
-                                    onChange={(e) =>
-                                       setField("citizenship", e.target.value)
-                                    }
-                                    required
-                                 />
-                              </div>
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="birthDate"
-                                    className="sign__label"
-                                 >
-                                    Data nașterii
-                                 </label>
-                                 <input
-                                    id="birthDate"
-                                    type="date"
-                                    className="sign__input enroll"
-                                    placeholder="1995-05-10"
-                                    value={form.birthDate}
-                                    onChange={(e) =>
-                                       setField("birthDate", e.target.value)
-                                    }
-                                    onFocus={(e) =>
-                                       tryOpenPicker(e.currentTarget)
-                                    }
-                                    onClick={(e) =>
-                                       tryOpenPicker(e.currentTarget)
-                                    }
-                                    required
-                                 />
-                              </div>
-                           </div>
-
-                           {/* Sex / IDNP */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label htmlFor="sex" className="sign__label">
-                                    Sex
-                                 </label>
-                                 <select
-                                    id="sex"
-                                    className="sign__input enroll"
-                                    value={form.sex}
-                                    onChange={(e) =>
-                                       setField("sex", e.target.value)
-                                    }
-                                    required
-                                 >
-                                    <option value="M">Masculin</option>
-                                    <option value="F">Feminin</option>
-                                 </select>
-                              </div>
-                              <div className="sign__field">
-                                 <label htmlFor="idnp" className="sign__label">
-                                    IDNP
-                                 </label>
-                                 <input
-                                    id="idnp"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="1234567890123"
-                                    value={form.idnp}
-                                    onChange={handleIdnpChange}
-                                    inputMode="numeric"
-                                    maxLength={13}
-                                    required
-                                 />
-                              </div>
-                           </div>
-
-                           {/* Email / Telefon */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label htmlFor="email" className="sign__label">
-                                    Email
-                                 </label>
-                                 <input
-                                    id="email"
-                                    type="email"
-                                    className="sign__input enroll"
-                                    placeholder="ion.popescu@example.com"
-                                    value={form.email}
-                                    onChange={(e) =>
-                                       setField("email", e.target.value)
-                                    }
-                                    required
-                                 />
-                              </div>
-                              <div className="sign__field sign__input-wrapper">
-                                 <label htmlFor="phone" className="sign__label">
-                                    Telefon
-                                 </label>
-                                 <input
-                                    id="phone"
-                                    type="tel"
-                                    className="sign__input enroll sign__input--phone"
-                                    placeholder="069123456"
-                                    {...numericInputProps("phone", 9)}
-                                    aria-label="Număr de telefon"
-                                    required
-                                 />
-                              </div>
-                           </div>
-
-                           {/* acțiuni */}
-                           <div className="sign__row-btns">
-                              <button
-                                 type="button"
-                                 className="sign__link-button"
-                                 onClick={() => {
-                                    try {
-                                       localStorage.removeItem(LS_KEY);
-                                    } catch {}
-                                    setForm(initialForm);
-                                    addMessage(
-                                       "Draftul a fost curățat.",
-                                       "info"
-                                    );
-                                 }}
-                                 disabled={loading}
-                              >
-                                 <ReactSVG
-                                    src={resetIcon}
-                                    className="sign__icon-inline"
-                                 />
-                                 <span>Curăță draft</span>
-                              </button>
-                              <button
-                                 type="submit"
-                                 className="sign__button"
-                                 disabled={loading}
-                              >
-                                 <span>{loading ? "..." : "Înainte"}</span>
-                                 <ReactSVG
-                                    className="sign__button-icon sign__icon"
-                                    src={arrowIcon}
-                                 />
-                              </button>
-                           </div>
-                        </form>
+                        <div className="sign__step-buttons">
+                           {[1, 2, 3].map((n) => {
+                              const btnClass =
+                                 "sign__step-button " +
+                                 (step > n
+                                    ? "is-done"
+                                    : step === n
+                                      ? "is-current"
+                                      : "");
+                              const connClass =
+                                 "sign__step-connector" +
+                                 (step === n ? " is-active" : "");
+                              return (
+                                 <React.Fragment key={n}>
+                                    <button
+                                       type="button"
+                                       className={btnClass}
+                                       onClick={() => jumpTo(n)}
+                                       aria-current={
+                                          step === n ? "step" : undefined
+                                       }
+                                       aria-label={`Etapa ${n}`}
+                                       title={`Etapa ${n}`}
+                                    >
+                                       {n}
+                                    </button>
+                                    {n < 3 && (
+                                       <span
+                                          className={connClass}
+                                          aria-hidden
+                                       />
+                                    )}
+                                 </React.Fragment>
+                              );
+                           })}
+                        </div>
                      </div>
 
-                     {/* === ETAPA 2 === */}
-                     <div
-                        className={`sign__form-wrapper ${
-                           step === 2
-                              ? "sign__form--active"
-                              : "sign__form--leave"
-                        }`}
-                     >
-                        <form
-                           className="sign__form"
-                           onSubmit={(e) => {
-                              e.preventDefault();
-                              goNext();
-                           }}
+                     {/* === SWITCHER === */}
+                     <div className={`sign__switcher etapa${step}`}>
+                        {/* === ETAPA 1 === */}
+                        <div
+                           className={`sign__form-wrapper ${
+                              step === 1
+                                 ? "sign__form--active"
+                                 : "sign__form--leave"
+                           }`}
                         >
-                           {/* Cutie / Telefon persoană de contact */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="gearbox"
-                                    className="sign__label"
-                                 >
-                                    Tip cutie
-                                 </label>
-                                 <select
-                                    id="gearbox"
-                                    className="sign__input enroll"
-                                    value={form.gearbox}
-                                    onChange={(e) =>
-                                       setField("gearbox", e.target.value)
-                                    }
-                                 >
-                                    <option value="MECANICĂ">
-                                       Cutie mecanică
-                                    </option>
-                                    <option value="AUTOMATĂ">
-                                       Cutie automată
-                                    </option>
-                                 </select>
-                              </div>
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="contactPerson"
-                                    className="sign__label"
-                                 >
-                                    Telefon persoană de contact
-                                 </label>
-                                 <input
-                                    id="contactPerson"
-                                    type="tel"
-                                    className="sign__input enroll"
-                                    placeholder="069654321"
-                                    {...numericInputProps("contactPerson", 9)}
-                                 />
-                              </div>
-                           </div>
-
-                           {/* Domiciliu 1 */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="sector"
-                                    className="sign__label"
-                                 >
-                                    Raion/Sector
-                                 </label>
-                                 <input
-                                    id="sector"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="Centru"
-                                    value={form.domicile.sector}
-                                    onChange={(e) =>
-                                       setDomicile("sector", e.target.value)
-                                    }
-                                    required
-                                 />
-                              </div>
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="locality"
-                                    className="sign__label"
-                                 >
-                                    Localitate
-                                 </label>
-                                 <input
-                                    id="locality"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="Chișinău"
-                                    value={form.domicile.locality}
-                                    onChange={(e) =>
-                                       setDomicile("locality", e.target.value)
-                                    }
-                                    required
-                                 />
-                              </div>
-                           </div>
-
-                           {/* Domiciliu 2 */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="street"
-                                    className="sign__label"
-                                 >
-                                    Stradă
-                                 </label>
-                                 <input
-                                    id="street"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="Ștefan cel Mare"
-                                    value={form.domicile.street}
-                                    onChange={(e) =>
-                                       setDomicile("street", e.target.value)
-                                    }
-                                    required
-                                 />
-                              </div>
-                              <div className="sign__field">
-                                 <label htmlFor="nr" className="sign__label">
-                                    Nr.
-                                 </label>
-                                 <input
-                                    id="nr"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="123"
-                                    value={form.domicile.nr}
-                                    onChange={(e) =>
-                                       setDomicile("nr", e.target.value)
-                                    }
-                                 />
-                              </div>
-                           </div>
-
-                           {/* Domiciliu 3 */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label htmlFor="ap" className="sign__label">
-                                    Ap.
-                                 </label>
-                                 <input
-                                    id="ap"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="45"
-                                    value={form.domicile.ap}
-                                    onChange={(e) =>
-                                       setDomicile("ap", e.target.value)
-                                    }
-                                 />
-                              </div>
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="source"
-                                    className="sign__label"
-                                 >
-                                    De unde ați aflat?
-                                 </label>
-                                 <input
-                                    id="source"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="Google / Instagram / recomandare"
-                                    value={form.source}
-                                    onChange={(e) =>
-                                       setField("source", e.target.value)
-                                    }
-                                 />
-                              </div>
-                           </div>
-
-                           {/* acțiuni */}
-                           <div className="sign__row-btns">
-                              <button
-                                 type="button"
-                                 className="sign__link-button arrow"
-                                 onClick={goPrev}
-                                 disabled={loading}
-                              >
-                                 <ReactSVG
-                                    src={arrowIcon}
-                                    className="sign__icon-inline"
-                                 />
-                                 <span>Înapoi</span>
-                              </button>
-                              <button
-                                 type="submit"
-                                 className="sign__button"
-                                 disabled={loading}
-                              >
-                                 <span>{loading ? "..." : "Înainte"}</span>
-                                 <ReactSVG
-                                    className="sign__button-icon sign__icon"
-                                    src={arrowIcon}
-                                 />
-                              </button>
-                           </div>
-                        </form>
-                     </div>
-
-                     {/* === ETAPA 3 === */}
-                     <div
-                        className={`sign__form-wrapper ${
-                           step === 3
-                              ? "sign__form--active"
-                              : "sign__form--leave"
-                        }`}
-                     >
-                        <form className="sign__form" onSubmit={handleSubmit}>
-                           {/* Act (opțional) */}
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label htmlFor="serie" className="sign__label">
-                                    Seria act
-                                 </label>
-                                 <input
-                                    id="serie"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="A"
-                                    value={form.idDoc.serie}
-                                    onChange={(e) =>
-                                       setIdDoc("serie", e.target.value)
-                                    }
-                                 />
-                              </div>
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="number"
-                                    className="sign__label"
-                                 >
-                                    Număr act
-                                 </label>
-                                 <input
-                                    id="number"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="1234567"
-                                    value={form.idDoc.number}
-                                    onChange={(e) =>
-                                       setIdDoc("number", e.target.value)
-                                    }
-                                 />
-                              </div>
-                           </div>
-                           <div className="sign__form-row">
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="issuedBy"
-                                    className="sign__label"
-                                 >
-                                    Eliberat de
-                                 </label>
-                                 <input
-                                    id="issuedBy"
-                                    type="text"
-                                    className="sign__input enroll"
-                                    placeholder="ASP"
-                                    value={form.idDoc.issuedBy}
-                                    onChange={(e) =>
-                                       setIdDoc("issuedBy", e.target.value)
-                                    }
-                                 />
-                              </div>
-                              <div className="sign__field">
-                                 <label
-                                    htmlFor="issueDate"
-                                    className="sign__label"
-                                 >
-                                    Data eliberării
-                                 </label>
-                                 <input
-                                    id="issueDate"
-                                    type="date"
-                                    className="sign__input enroll"
-                                    placeholder="2020-01-15"
-                                    value={form.idDoc.issueDate}
-                                    onChange={(e) =>
-                                       setIdDoc("issueDate", e.target.value)
-                                    }
-                                    onFocus={(e) =>
-                                       tryOpenPicker(e.currentTarget)
-                                    }
-                                    onClick={(e) =>
-                                       tryOpenPicker(e.currentTarget)
-                                    }
-                                 />
-                              </div>
-                           </div>
-
-                           {/* Consimțăminte */}
-                           <div className="sign__terms">
-                              <label className="sign__checkbox">
-                                 <input
-                                    type="checkbox"
-                                    checked={form.agreeTerms}
-                                    onChange={(e) =>
-                                       setField("agreeTerms", e.target.checked)
-                                    }
-                                    required
-                                    aria-required="true"
-                                    aria-label="Accept Termenii și Condițiile"
-                                 />
-                                 <span style={{ lineHeight: 1.3 }}>
-                                    Sunt de acord cu{" "}
-                                    <a
-                                       href="/termeni"
-                                       target="_blank"
-                                       rel="noopener noreferrer"
+                           <form
+                              className="sign__form"
+                              onSubmit={(e) => {
+                                 e.preventDefault();
+                                 goNext();
+                              }}
+                           >
+                              {/* Nume / Prenume */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="lastName"
+                                       className="sign__label"
                                     >
-                                       Termenii și Condițiile
-                                    </a>{" "}
-                                    și{" "}
-                                    <a
-                                       href="/confidentialitate"
-                                       target="_blank"
-                                       rel="noopener noreferrer"
+                                       Nume
+                                    </label>
+                                    <input
+                                       id="lastName"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="Popescu"
+                                       value={form.lastName}
+                                       onChange={(e) =>
+                                          setField("lastName", e.target.value)
+                                       }
+                                       required
+                                    />
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="firstName"
+                                       className="sign__label"
                                     >
-                                       Politica de confidențialitate
-                                    </a>
-                                    .
-                                 </span>
-                              </label>
-                              <label className="sign__checkbox">
-                                 <input
-                                    type="checkbox"
-                                    checked={form.agreeGDPR}
-                                    onChange={(e) =>
-                                       setField("agreeGDPR", e.target.checked)
-                                    }
-                                    required
-                                    aria-required="true"
-                                    aria-label="Acord pentru prelucrarea datelor (GDPR)"
-                                 />
-                                 <span>
-                                    Îmi dau acordul pentru prelucrarea datelor
-                                    personale (GDPR).
-                                 </span>
-                              </label>
-                           </div>
+                                       Prenume
+                                    </label>
+                                    <input
+                                       id="firstName"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="Ion"
+                                       value={form.firstName}
+                                       onChange={(e) =>
+                                          setField("firstName", e.target.value)
+                                       }
+                                       required
+                                    />
+                                 </div>
+                              </div>
 
-                           {/* acțiuni */}
-                           <div className="sign__row-btns">
-                              <button
-                                 type="button"
-                                 className="sign__link-button arrow"
-                                 onClick={goPrev}
-                                 disabled={loading}
-                              >
-                                 <ReactSVG
-                                    src={arrowIcon}
-                                    className="sign__icon-inline"
-                                 />
-                                 <span>Înapoi</span>
-                              </button>
-                              <button
-                                 type="submit"
-                                 className="sign__button"
-                                 disabled={!canSubmit}
-                                 aria-disabled={!canSubmit}
-                                 title={
-                                    !canSubmit
-                                       ? "Bifează ambele acorduri"
-                                       : "Trimite"
-                                 }
-                              >
-                                 <span>
-                                    {loading
-                                       ? "Se trimite..."
-                                       : !canSubmit
-                                       ? "Bifează acordurile"
-                                       : "Trimite"}
-                                 </span>
-                                 <ReactSVG
-                                    className="sign__button-icon sign__icon"
-                                    src={addIcon}
-                                 />
-                              </button>
-                           </div>
-                        </form>
+                              {/* Cetățenia / Data nașterii */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="citizenship"
+                                       className="sign__label"
+                                    >
+                                       Cetățenia
+                                    </label>
+                                    <input
+                                       id="citizenship"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="Republica Moldova"
+                                       value={form.citizenship}
+                                       onChange={(e) =>
+                                          setField(
+                                             "citizenship",
+                                             e.target.value,
+                                          )
+                                       }
+                                       required
+                                    />
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="birthDate"
+                                       className="sign__label"
+                                    >
+                                       Data nașterii
+                                    </label>
+                                    <input
+                                       id="birthDate"
+                                       type="date"
+                                       className="sign__input enroll"
+                                       placeholder="1995-05-10"
+                                       value={form.birthDate}
+                                       onChange={(e) =>
+                                          setField("birthDate", e.target.value)
+                                       }
+                                       onFocus={(e) =>
+                                          tryOpenPicker(e.currentTarget)
+                                       }
+                                       onClick={(e) =>
+                                          tryOpenPicker(e.currentTarget)
+                                       }
+                                       required
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* Sex / IDNP */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="sex"
+                                       className="sign__label"
+                                    >
+                                       Sex
+                                    </label>
+                                    <select
+                                       id="sex"
+                                       className="sign__input enroll"
+                                       value={form.sex}
+                                       onChange={(e) =>
+                                          setField("sex", e.target.value)
+                                       }
+                                       required
+                                    >
+                                       <option value="M">Masculin</option>
+                                       <option value="F">Feminin</option>
+                                    </select>
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="idnp"
+                                       className="sign__label"
+                                    >
+                                       IDNP
+                                    </label>
+                                    <input
+                                       id="idnp"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="1234567890123"
+                                       value={form.idnp}
+                                       onChange={handleIdnpChange}
+                                       inputMode="numeric"
+                                       maxLength={13}
+                                       required
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* Email / Telefon */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="email"
+                                       className="sign__label"
+                                    >
+                                       Email
+                                    </label>
+                                    <input
+                                       id="email"
+                                       type="email"
+                                       className="sign__input enroll"
+                                       placeholder="ion.popescu@example.com"
+                                       value={form.email}
+                                       onChange={(e) =>
+                                          setField("email", e.target.value)
+                                       }
+                                       required
+                                    />
+                                 </div>
+                                 <div className="sign__field sign__input-wrapper">
+                                    <label
+                                       htmlFor="phone"
+                                       className="sign__label"
+                                    >
+                                       Telefon
+                                    </label>
+                                    <input
+                                       id="phone"
+                                       type="tel"
+                                       className="sign__input enroll sign__input--phone"
+                                       placeholder="069123456"
+                                       {...numericInputProps("phone", 9)}
+                                       aria-label="Număr de telefon"
+                                       required
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* acțiuni */}
+                              <div className="sign__row-btns">
+                                 <button
+                                    type="button"
+                                    className="sign__link-button"
+                                    onClick={() => {
+                                       try {
+                                          localStorage.removeItem(LS_KEY);
+                                       } catch {}
+                                       setForm(initialForm);
+                                       addMessage(
+                                          "Draftul a fost curățat.",
+                                          "info",
+                                       );
+                                    }}
+                                    disabled={loading}
+                                 >
+                                    <ReactSVG
+                                       src={resetIcon}
+                                       className="sign__icon-inline"
+                                    />
+                                    <span>Curăță draft</span>
+                                 </button>
+                                 <button
+                                    type="submit"
+                                    className="sign__button"
+                                    disabled={loading}
+                                 >
+                                    <span>{loading ? "..." : "Înainte"}</span>
+                                    <ReactSVG
+                                       className="sign__button-icon sign__icon"
+                                       src={arrowIcon}
+                                    />
+                                 </button>
+                              </div>
+                           </form>
+                        </div>
+
+                        {/* === ETAPA 2 === */}
+                        <div
+                           className={`sign__form-wrapper ${
+                              step === 2
+                                 ? "sign__form--active"
+                                 : "sign__form--leave"
+                           }`}
+                        >
+                           <form
+                              className="sign__form"
+                              onSubmit={(e) => {
+                                 e.preventDefault();
+                                 goNext();
+                              }}
+                           >
+                              {/* Cutie / Telefon persoană de contact */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="gearbox"
+                                       className="sign__label"
+                                    >
+                                       Tip cutie
+                                    </label>
+                                    <select
+                                       id="gearbox"
+                                       className="sign__input enroll"
+                                       value={form.gearbox}
+                                       onChange={(e) =>
+                                          setField("gearbox", e.target.value)
+                                       }
+                                    >
+                                       <option value="MECANICĂ">
+                                          Cutie mecanică
+                                       </option>
+                                       <option value="AUTOMATĂ">
+                                          Cutie automată
+                                       </option>
+                                    </select>
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="contactPerson"
+                                       className="sign__label"
+                                    >
+                                       Telefon persoană de contact
+                                    </label>
+                                    <input
+                                       id="contactPerson"
+                                       type="tel"
+                                       className="sign__input enroll"
+                                       placeholder="069654321"
+                                       {...numericInputProps(
+                                          "contactPerson",
+                                          9,
+                                       )}
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* Domiciliu 1 */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="sector"
+                                       className="sign__label"
+                                    >
+                                       Raion/Sector
+                                    </label>
+                                    <input
+                                       id="sector"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="Centru"
+                                       value={form.domicile.sector}
+                                       onChange={(e) =>
+                                          setDomicile("sector", e.target.value)
+                                       }
+                                       required
+                                    />
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="locality"
+                                       className="sign__label"
+                                    >
+                                       Localitate
+                                    </label>
+                                    <input
+                                       id="locality"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="Chișinău"
+                                       value={form.domicile.locality}
+                                       onChange={(e) =>
+                                          setDomicile(
+                                             "locality",
+                                             e.target.value,
+                                          )
+                                       }
+                                       required
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* Domiciliu 2 */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="street"
+                                       className="sign__label"
+                                    >
+                                       Stradă
+                                    </label>
+                                    <input
+                                       id="street"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="Ștefan cel Mare"
+                                       value={form.domicile.street}
+                                       onChange={(e) =>
+                                          setDomicile("street", e.target.value)
+                                       }
+                                       required
+                                    />
+                                 </div>
+                                 <div className="sign__field">
+                                    <label htmlFor="nr" className="sign__label">
+                                       Nr.
+                                    </label>
+                                    <input
+                                       id="nr"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="123"
+                                       value={form.domicile.nr}
+                                       onChange={(e) =>
+                                          setDomicile("nr", e.target.value)
+                                       }
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* Domiciliu 3 */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label htmlFor="ap" className="sign__label">
+                                       Ap.
+                                    </label>
+                                    <input
+                                       id="ap"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="45"
+                                       value={form.domicile.ap}
+                                       onChange={(e) =>
+                                          setDomicile("ap", e.target.value)
+                                       }
+                                    />
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="source"
+                                       className="sign__label"
+                                    >
+                                       De unde ați aflat?
+                                    </label>
+                                    <input
+                                       id="source"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="Google / Instagram / recomandare"
+                                       value={form.source}
+                                       onChange={(e) =>
+                                          setField("source", e.target.value)
+                                       }
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* acțiuni */}
+                              <div className="sign__row-btns">
+                                 <button
+                                    type="button"
+                                    className="sign__link-button arrow"
+                                    onClick={goPrev}
+                                    disabled={loading}
+                                 >
+                                    <ReactSVG
+                                       src={arrowIcon}
+                                       className="sign__icon-inline"
+                                    />
+                                    <span>Înapoi</span>
+                                 </button>
+                                 <button
+                                    type="submit"
+                                    className="sign__button"
+                                    disabled={loading}
+                                 >
+                                    <span>{loading ? "..." : "Înainte"}</span>
+                                    <ReactSVG
+                                       className="sign__button-icon sign__icon"
+                                       src={arrowIcon}
+                                    />
+                                 </button>
+                              </div>
+                           </form>
+                        </div>
+
+                        {/* === ETAPA 3 === */}
+                        <div
+                           className={`sign__form-wrapper ${
+                              step === 3
+                                 ? "sign__form--active"
+                                 : "sign__form--leave"
+                           }`}
+                        >
+                           <form className="sign__form" onSubmit={handleSubmit}>
+                              {/* Act (opțional) */}
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="serie"
+                                       className="sign__label"
+                                    >
+                                       Seria act
+                                    </label>
+                                    <input
+                                       id="serie"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="A"
+                                       value={form.idDoc.serie}
+                                       onChange={(e) =>
+                                          setIdDoc("serie", e.target.value)
+                                       }
+                                    />
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="number"
+                                       className="sign__label"
+                                    >
+                                       Număr act
+                                    </label>
+                                    <input
+                                       id="number"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="1234567"
+                                       value={form.idDoc.number}
+                                       onChange={(e) =>
+                                          setIdDoc("number", e.target.value)
+                                       }
+                                    />
+                                 </div>
+                              </div>
+                              <div className="sign__form-row">
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="issuedBy"
+                                       className="sign__label"
+                                    >
+                                       Eliberat de
+                                    </label>
+                                    <input
+                                       id="issuedBy"
+                                       type="text"
+                                       className="sign__input enroll"
+                                       placeholder="ASP"
+                                       value={form.idDoc.issuedBy}
+                                       onChange={(e) =>
+                                          setIdDoc("issuedBy", e.target.value)
+                                       }
+                                    />
+                                 </div>
+                                 <div className="sign__field">
+                                    <label
+                                       htmlFor="issueDate"
+                                       className="sign__label"
+                                    >
+                                       Data eliberării
+                                    </label>
+                                    <input
+                                       id="issueDate"
+                                       type="date"
+                                       className="sign__input enroll"
+                                       placeholder="2020-01-15"
+                                       value={form.idDoc.issueDate}
+                                       onChange={(e) =>
+                                          setIdDoc("issueDate", e.target.value)
+                                       }
+                                       onFocus={(e) =>
+                                          tryOpenPicker(e.currentTarget)
+                                       }
+                                       onClick={(e) =>
+                                          tryOpenPicker(e.currentTarget)
+                                       }
+                                    />
+                                 </div>
+                              </div>
+
+                              {/* Consimțăminte */}
+                              <div className="sign__terms">
+                                 <label className="sign__checkbox">
+                                    <input
+                                       type="checkbox"
+                                       checked={form.agreeTerms}
+                                       onChange={(e) =>
+                                          setField(
+                                             "agreeTerms",
+                                             e.target.checked,
+                                          )
+                                       }
+                                       required
+                                       aria-required="true"
+                                       aria-label="Accept Termenii și Condițiile"
+                                    />
+                                    <span style={{ lineHeight: 1.3 }}>
+                                       Sunt de acord cu{" "}
+                                       <a
+                                          href="/termeni"
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                       >
+                                          Termenii și Condițiile
+                                       </a>{" "}
+                                       și{" "}
+                                       <a
+                                          href="/confidentialitate"
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                       >
+                                          Politica de confidențialitate
+                                       </a>
+                                       .
+                                    </span>
+                                 </label>
+                                 <label className="sign__checkbox">
+                                    <input
+                                       type="checkbox"
+                                       checked={form.agreeGDPR}
+                                       onChange={(e) =>
+                                          setField(
+                                             "agreeGDPR",
+                                             e.target.checked,
+                                          )
+                                       }
+                                       required
+                                       aria-required="true"
+                                       aria-label="Acord pentru prelucrarea datelor (GDPR)"
+                                    />
+                                    <span>
+                                       Îmi dau acordul pentru prelucrarea
+                                       datelor personale (GDPR).
+                                    </span>
+                                 </label>
+                              </div>
+
+                              {/* acțiuni */}
+                              <div className="sign__row-btns">
+                                 <button
+                                    type="button"
+                                    className="sign__link-button arrow"
+                                    onClick={goPrev}
+                                    disabled={loading}
+                                 >
+                                    <ReactSVG
+                                       src={arrowIcon}
+                                       className="sign__icon-inline"
+                                    />
+                                    <span>Înapoi</span>
+                                 </button>
+                                 <button
+                                    type="submit"
+                                    className="sign__button"
+                                    disabled={!canSubmit}
+                                    aria-disabled={!canSubmit}
+                                    title={
+                                       !canSubmit
+                                          ? "Bifează ambele acorduri"
+                                          : "Trimite"
+                                    }
+                                 >
+                                    <span>
+                                       {loading
+                                          ? "Se trimite..."
+                                          : !canSubmit
+                                            ? "Bifează acordurile"
+                                            : "Trimite"}
+                                    </span>
+                                    <ReactSVG
+                                       className="sign__button-icon sign__icon"
+                                       src={addIcon}
+                                    />
+                                 </button>
+                              </div>
+                           </form>
+                        </div>
                      </div>
                   </div>
                </div>
             </div>
-         </div>
-      </main>
+         </main>
+         <FooterSign />
+      </>
    );
 }

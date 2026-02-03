@@ -19,7 +19,7 @@ import { getReservations } from "../api/reservationsService";
 import ReservationsProgress from "../components/SPanel/ReservationsProgress";
 import NextLesson from "../components/SPanel/NextLesson";
 import PanelHeader from "../components/SPanel/PanelHeader";
-import ClockDisplay from "../components/UI/ClockDisplay";
+import ClockDisplay from "../components/Common/ClockDisplay";
 
 import accIcon from "../assets/svg/acc.svg";
 import addIcon from "../assets/svg/mdi--calendar-plus-outline.svg";
@@ -245,9 +245,7 @@ function SPanel() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
+         
 
          <main className="main">
             <section className="intro student">

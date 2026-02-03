@@ -818,6 +818,51 @@ export default function ACalendarOptimized({
    }, []);
 
    /* ===================== DRAFT helpers (SINGLE SOURCE OF TRUTH) ===================== */
+   function parseDualOrder(v) {
+      const s = String(v ?? "").trim();
+      if (!s)
+         return { a: Number.POSITIVE_INFINITY, b: Number.POSITIVE_INFINITY };
+
+      // split pe X / x
+      const parts = s.split(/x/i);
+      const left = (parts[0] ?? "").trim();
+      const right = (parts[1] ?? "").trim();
+
+      const parseSide = (t) => {
+         const m = String(t || "").match(/^(\d+)/);
+         if (!m) return Number.POSITIVE_INFINITY;
+         const n = parseInt(m[1], 10);
+         return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+      };
+
+      let a = parseSide(left);
+      let b = parseSide(right);
+
+      // compatibilitate: "6" sau "6X" => b=a ; "X7" => a=b
+      if (!Number.isFinite(a) && Number.isFinite(b)) a = b;
+      if (Number.isFinite(a) && !Number.isFinite(b)) b = a;
+
+      return { a, b };
+   }
+
+   function isBuiucaniByMeta(inst, meta) {
+      const s = String(
+         meta?.sectorNorm ??
+            meta?.sector ??
+            inst?.sector ??
+            inst?.groupSector ??
+            "",
+      )
+         .toLowerCase()
+         .trim();
+      return s.includes("bui");
+   }
+
+   function safeFullName(inst) {
+      const n = String(inst?.name ?? "").trim();
+      if (n) return n;
+      return `${inst?.firstName ?? ""} ${inst?.lastName ?? ""}`.trim();
+   }
 
    const activeDraftSlotByUserRef = useRef(new Map()); // userId -> slotKey
 
@@ -1331,12 +1376,15 @@ export default function ACalendarOptimized({
          const payload = (changes || [])
             .map((c) => {
                const id = String(c?.id ?? "").trim();
-               const n = Math.max(1, Math.trunc(Number(c?.order)));
-               if (!id || !Number.isFinite(n)) return null;
+               const a = Math.max(1, Math.trunc(Number(c?.orderA)));
+               const b = Math.max(1, Math.trunc(Number(c?.orderB)));
+
+               if (!id) return null;
+               if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
 
                return {
                   id,
-                  order: String(n), // ✅ IMPORTANT: string, ca în request-ul care merge
+                  order: `${a}X${b}`, // ✅ DUAL
                };
             })
             .filter(Boolean);
@@ -1350,12 +1398,11 @@ export default function ACalendarOptimized({
          const worker = async () => {
             while (queue.length) {
                const item = queue.shift();
-
                try {
                   const res = await dispatch(
                      updateInstructor({
                         id: item.id,
-                        data: { order: item.order }, // ✅ minim + string
+                        data: { order: item.order },
                      }),
                   ).unwrap();
 
@@ -1390,6 +1437,22 @@ export default function ACalendarOptimized({
    const instructorsOrderedForUI = useMemo(() => {
       const list = Array.isArray(instructors) ? instructors : [];
 
+      const readOrderNumber = (v) => {
+         const s = String(v ?? "").trim();
+         if (!s) return Number.POSITIVE_INFINITY;
+
+         const m = s.match(/^(\d+)/); // ✅ "12X" -> 12
+         if (m) {
+            const n = parseInt(m[1], 10);
+            return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+         }
+
+         const n = Number(s);
+         return Number.isFinite(n) && n > 0
+            ? Math.round(n)
+            : Number.POSITIVE_INFINITY;
+      };
+
       const ord = (i) => {
          const id = String(i?.id ?? "");
          const meta = instructorMeta?.get?.(id);
@@ -1401,8 +1464,7 @@ export default function ACalendarOptimized({
             i?.position ??
             null;
 
-         const n = Number(v);
-         return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+         return readOrderNumber(v); // ✅ aici e fixul
       };
 
       const name = (i) =>
@@ -1623,11 +1685,6 @@ export default function ACalendarOptimized({
       [instructorGroupByInstId],
    );
 
-   const studentDictRef = useRef(null);
-   useEffect(() => {
-      studentDictRef.current = studentDict;
-   }, [studentDict]);
-
    /* ===== Funcții TZ pentru blackouts ===== */
    function partsInTZ(dateLike, timeZone = MOLDOVA_TZ_ID) {
       const d = new Date(dateLike);
@@ -1750,9 +1807,7 @@ export default function ACalendarOptimized({
          const groupIdRaw = r.instructorsGroupId ?? null;
          const studentId = r.userId != null ? String(r.userId) : null;
 
-         const fromStore = studentDictRef.current
-            ? studentDictRef.current.get(studentId)
-            : null;
+         const fromStore = studentDict ? studentDict.get(studentId) : null;
          const userObj = r.user || {};
 
          const first = fromStore?.firstName ?? userObj.firstName ?? "";
@@ -1835,7 +1890,7 @@ export default function ACalendarOptimized({
             searchPhoneDigits,
          };
       },
-      [instructorsGroupDict, instructorMeta],
+      [instructorsGroupDict, instructorMeta, studentDict],
    );
 
    const eventsByDay = useMemo(() => {
@@ -2570,44 +2625,96 @@ export default function ACalendarOptimized({
       [zoom],
    );
 
-   const canvasInstructors = useMemo(() => {
-      if (isDummyMode) {
-         return DUMMY_INSTRUCTORS.map((x) => x.inst);
-      }
+   const buildCanvasList = useCallback(
+      (mode /* "A" | "B" */) => {
+         if (isDummyMode) {
+            return DUMMY_INSTRUCTORS.map((x) => x.inst);
+         }
 
-      const base = (instructors || []).filter((i) => {
-         const id = String(i.id || "");
-         if (!id) return false;
-         if (allowedInstBySector && !allowedInstBySector.has(id)) return false;
-         return true;
-      });
+         const list = (instructors || []).filter((i) => {
+            const id = String(i?.id || "");
+            if (!id) return false;
+            if (allowedInstBySector && !allowedInstBySector.has(id))
+               return false;
 
-      // ❌ IMPORTANT: NU mai sortăm aici (ca să nu se schimbe ordinea => culorile din header)
-      // base.sort((a, b) => { ... })
+            const meta = instructorMeta.get(id) || {};
+            if (mode === "B" && isBuiucaniByMeta(i, meta)) return false; // ✅ fără Bui în B
 
-      const mapped = base.map((i) => {
-         const id = String(i.id || "");
-         const meta = instructorMeta.get(id);
+            return true;
+         });
 
-         const full = `${i.firstName ?? ""} ${i.lastName ?? ""}`.trim();
+         const getOrderPart = (inst) => {
+            const id = String(inst?.id || "");
+            const meta = instructorMeta.get(id) || {};
+            const raw =
+               meta?.order ??
+               inst?.order ??
+               inst?.uiOrder ??
+               inst?.sortOrder ??
+               inst?.position ??
+               null;
 
-         return {
-            id,
-            name: full || "Necunoscut",
-            sectorSlug: meta?.sectorNorm || null,
-            order: meta?.order ?? i?.order ?? null, // ✅ ADD
+            const { a, b } = parseDualOrder(raw);
+            return mode === "B" ? b : a;
          };
-      });
 
-      const padCols = [
-         { id: "__pad_1", name: "Anulari", sectorSlug: null },
-         { id: "__pad_2", name: "Asteptari", sectorSlug: null },
-         { id: "__pad_3", name: "Asteptari", sectorSlug: null },
-         { id: "__pad_4", name: "Laterala", sectorSlug: null },
-      ];
+         const nameKey = (inst) => safeFullName(inst).toLowerCase();
 
-      return [...padCols, ...mapped];
-   }, [isDummyMode, instructors, allowedInstBySector, instructorMeta]);
+         const sorted = list.slice().sort((a, b) => {
+            const ao = getOrderPart(a);
+            const bo = getOrderPart(b);
+            if (ao !== bo) return ao - bo;
+
+            const an = nameKey(a);
+            const bn = nameKey(b);
+            if (an !== bn) return an < bn ? -1 : 1;
+
+            return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
+         });
+
+         const mapped = sorted.map((i) => {
+            const id = String(i.id || "");
+            const meta = instructorMeta.get(id) || {};
+            const full = safeFullName(i);
+
+            const raw =
+               meta?.order ??
+               i?.order ??
+               i?.uiOrder ??
+               i?.sortOrder ??
+               i?.position ??
+               null;
+
+            const { a, b } = parseDualOrder(raw);
+
+            return {
+               id,
+               name: full || "Necunoscut",
+               sectorSlug: meta?.sectorNorm || null,
+               order: mode === "B" ? b : a, // ✅ pt debug dacă vrei
+            };
+         });
+
+         const padCols = [
+            { id: "__pad_1", name: "Anulari", sectorSlug: null },
+            { id: "__pad_2", name: "Asteptari", sectorSlug: null },
+            { id: "__pad_3", name: "Asteptari", sectorSlug: null },
+            { id: "__pad_4", name: "Laterala", sectorSlug: null },
+         ];
+
+         return [...padCols, ...mapped];
+      },
+      [isDummyMode, instructors, allowedInstBySector, instructorMeta],
+   );
+
+   const canvasInstructorsA = useMemo(
+      () => buildCanvasList("A"),
+      [buildCanvasList],
+   );
+   const canvasInstructorsB = useMemo(
+      () => buildCanvasList("B"),
+      [buildCanvasList],
+   );
 
    /* ========== LOGICA DE SEARCH ========== */
 
@@ -2869,7 +2976,8 @@ export default function ACalendarOptimized({
                cars={cars}
                instructors={instructorsOrderedForUI}
                users={users}
-               canvasInstructors={canvasInstructors}
+               canvasInstructorsA={canvasInstructorsA}
+               canvasInstructorsB={canvasInstructorsB}
                viewModel={calendarViewModel}
                forceAllDaysVisible={hasSearchHits}
                presenceVer={presenceVer}
@@ -3036,6 +3144,8 @@ function ACalendarToolbar({
 
 // ✅ ÎNLOCUIEȘTE COMPLET componenta ACalendarTrack cu asta (și nimic altceva)
 
+// ✅ ÎNLOCUIEȘTE COMPLET componenta ACalendarTrack cu asta (și nimic altceva)
+
 const ACalendarTrack = memo(function ACalendarTrack({
    scrollRef,
    rowHeight,
@@ -3054,7 +3164,8 @@ const ACalendarTrack = memo(function ACalendarTrack({
    cars,
    instructors,
    users,
-   canvasInstructors,
+   canvasInstructorsA,
+   canvasInstructorsB,
    viewModel,
    forceAllDaysVisible,
    presenceVer,
@@ -3076,6 +3187,11 @@ const ACalendarTrack = memo(function ACalendarTrack({
    const blackoutKeyMap = viewModel?.blackoutKeyMap || null;
    const blackoutVer = viewModel?.blackoutVer ?? 0;
 
+   const isGroupAForDate = useCallback((dateObj) => {
+      const dow = dateObj.getDay(); // 0=Sun,1=Mon,...6=Sat
+      return dow === 0 || dow === 2 || dow === 4; // ✅ Dum + Mar + Joi
+   }, []);
+
    return (
       <div
          className="dv-track-wrap"
@@ -3096,7 +3212,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                   : "Editează ordinea instructorilor"
             }
          >
-            {orderEditOpen ? "🢘 Înapoi" : "✎ Edit"}
+            {orderEditOpen ? "Înapoi" : "Edit"}
          </button>
 
          <div
@@ -3120,7 +3236,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                   open={true}
                   inline={true}
                   cars={cars}
-                  instructors={instructors} // ✅ din store, stabil
+                  instructors={instructors} // ✅ din store (ordonat pt UI)
                   onClose={onCloseOrderEdit}
                   onSave={onSaveOrder}
                />
@@ -3140,6 +3256,11 @@ const ACalendarTrack = memo(function ACalendarTrack({
                      const ts = startOfDayTs(d);
                      const isVisible =
                         forceAllDaysVisible || visibleDays.has(ts);
+
+                     // ✅ selectează lista de instructori pe zi
+                     const dayInstructors = isGroupAForDate(d)
+                        ? canvasInstructorsA
+                        : canvasInstructorsB;
 
                      let evs = isDummyMode
                         ? EMPTY_EVENTS
@@ -3163,6 +3284,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
 
                      const dayStartLocal = new Date(d);
                      dayStartLocal.setHours(7, 0, 0, 0);
+
                      const dayEndLocal = new Date(d);
                      dayEndLocal.setHours(21, 0, 0, 0);
 
@@ -3203,7 +3325,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                                  <DayviewCanvasTrack
                                     dayStart={dayStartLocal}
                                     dayEnd={dayEndLocal}
-                                    instructors={canvasInstructors}
+                                    instructors={dayInstructors} // ✅ A/B pe zi
                                     events={DEBUG_CANVAS_EMPTY ? [] : evs}
                                     slots={slots}
                                     layout={{

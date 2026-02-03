@@ -92,7 +92,7 @@ function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
       hh,
       mm,
       0,
-      0
+      0,
    );
    const offMin = tzOffsetMinutesAt(utcGuess, MOLDOVA_TZ);
    const fixedUtcMs = utcGuess - offMin * 60000;
@@ -293,7 +293,7 @@ const hasInstructorConflict = (
    reservations,
    instructorId,
    isoStart,
-   excludeReservationId
+   excludeReservationId,
 ) => {
    if (!instructorId || !isoStart) return false;
    const key = localKeyForIso(isoStart);
@@ -312,14 +312,14 @@ const hasStudentConflict = (
    reservations,
    studentId,
    isoStart,
-   excludeReservationId
+   excludeReservationId,
 ) => {
    if (!studentId || !isoStart) return false;
    const key = localKeyForIso(isoStart);
    return (reservations || [])
       .filter((r) => String(r.id) !== String(excludeReservationId))
       .filter(
-         (r) => String(r?.userId ?? r?.studentId ?? "") === String(studentId)
+         (r) => String(r?.userId ?? r?.studentId ?? "") === String(studentId),
       )
       .some((r) => {
          const st = getStartFromReservation(r);
@@ -340,7 +340,7 @@ function highlightText(text, query) {
          </i>
       ) : (
          part
-      )
+      ),
    );
 }
 
@@ -366,24 +366,24 @@ const makeResolvers = (students, instructors, h) => {
       (students || []).map((s) => [
          String(s.id),
          `${s.firstName || ""} ${s.lastName || ""}`.trim(),
-      ])
+      ]),
    );
    const insById = new Map(
       (instructors || []).map((i) => [
          String(i.id),
          `${i.firstName || ""} ${i.lastName || ""}`.trim(),
-      ])
+      ]),
    );
    if (h?.user?.id) {
       stuById.set(
          String(h.user.id),
-         `${h.user.firstName || ""} ${h.user.lastName || ""}`.trim()
+         `${h.user.firstName || ""} ${h.user.lastName || ""}`.trim(),
       );
    }
    if (h?.instructor?.id) {
       insById.set(
          String(h.instructor.id),
-         `${h.instructor.firstName || ""} ${h.instructor.lastName || ""}`.trim()
+         `${h.instructor.firstName || ""} ${h.instructor.lastName || ""}`.trim(),
       );
    }
    const nameForUserId = (val) =>
@@ -642,12 +642,12 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
    const existing = useMemo(
       () => reservations.find((r) => String(r.id) === String(reservationId)),
-      [reservations, reservationId]
+      [reservations, reservationId],
    );
 
    const hasUserRole = (u) => {
       const role = String(
-         u?.role ?? u?.Role ?? u?.userRole ?? ""
+         u?.role ?? u?.Role ?? u?.userRole ?? "",
       ).toUpperCase();
       if (role === "USER") return true;
       const roles = Array.isArray(u?.roles)
@@ -658,7 +658,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
    const students = useMemo(
       () => (studentsAll || []).filter(hasUserRole),
-      [studentsAll]
+      [studentsAll],
    );
 
    const [selectedDate, setSelectedDate] = useState(() => {
@@ -704,16 +704,16 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       setGearbox(
          (existing.gearbox || "Manual").toLowerCase() === "automat"
             ? "Automat"
-            : "Manual"
+            : "Manual",
       );
 
       setStudentId(
          existing?.userId || existing?.studentId
             ? String(existing.userId || existing.studentId)
-            : ""
+            : "",
       );
       setInstructorId(
-         existing?.instructorId ? String(existing.instructorId) : ""
+         existing?.instructorId ? String(existing.instructorId) : "",
       );
 
       setPrivateMessage(existing?.privateMessage || "");
@@ -739,11 +739,11 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          existing?.userId || existing?.studentId
             ? String(existing.userId || existing.studentId)
             : "",
-      [existing]
+      [existing],
    );
    const originalInstructorId = useMemo(
       () => (existing?.instructorId ? String(existing.instructorId) : ""),
-      [existing]
+      [existing],
    );
 
    const [view, setView] = useState("form"); // "form" | "studentSearch" | "instructorSearch" | "history"
@@ -774,7 +774,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const [freeSlots, setFreeSlots] = useState([]);
    const freeLocalKeySet = useMemo(
       () => new Set(freeSlots.map((iso) => localKeyForIso(iso))),
-      [freeSlots]
+      [freeSlots],
    );
 
    const recomputeAvailability = useCallback(() => {
@@ -785,7 +785,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
       const fullGrid = buildFullGridISO(60);
       const others = (reservations || []).filter(
-         (r) => String(r.id) !== String(reservationId)
+         (r) => String(r.id) !== String(reservationId),
       );
 
       const busyStudent = new Set();
@@ -831,16 +831,16 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          studentId
             ? (students || []).find((u) => String(u.id) === String(studentId))
             : null,
-      [students, studentId]
+      [students, studentId],
    );
    const selectedInstructor = useMemo(
       () =>
          instructorId
             ? (instructors || []).find(
-                 (i) => String(i.id) === String(instructorId)
+                 (i) => String(i.id) === String(instructorId),
               )
             : null,
-      [instructors, instructorId]
+      [instructors, instructorId],
    );
 
    const studentDisplay = selectedStudent
@@ -924,7 +924,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       if (changingTime && !selectedIsoUTC) {
          return pushAlert(
             "error",
-            "Selectează data și ora pentru a modifica programarea."
+            "Selectează data și ora pentru a modifica programarea.",
          );
       }
 
@@ -939,18 +939,18 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             reservations,
             instructorId,
             effectiveIsoForChecks,
-            existing.id
+            existing.id,
          );
          const conflictS = hasStudentConflict(
             reservations,
             studentId,
             effectiveIsoForChecks,
-            existing.id
+            existing.id,
          );
          if (conflictI || conflictS) {
             return pushAlert(
                "error",
-               "Slot indisponibil (aceeași oră locală pentru elev sau instructor)."
+               "Slot indisponibil (aceeași oră locală pentru elev sau instructor).",
             );
          }
       } else if (changingInstructor) {
@@ -958,12 +958,12 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             reservations,
             instructorId,
             effectiveIsoForChecks,
-            existing.id
+            existing.id,
          );
          if (conflictI) {
             return pushAlert(
                "error",
-               "Instructorul ales are deja o rezervare la această oră."
+               "Instructorul ales are deja o rezervare la această oră.",
             );
          }
       }
@@ -1040,8 +1040,8 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          newStartTime: changingTime
             ? selectedIsoForBackend
             : existing?.startTime
-            ? String(existing.startTime)
-            : null,
+              ? String(existing.startTime)
+              : null,
          forceReload: false,
       };
 
@@ -1049,7 +1049,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
       try {
          await (dispatch(
-            updateReservation({ id: existing.id, data: payload })
+            updateReservation({ id: existing.id, data: payload }),
          ).unwrap?.() ??
             dispatch(updateReservation({ id: existing.id, data: payload })));
 
@@ -1071,7 +1071,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          list.sort(
             (a, b) =>
                new Date(b.createdAt || b.timestamp || 0) -
-               new Date(a.createdAt || a.timestamp || 0)
+               new Date(a.createdAt || a.timestamp || 0),
          );
          setHistoryItems(list);
       } catch (e) {
@@ -1389,7 +1389,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                            selectedDate && ora?.oraStart
                               ? localKeyForDateAndTime(
                                    selectedDate,
-                                   ora.oraStart
+                                   ora.oraStart,
                                 )
                               : null;
 
@@ -1434,10 +1434,10 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                                  !selectedDate
                                     ? "Alege o zi"
                                     : isExistingSlot && !studentUnchanged
-                                    ? "Schimbi elevul: slotul actual trebuie să fie liber pentru elevul nou"
-                                    : !available
-                                    ? "Indisponibil (există altă rezervare la această oră)"
-                                    : ""
+                                      ? "Schimbi elevul: slotul actual trebuie să fie liber pentru elevul nou"
+                                      : !available
+                                        ? "Indisponibil (există altă rezervare la această oră)"
+                                        : ""
                               }
                            >
                               {ora.eticheta}
@@ -1468,7 +1468,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                               e.stopPropagation();
                               copyToClipboard(
                                  studentDisplay,
-                                 "Numele elevului a fost copiat."
+                                 "Numele elevului a fost copiat.",
                               );
                            }}
                            title="Copiază numele elevului"
@@ -1493,7 +1493,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                               e.stopPropagation();
                               copyToClipboard(
                                  studentPhone,
-                                 "Telefonul elevului a fost copiat."
+                                 "Telefonul elevului a fost copiat.",
                               );
                            }}
                            title="Copiază numărul de telefon"
@@ -1557,7 +1557,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                </div>
             </div>
 
-            <div className="popupui__form-row popupui__form-row--gap">
+            <div className="popupui__form-row popupui__form-row--gap popupui__form-row--spaced">
                <div className="popupui__field ">
                   <span className="popupui__field-label">Notiță</span>
                   <textarea
@@ -1689,7 +1689,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                )}
             </div>
 
-            <div className="popupui__btns popupui__btns--bottom">
+            <div className="popupui__btns popupui__btns--bottom" style={{paddingBottom: 20}}>
                <button
                   className="popupui__btn popupui__btn--edit"
                   onClick={() => setView("history")}
@@ -1727,10 +1727,10 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
             {view === "history"
                ? renderHistoryList()
                : view === "studentSearch"
-               ? renderStudentSearch()
-               : view === "instructorSearch"
-               ? renderInstructorSearch()
-               : renderForm()}
+                 ? renderStudentSearch()
+                 : view === "instructorSearch"
+                   ? renderInstructorSearch()
+                   : renderForm()}
          </div>
 
          <AlertPills messages={alerts} onDismiss={popAlert} />

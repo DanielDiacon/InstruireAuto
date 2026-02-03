@@ -107,30 +107,76 @@ const LONG_PRESS_MOVE_PX = 14;
 const RANGE_MINUTES = 90; // ✅ 90 min window
 /* ================== STRONG SIGNATURE HELPERS (REDRAW FIX) ================== */
 const MAX_GAPS_AFTER = 40;
+const GAPCOL_PREFIX = "__gapcol_";
+const MAX_ORDER_POS = 80; // protecție: să nu-ți creeze 999 coloane din greșeală
+
+const isGapCol = (instOrId) => {
+   const id =
+      typeof instOrId === "string" ? instOrId : String(instOrId?.id ?? "");
+   return !!instOrId?._isGapColumn || (id && id.startsWith(GAPCOL_PREFIX));
+};
+
+const makeGapCol = (key) => ({
+   id: `${GAPCOL_PREFIX}${key}`,
+   name: "",
+   _isGapColumn: true,
+   _padType: "gap",
+});
 
 function parseOrderToken(v) {
    const s = String(v ?? "").trim();
-   if (!s) return { pos: Number.POSITIVE_INFINITY, gapsAfter: 0, raw: s };
+   if (!s)
+      return {
+         pos: Number.POSITIVE_INFINITY,
+         posAlt: null,
+         gapsAfter: 0,
+         raw: s,
+      };
 
-   let m = s.match(/^(\d+)([xX]+)$/);
+   // ✅ NEW: dual order "3X7" (+ opțional gap-uri după: "3X7XX")
+   //    pos = pentru zile cu Buiucani
+   //    posAlt = pentru zile fără Buiucani
+   let m = s.match(/^(\d+)\s*[xX]\s*(\d+)\s*([xX]*)$/);
+   if (m) {
+      const pos = Math.max(1, parseInt(m[1], 10));
+      const posAlt = Math.max(1, parseInt(m[2], 10));
+      const gapsAfter = Math.max(
+         0,
+         Math.min(MAX_GAPS_AFTER, (m[3] || "").length),
+      );
+      return { pos, posAlt, gapsAfter, raw: s };
+   }
+
+   // legacy: "12XXX" => pos=12, gapsAfter=3
+   m = s.match(/^(\d+)([xX]+)$/);
    if (m) {
       const pos = Math.max(1, parseInt(m[1], 10));
       const gapsAfter = Math.max(0, Math.min(MAX_GAPS_AFTER, m[2].length));
-      return { pos, gapsAfter, raw: s };
+      return { pos, posAlt: null, gapsAfter, raw: s };
    }
 
    m = s.match(/^(\d+)$/);
    if (m) {
       const pos = Math.max(1, parseInt(m[1], 10));
-      return { pos, gapsAfter: 0, raw: s };
+      return { pos, posAlt: null, gapsAfter: 0, raw: s };
    }
 
    const n = Number(s);
    if (Number.isFinite(n) && n > 0) {
-      return { pos: Math.max(1, Math.round(n)), gapsAfter: 0, raw: s };
+      return {
+         pos: Math.max(1, Math.round(n)),
+         posAlt: null,
+         gapsAfter: 0,
+         raw: s,
+      };
    }
 
-   return { pos: Number.POSITIVE_INFINITY, gapsAfter: 0, raw: s };
+   return {
+      pos: Number.POSITIVE_INFINITY,
+      posAlt: null,
+      gapsAfter: 0,
+      raw: s,
+   };
 }
 
 function _hashStr(str) {
@@ -777,6 +823,21 @@ const CanvasInstructorHeader = memo(
       }, [todaysText]);
 
       if (!inst) return null;
+      const isGap = isGapCol(inst);
+
+      if (isGap) {
+         return (
+            <div
+               className="dayview__column-head dv-canvas-header dv-canvas-header--gap"
+               style={{
+                  position: "absolute",
+                  boxSizing: "border-box",
+                  pointerEvents: "none",
+                  ...style,
+               }}
+            />
+         );
+      }
 
       const z = zoom || 1;
       const headerFontSize = 13 * z;
@@ -957,13 +1018,13 @@ export default function DayviewCanvasTrack({
    presenceByReservationColors,
    createDraftBySlotUsers = null,
    createDraftBySlotColors = null,
-
    // ✅ NEW (optional): poți pasa direct din parent, dar merge și dacă îl pui în layout.*
    sectorFilter: sectorFilterProp = null,
 }) {
    const canvasRef = useRef(null);
    const hitMapRef = useRef([]);
    const lastDrawSigRef = useRef(null);
+   //console.log(users);
 
    const longPressStartRef = useRef(null);
    const longPressTimerRef = useRef(null);
@@ -1027,6 +1088,53 @@ export default function DayviewCanvasTrack({
    const waitCommitRef = useRef(false);
 
    const dispatch = useDispatch();
+   // ===== users index (fast lookup) =====
+   const normPhone = (p) => String(p || "").replace(/\D+/g, "");
+
+   const usersById = useMemo(() => {
+      const m = new Map();
+      (users || []).forEach((u) => {
+         if (u?.id == null) return;
+         m.set(String(u.id), u);
+      });
+      return m;
+   }, [users]);
+
+   const usersByPhone = useMemo(() => {
+      const m = new Map();
+      (users || []).forEach((u) => {
+         if (u?.id == null) return;
+         const k = normPhone(u.phone);
+         if (!k) return;
+         // dacă există duplicat, păstrează primul (sau poți face array)
+         if (!m.has(k)) m.set(k, u);
+      });
+      return m;
+   }, [users]);
+
+   const pickUserFromStore = useCallback(
+      (userIdRaw, phoneRaw, firstNameSeed, lastNameSeed) => {
+         const uid = userIdRaw != null ? String(userIdRaw) : "";
+         if (uid && usersById.has(uid)) return usersById.get(uid);
+
+         const p = normPhone(phoneRaw);
+         if (p && usersByPhone.has(p)) return usersByPhone.get(p);
+
+         // fallback final: match după nume (riscant, dar mai bine decât nimic)
+         const key = norm(`${firstNameSeed || ""} ${lastNameSeed || ""}`);
+         if (key) {
+            const u =
+               (users || []).find(
+                  (x) =>
+                     norm(`${x?.firstName || ""} ${x?.lastName || ""}`) === key,
+               ) || null;
+            if (u) return u;
+         }
+
+         return null;
+      },
+      [usersById, usersByPhone, users],
+   );
 
    // ✅ NEW: sector activ (din prop sau din layout.*) + invalidare cache redraw
    const activeSectorFilter = useMemo(() => {
@@ -1208,33 +1316,71 @@ export default function DayviewCanvasTrack({
          const phoneVal = getStudentPhoneFromEv(ev);
 
          const noteFromEvent = (ev.eventPrivateMessage || "").toString().trim();
-         const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
-            .toString()
-            .trim();
 
          const reservationId = raw?.id ?? ev.id;
 
          const userIdRaw =
             raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
 
-         const emailRaw =
-            raw?.user?.email ?? raw?.email ?? ev?.studentEmail ?? "";
-
          const firstNameSeed =
             (ev.studentFirst || "").trim() || fallbackName.split(" ")[0] || "";
          const lastNameSeed = (ev.studentLast || "").trim();
+
+         // ✅ HYDRATE din users
+         const userFull = pickUserFromStore(
+            userIdRaw,
+            phoneVal,
+            firstNameSeed,
+            lastNameSeed,
+         );
+
+         const firstName = String(
+            userFull?.firstName ?? firstNameSeed ?? "",
+         ).trim();
+         const lastName = String(
+            userFull?.lastName ?? lastNameSeed ?? "",
+         ).trim();
+
+         const phone = String(userFull?.phone ?? phoneVal ?? "").trim();
+         const email = String(userFull?.email ?? "").trim();
+         const idnp = String(userFull?.idnp ?? "").trim();
+
+         // note din profil: preferă user.privateMessage (ăsta e “adevărul”)
+         const noteFromProfile = String(
+            userFull?.privateMessage ??
+               getStudentPrivateMessageFromEv(ev) ??
+               "",
+         ).trim();
+
+         const desiredInstructorId =
+            userFull?.desiredInstructorId != null
+               ? userFull.desiredInstructorId
+               : null;
+
+         const color = String(
+            userFull?.color ?? userFull?.profileColor ?? "",
+         ).trim();
+         const role = String(userFull?.role ?? "").trim();
 
          if (ev.studentId || userIdRaw) {
             openPopup("studentDetails", {
                student: {
                   id: ev.studentId ?? null,
-                  userId: userIdRaw ?? null,
-                  firstName: firstNameSeed,
-                  lastName: lastNameSeed,
-                  phone: phoneVal || "",
-                  email: emailRaw || "",
+                  userId: userFull?.id ?? userIdRaw ?? null,
+
+                  firstName,
+                  lastName,
+                  phone,
+                  email,
+
+                  // ✅ extra fields (ca să nu mai fie undefined în popup)
+                  idnp,
                   privateMessage: noteFromProfile,
-                  isConfirmed: !!ev.isConfirmed,
+                  desiredInstructorId,
+                  color,
+                  role,
+
+                  isConfirmed: !!(raw.isConfirmed ?? ev.isConfirmed),
                },
                noteFromEvent,
                studentPrivateMessage: noteFromProfile,
@@ -1246,7 +1392,7 @@ export default function DayviewCanvasTrack({
             openReservationPopup(ev);
          }
       },
-      [openReservationPopup],
+      [openReservationPopup, pickUserFromStore],
    );
 
    /* ================== HISTORY + RANGE PANEL (COMUN) ================== */
@@ -1791,14 +1937,17 @@ export default function DayviewCanvasTrack({
 
    /* ================== wait notes load + cache ================== */
 
+   const dayStartMs = dayStart ? new Date(dayStart).getTime() : null;
+   const dayEndMs = dayEnd ? new Date(dayEnd).getTime() : null;
+
    const reloadWaitNotes = useCallback(async () => {
-      if (!dayStart) {
+      if (dayStartMs == null) {
          setWaitNotes({});
          return {};
       }
 
-      const from = dayStart;
-      const to = dayEnd || dayStart;
+      const from = new Date(dayStartMs);
+      const to = dayEndMs != null ? new Date(dayEndMs) : new Date(dayStartMs);
       const fromStr = ymdStrInTZ(from, MOLDOVA_TZ);
       const toStr = ymdStrInTZ(to, MOLDOVA_TZ);
       const cacheKey = `${fromStr}|${toStr}`;
@@ -1807,10 +1956,7 @@ export default function DayviewCanvasTrack({
          const raw = await fetchWaitNotesRange({ from, to, type: "wait-slot" });
          const normalized = normalizeWaitNotesInput(raw, from);
 
-         const currentFromStr =
-            dayStart instanceof Date
-               ? ymdStrInTZ(dayStart, MOLDOVA_TZ)
-               : fromStr;
+         const currentFromStr = ymdStrInTZ(from, MOLDOVA_TZ);
 
          if (currentFromStr !== fromStr) return normalized;
 
@@ -1831,14 +1977,7 @@ export default function DayviewCanvasTrack({
          setWaitNotes({});
          return null;
       }
-   }, [dayStart, dayEnd]);
-
-   useEffect(() => {
-      reloadWaitNotes();
-   }, [reloadWaitNotes]);
-
-   const dayStartMs = dayStart ? new Date(dayStart).getTime() : null;
-   const dayEndMs = dayEnd ? new Date(dayEnd).getTime() : null;
+   }, [dayStartMs, dayEndMs]);
 
    const waitRangeKey = useMemo(() => {
       if (dayStartMs == null) return null;
@@ -1945,75 +2084,44 @@ export default function DayviewCanvasTrack({
       const lateralPads = [];
       const real = [];
 
+      // 2) Regula Buiucani: Marți/Joi/Duminică
+      let showBuiucani = true;
+      {
+         const d = dayStart instanceof Date ? dayStart : new Date(dayStart);
+         if (d && !Number.isNaN(d.getTime())) {
+            const wd = d.getDay(); // 0=Sun ... 6=Sat
+            showBuiucani = wd === 2 || wd === 4 || wd === 0;
+         }
+      }
+
+      // ✅ order reader: 12 / "12" / "12XXX" / "3X7" / "3X7XX"
+      const readOrderNumber = (v) => {
+         const t = parseOrderToken(v);
+         const n = showBuiucani ? t.pos : (t.posAlt ?? t.pos);
+         return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+      };
+
       // helper: ia order din inst sau din instructorsFull (fallback)
-     const readOrderMeta = (inst) => {
-   const pick = (obj) =>
-      obj?.order ??
-      obj?.uiOrder ??
-      obj?.sortOrder ??
-      obj?.position ??
-      obj?.sort_index ??
-      null;
+      const readOrder = (inst) => {
+         const pick = (obj) =>
+            obj?.order ??
+            obj?.uiOrder ??
+            obj?.sortOrder ??
+            obj?.position ??
+            obj?.sort_index ??
+            null;
 
-   let v = pick(inst);
+         let v = pick(inst);
 
-   if (v == null && Array.isArray(instructorsFull) && inst?.id != null) {
-      const full = instructorsFull.find(
-         (x) => String(x?.id) === String(inst.id),
-      );
-      if (full) v = pick(full);
-   }
+         if (v == null && Array.isArray(instructorsFull) && inst?.id != null) {
+            const full = instructorsFull.find(
+               (x) => String(x?.id) === String(inst.id),
+            );
+            if (full) v = pick(full);
+         }
 
-   return parseOrderToken(v);
-};
-
-const readOrder = (inst) => readOrderMeta(inst).pos;
-
-
-      // ✅ NEW: injectează "găuri" (null) pentru lipsă de ordine: 1,3 => [inst1, null, inst3]
-    const applyOrderGaps = (list) => {
-   if (!Array.isArray(list) || !list.length) return [];
-
-   const finite = [];
-   const tail = [];
-
-   for (const inst of list) {
-      const meta = readOrderMeta(inst);
-      if (!Number.isFinite(meta.pos) || meta.pos === Number.POSITIVE_INFINITY) {
-         tail.push(inst);
-      } else {
-         finite.push({ inst, pos: meta.pos, gapsAfter: meta.gapsAfter });
-      }
-   }
-
-   finite.sort((a, b) => a.pos - b.pos);
-
-   const out = [];
-   let cursorPos = 1;
-
-   for (const it of finite) {
-      const pos = Math.max(1, Math.trunc(it.pos));
-
-      // gaps din lipsă de poziții
-      while (cursorPos < pos) {
-         out.push(null);
-         cursorPos += 1;
-      }
-
-      out.push(it.inst);
-      cursorPos += 1;
-
-      // gaps din token "XXX"
-      const g = Math.max(0, Math.min(MAX_GAPS_AFTER, it.gapsAfter || 0));
-      for (let k = 0; k < g; k += 1) {
-         out.push(null);
-         cursorPos += 1;
-      }
-   }
-
-   return out.concat(tail);
-};
-
+         return readOrderNumber(v);
+      };
 
       // 1) Separăm PAD-urile vs reali
       for (let srcIndex = 0; srcIndex < base.length; srcIndex++) {
@@ -2048,31 +2156,73 @@ const readOrder = (inst) => readOrderMeta(inst).pos;
       const lateralTemplate =
          lateralPads[0] || waitPads[0] || cancelPads[0] || null;
 
-      // 2) Regula Buiucani: doar Marți/Joi
-      let showBuiucani = true;
+      // 2) Regula Buiucani: Marți/Joi/Duminică
       if (dayStart instanceof Date) {
          const wd = dayStart.getDay(); // 0=Sun ... 6=Sat
-         showBuiucani = wd === 2 || wd === 4;
+         showBuiucani = wd === 2 || wd === 4 || wd === 0;
       }
 
-      const realFiltered = showBuiucani
+      let realFiltered = showBuiucani
          ? real
          : real.filter((inst) => !isBuiucaniInstructor(inst));
 
-      // 3) Sortare după order (global)
+      // 2.1) Sector filter (dacă e activ) — aplicat doar pe instructori reali
+      if (activeSectorFilter) {
+         realFiltered = realFiltered.filter((inst) => {
+            const s = normalizeSectorFilter(getInstructorSector(inst));
+            return s === activeSectorFilter;
+         });
+      }
+
+      // 3) Sortare după order (simplu)
+      // 3) Sortare după order + păstrare poziții (gaps) + gapsAfter
+
+      const pickOrderVal = (obj) =>
+         obj?.order ??
+         obj?.uiOrder ??
+         obj?.sortOrder ??
+         obj?.position ??
+         obj?.sort_index ??
+         null;
+
+      const readOrderMeta = (inst) => {
+         let v = pickOrderVal(inst);
+
+         if (v == null && Array.isArray(instructorsFull) && inst?.id != null) {
+            const full = instructorsFull.find(
+               (x) => String(x?.id) === String(inst.id),
+            );
+            if (full) v = pickOrderVal(full);
+         }
+
+         const t = parseOrderToken(v);
+
+         const posRaw = showBuiucani ? t.pos : (t.posAlt ?? t.pos);
+         const pos =
+            Number.isFinite(posRaw) && posRaw > 0
+               ? Math.min(MAX_ORDER_POS, Math.max(1, posRaw))
+               : Number.POSITIVE_INFINITY;
+
+         const gapsAfter = Math.max(
+            0,
+            Math.min(MAX_GAPS_AFTER, t.gapsAfter || 0),
+         );
+
+         return { pos, gapsAfter };
+      };
+
+      // sort (stabil)
       const sorted = realFiltered.slice().sort((a, b) => {
-         const ao = readOrder(a);
-         const bo = readOrder(b);
+         const ao = readOrderMeta(a).pos;
+         const bo = readOrderMeta(b).pos;
          if (ao !== bo) return ao - bo;
 
-         // la egalitate: Buiucani cu prioritate (doar când e activ)
          if (showBuiucani) {
             const ab = isBuiucaniInstructor(a) ? 1 : 0;
             const bb = isBuiucaniInstructor(b) ? 1 : 0;
-            if (ab !== bb) return bb - ab; // buiucani primul
+            if (ab !== bb) return bb - ab;
          }
 
-         // tie-break stabil: ordinea originală + id
          const ai = a.__srcIndex ?? 0;
          const bi = b.__srcIndex ?? 0;
          if (ai !== bi) return ai - bi;
@@ -2082,8 +2232,45 @@ const readOrder = (inst) => readOrderMeta(inst).pos;
          return aid < bid ? -1 : aid > bid ? 1 : 0;
       });
 
-      // ✅ NEW: aplicăm gap-urile după "order"
-      const sortedWithGaps = applyOrderGaps(sorted);
+      // construim lista FINALĂ cu poziții goale (null) + gapsAfter (null)
+      const positioned = [];
+
+      for (const inst of sorted) {
+         const meta = readOrderMeta(inst);
+
+         // fără order valid -> la coadă (compact)
+         if (
+            !Number.isFinite(meta.pos) ||
+            meta.pos === Number.POSITIVE_INFINITY
+         ) {
+            positioned.push(inst);
+            continue;
+         }
+
+         const desiredIndex = meta.pos - 1;
+
+         // umple pozițiile lipsă cu NULL (gol real)
+         while (positioned.length < desiredIndex) positioned.push(null);
+
+         // pune instructorul pe index; dacă indexul e liber (null), îl ocupă
+         if (positioned.length === desiredIndex) {
+            positioned.push(inst);
+         } else if (positioned[desiredIndex] == null) {
+            positioned[desiredIndex] = inst;
+         } else {
+            // coliziune (două persoane cu aceeași poziție) -> împinge la dreapta
+            positioned.splice(desiredIndex, 0, inst);
+         }
+
+         // gapsAfter: inserează N goluri (null) imediat după
+         const gapsAfter = Math.max(
+            0,
+            Math.min(MAX_GAPS_AFTER, meta.gapsAfter || 0),
+         );
+         for (let g = 0; g < gapsAfter; g++) {
+            positioned.splice(desiredIndex + 1 + g, 0, null);
+         }
+      }
 
       // helper: clone pad cu index
       const makePad = (inst, padType, columnIndex) => {
@@ -2116,7 +2303,7 @@ const readOrder = (inst) => readOrderMeta(inst).pos;
          makePad(wait2Base, "wait", 1),
       ]);
 
-      // 5) Rânduri 2+: 3 reali (cu gap-uri) + Laterala (coloana 4 mereu)
+      // 5) Rânduri 2+: 3 coloane (pot fi null) + Laterala
       let i = 0;
 
       const makeLateral = (rowIndex) => {
@@ -2125,21 +2312,27 @@ const readOrder = (inst) => readOrderMeta(inst).pos;
             ...lateralTemplate,
             _padType: "lateral",
             _clone: true,
-            _padColumnIndex: rowIndex, // stabil per rând (1,2,3...)
+            _padColumnIndex: rowIndex,
          };
       };
 
-      while (i < sortedWithGaps.length) {
-         const c0 = sortedWithGaps[i++] ?? null; // poate fi null (gap)
-         const c1 = sortedWithGaps[i++] ?? null;
-         const c2 = sortedWithGaps[i++] ?? null;
+      while (i < positioned.length) {
+         const rowIndex = rows.length;
 
-         const rowIndex = rows.length; // 1 pentru primul rând real (după pads)
+         const c0 = i < positioned.length ? positioned[i++] : null;
+         const c1 = i < positioned.length ? positioned[i++] : null;
+         const c2 = i < positioned.length ? positioned[i++] : null;
+
          rows.push([c0, c1, c2, makeLateral(rowIndex)]);
       }
 
       return rows.flat();
-   }, [instructors, instructorsFull, dayStart]);
+   }, [
+      instructors,
+      instructorsFull,
+      dayStart,
+      activeSectorFilter, // ✅ IMPORTANT (fiindcă filtrăm acum efectiv)
+   ]);
 
    // ✅ NEW: semnătură layout instructori (forțează redraw când se schimbă sector/ordinea)
    const instructorsLayoutSig = useMemo(
@@ -3423,7 +3616,8 @@ const readOrder = (inst) => readOrderMeta(inst).pos;
          <canvas ref={canvasRef} />
 
          {effectiveInstructors.map((inst, idx) => {
-            if (!inst) return null;
+            if (!inst) return null; // ✅ deja
+            if (isGapCol?.(inst)) return null; // (opțional defensiv)
             const row = Math.floor(idx / colsPerRow);
             const col = idx % colsPerRow;
 

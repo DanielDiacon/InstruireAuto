@@ -1,0 +1,38 @@
+.home-admin {
+   display: grid;
+   grid-template-columns: 1fr 1fr;
+   gap: 10px;
+   padding: 12px 12px 0 12px;
+   height: calc(100svh - 84px);
+}
+.page-wrapper {
+   padding: 12px;
+   .instructorsGroupsUI,
+   .reservationHistoryUI,
+   .studentsGroupsUI {
+      min-height: calc(100svh - 24px);
+      //&__grid {
+      //   grid-template-columns: 1fr;
+      //}
+   }
+}
+@media (max-width: $tablet) {
+   .home-admin {
+      grid-template-columns: 1fr;
+      gap: 6px;
+      padding: 6px 6px 0 6px;
+      height: auto;
+      min-height: 800px;
+   }
+   .page-wrapper {
+      padding: 6px;
+      .instructorsGroupsUI,
+      .reservationHistoryUI,
+      .studentsGroupsUI {
+         min-height: calc(100svh - 12px - 80px);
+      }
+      //.studentsGroupsUI__grid {
+      //   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)) !important;
+      //}
+   }
+}

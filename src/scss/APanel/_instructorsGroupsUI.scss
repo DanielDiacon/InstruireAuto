@@ -1,0 +1,612 @@
+.instructorsGroupsUI {
+   padding: 0 12px;
+   overflow: hidden;
+   position: relative;
+   z-index: 0;
+   display: flex;
+   flex-direction: column;
+   height: 100%;
+   background: var(--black-s) !important;
+   border-radius: 35px !important;
+
+   &__title {
+      padding: 8px 0 0 0px;
+      font-size: 32px;
+      line-height: 1;
+      color: var(--white-p);
+      font-family: "Clash Display";
+      font-weight: 500;
+      position: relative;
+      z-index: 2;
+      flex-shrink: 0;
+      white-space: nowrap;
+   }
+
+   &__formBtn {
+      background: var(--black-s) !important;
+   }
+
+   /* ✅ butoane doar pe clase, FĂRĂ button {} global */
+   &__btn,
+   &__iconBtn,
+   &__backBtn,
+   &__chooserBtn,
+   &__btnPrimary,
+   &__btnSecondary,
+   &__btnDanger {
+      background: var(--black-p);
+      color: var(--white-s);
+      border-radius: 25px;
+      padding: 14px 20px;
+      transition: var(--classic-s);
+      z-index: 2;
+      position: relative;
+      width: auto;
+      user-select: none;
+
+      &:hover {
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
+         color: var(--accent-l);
+         border-radius: 16px;
+         padding: 14px 22px;
+      }
+
+      &:active {
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
+         transform: scale(0.95);
+         padding: 14px 20px;
+         border-radius: 32px;
+      }
+   }
+
+   &__header {
+      padding: 12px 0 0 12px;
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+      z-index: 20;
+   }
+
+   &__right {
+      z-index: 10;
+      display: flex;
+      position: absolute;
+      width: 100%;
+      gap: 6px;
+      right: 0;
+      justify-content: flex-end;
+      pointer-events: none;
+
+      > * {
+         pointer-events: auto;
+      }
+   }
+
+   &__search {
+      width: 100%;
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+   }
+
+   &__inputSearch {
+      transition: var(--elastic-s);
+      background: var(--black-p);
+      color: var(--white-p);
+      border-radius: 25px;
+      width: 0%;
+      opacity: 0;
+      padding: 12px 0;
+      margin-left: -100px;
+
+      outline: none;
+      border: none;
+
+      &::placeholder {
+         color: var(--white-s);
+         opacity: 0.7;
+      }
+   }
+
+   &__icon {
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+      }
+      &.is-rotated svg {
+         rotate: 45deg;
+      }
+   }
+
+   &__header.is-open {
+      .instructorsGroupsUI__inputSearch {
+         opacity: 1;
+         padding: 12px 20px;
+         margin-left: 0px;
+         width: 100%;
+      }
+   }
+
+   &__gridWrap {
+      z-index: 2;
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+      margin-top: -12px;
+      flex-grow: 1;
+   }
+
+   &__grid {
+      mask-image: linear-gradient(
+         to top,
+         #000 0,
+         #000 calc(100% - 24px),
+         rgba(0, 0, 0, 0) 100%
+      );
+
+      &::-webkit-scrollbar {
+         display: none;
+      }
+
+      position: absolute;
+      height: 100%;
+      width: 100%;
+      overflow-y: auto;
+      display: grid;
+      padding-top: 24px;
+      padding-bottom: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)) !important;
+      grid-auto-rows: min-content;
+      gap: 6px;
+   }
+
+   /* ===== Card / Form ===== */
+   &__item {
+      border-radius: 26px;
+      background: var(--black-p);
+      display: flex;
+      justify-content: space-between;
+      position: relative;
+      height: auto;
+
+      //&.is-active {
+      //   background: var(--black-t);
+      //}
+   }
+
+   &__form {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      gap: 6px;
+      background: var(--black-p);
+      border-radius: 26px;
+      padding: 6px;
+   }
+
+   &__formTop {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+   }
+
+   &__input {
+      border-radius: 24px;
+      padding: 12px 16px;
+      font-size: 14px;
+      background: var(--black-s);
+      color: var(--white-p);
+      width: 100%;
+
+      outline: none;
+      border: none;
+
+      &::placeholder {
+         color: var(--white-s);
+         opacity: 0.7;
+      }
+   }
+
+   /* ✅ NEW: Sector input wrapper */
+   &__sectorInput {
+      width: 100%;
+      display: flex;
+      gap: 6px;
+
+      .instructorsGroupsUI__input {
+         background: var(--black-s);
+      }
+   }
+
+   /* ===== Grid rows (chooser button + trash) ===== */
+   &__createGrid {
+      display: grid;
+      gap: 6px;
+   }
+
+   &__gridRow {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+   }
+
+   &__chooserBtn {
+      flex: 1 1 auto;
+      width: 100% !important;
+      background: var(--black-s);
+      border-radius: 24px;
+      text-align: left;
+      padding: 12px 16px;
+      min-height: 46px;
+
+      &:hover,
+      &:active {
+         padding: 12px 16px;
+      }
+   }
+
+   /* ✅ NEW: trash button next to row */
+   &__rowTrash {
+      width: 46px !important;
+      min-width: 46px !important;
+      height: 46px !important;
+      padding: 0 !important;
+      border-radius: 18px !important;
+      background: var(--black-s) !important;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: var(--elastic-s);
+
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+      }
+
+      svg {
+         width: 18px;
+         height: 18px;
+         transition: var(--elastic-s);
+      }
+
+      &:hover {
+         background: var(--red-t) !important;
+         color: var(--red-d) !important;
+      }
+
+      &:active {
+         transform: scale(0.92);
+      }
+   }
+
+   /* ✅ NEW: add row button */
+   &__gridRowAdd {
+      display: flex;
+      justify-content: flex-end;
+      padding-top: 2px;
+
+      .instructorsGroupsUI__iconBtn {
+         width: 46px !important;
+         height: 46px !important;
+         padding: 0 !important;
+         border-radius: 18px !important;
+         background: var(--black-s) !important;
+         display: flex;
+         align-items: center;
+         justify-content: center;
+
+         &:hover {
+            background: var(--black-t) !important;
+            color: var(--accent-l) !important;
+         }
+
+         &:active {
+            transform: scale(0.92);
+         }
+      }
+   }
+
+   &__actions {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+   }
+
+   &__btnPrimary {
+      border-radius: 24px;
+      padding: 12px 20px;
+      background: var(--green-t);
+      color: var(--green-d);
+
+      &:hover {
+         background: var(--green-l);
+         color: var(--green-d);
+         border-radius: 24px;
+         padding: 12px 24px;
+      }
+      &:active {
+         border-radius: 24px;
+         padding: 12px 24px;
+      }
+   }
+
+   &__btnSecondary {
+      background: var(--black-s);
+      border-radius: 24px;
+      padding: 12px 20px;
+      color: var(--white-p);
+
+      &:hover {
+         background: var(--black-s);
+         color: var(--white-p);
+         border-radius: 24px;
+         padding: 12px 24px;
+      }
+      &:active {
+         border-radius: 24px;
+         padding: 12px 24px;
+      }
+   }
+
+   &__btnDanger {
+      border-radius: 24px;
+      padding: 12px 20px;
+      background: var(--red-t);
+      color: var(--red-d);
+      width: 100%;
+
+      &:hover {
+         border-radius: 24px;
+         padding: 12px 24px;
+         background: var(--red-l);
+         color: var(--red-d);
+      }
+      &:active {
+         border-radius: 24px;
+         padding: 12px 24px;
+      }
+   }
+
+   &__deleteConfirm {
+      display: flex;
+      gap: 6px;
+      width: 100%;
+   }
+
+   /* ===== Card content ===== */
+   &__itemLeft {
+      display: flex;
+      flex-direction: column;
+      color: var(--white-p);
+      width: 100%;
+      padding: 6px;
+   }
+
+   &__itemTop {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 6px;
+      h3 {
+         padding: 11px 16px;
+         white-space: nowrap;
+         overflow: hidden;
+         text-overflow: ellipsis;
+      }
+   }
+
+   &__pillbar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-shrink: 0;
+   }
+
+   &__pill {
+      background: var(--black-s);
+      color: var(--white-s);
+      border-radius: 99px;
+      padding: 12px;
+      font-size: 12px;
+   }
+
+   &__list {
+      margin-top: 6px;
+      display: grid;
+      gap: 6px;
+
+      li {
+         border-radius: 24px;
+         background: var(--black-s);
+         padding: 14px;
+         display: flex;
+         justify-content: space-between;
+         gap: 10px;
+         color: var(--white-p);
+
+         p {
+            margin: 0;
+            font-size: 13px;
+            line-height: 1.2;
+            color: var(--white-p);
+         }
+
+         .meta {
+            color: var(--white-s);
+            opacity: 0.85;
+            white-space: nowrap;
+         }
+      }
+   }
+
+   &__itemIcon {
+      cursor: pointer;
+      background: var(--black-s) !important;
+      color: var(--white-s) !important;
+      border-radius: 24px !important;
+      padding: 12px !important;
+      transition: var(--elastic-s);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      div {
+         display: flex;
+         align-items: center;
+         justify-content: center;
+      }
+
+      svg {
+         transition: var(--elastic-s);
+         height: 18px;
+         width: 18px;
+      }
+
+      &:hover {
+         background: var(--black-t) !important;
+      }
+
+      &:active {
+         scale: 0.9 !important;
+      }
+   }
+
+   &__highlight {
+      font-style: normal;
+      background: var(--accent-l);
+      color: var(--accent-d);
+      border-radius: 4px;
+      padding: 0 3px;
+   }
+
+   /* ===== Picker (Chooser) ===== */
+   &__picker {
+      border-radius: 26px;
+      width: 100%;
+      background: var(--black-p);
+      padding: 6px;
+
+      &.is-inline {
+         position: static;
+      }
+   }
+
+   &__pickerTop {
+      display: flex;
+      gap: 6px;
+      z-index: 9;
+      align-items: center;
+   }
+
+   &__pickerSearch {
+      width: 100%;
+      border-radius: 24px;
+      padding: 12px 16px;
+      font-size: 14px;
+      background: var(--black-s);
+      color: var(--white-p);
+
+      outline: none;
+      border: none;
+
+      &::placeholder {
+         color: var(--white-s);
+         opacity: 0.7;
+      }
+   }
+
+   &__pickerList {
+      display: grid;
+      gap: 6px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)) !important;
+      max-height: 260px;
+      overflow: auto;
+      border-radius: 20px;
+      margin-top: 6px;
+
+      &::-webkit-scrollbar {
+         display: none;
+      }
+   }
+
+   &__pickerItem {
+      background: var(--black-s);
+      border-radius: 20px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: var(--elastic-s);
+
+      display: grid;
+      gap: 4px;
+
+      &.is-disabled {
+         opacity: 0.45;
+         cursor: not-allowed;
+      }
+
+      &:hover {
+         background: var(--black-t);
+      }
+   }
+
+   &__pickerLabel {
+      color: var(--white-p);
+      font-weight: 500;
+      font-size: 13px;
+      line-height: 1.3;
+      margin-bottom: 2px;
+   }
+
+   &__pickerMeta {
+      color: var(--white-s);
+      font-size: 12px;
+      opacity: 0.85;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+
+      /* ✅ status pills */
+      &.is-free,
+      &.is-busy {
+         opacity: 1;
+         padding: 6px 10px;
+         border-radius: 999px;
+         display: inline-flex;
+         width: fit-content;
+         max-width: 100%;
+      }
+
+      &.is-free {
+         background: var(--green-t);
+         color: var(--green-d);
+      }
+
+      &.is-busy {
+         background: var(--accent-t);
+         color: var(--accent-l);
+      }
+   }
+
+   &__pickerEmpty {
+      color: var(--white-s);
+      opacity: 0.75;
+      padding: 10px;
+   }
+
+   /* ===== Small responsive tweak ===== */
+   @media (max-width: 520px) {
+      &__grid {
+         grid-template-columns: 1fr !important;
+      }
+
+      &__title {
+         font-size: 28px;
+      }
+   }
+}

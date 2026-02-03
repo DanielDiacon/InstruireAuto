@@ -174,10 +174,7 @@ function PPGropus() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
-
+       
          <main className="main">
             <section className="professor single">
                <CourseGroupsList groups={groups} status={status} />

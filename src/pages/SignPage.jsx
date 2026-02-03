@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useContext, useRef } from "react";
 import { ReactSVG } from "react-svg";
 import DarkModeToggle from "../components/Header/DarkModeToggle";
-import M3Link from "../components/UI/M3Link";
+import M3Link from "../components/Common/M3Link";
 
 import addIcon from "../assets/svg/add.svg";
 import loginIcon from "../assets/svg/login.svg";
@@ -20,6 +20,7 @@ import {
    signup,
    requestPasswordReset,
 } from "../api/authService";
+import FooterSign from "../components/FooterSign";
 
 /* ===== Config telefon local ===== */
 const MAX_PHONE_DIGITS = 9; // ex: 067123421 (9 cifre)
@@ -120,7 +121,7 @@ function SignPage() {
          await requestPasswordReset(email);
          addMessage(
             "Dacă adresa există în sistem, vei primi un email cu instrucțiuni.",
-            "success"
+            "success",
          );
          setMode("sign-in");
          setResetEmail("");
@@ -128,7 +129,7 @@ function SignPage() {
          addMessage(
             err?.message ||
                "Nu am putut trimite cererea de resetare. Încearcă din nou.",
-            "error"
+            "error",
          );
       } finally {
          setResetLoading(false);
@@ -154,7 +155,7 @@ function SignPage() {
       if (!registerAccepted) {
          addMessage(
             "Trebuie să accepți Termenii și Condițiile pentru a te înregistra.",
-            "warning"
+            "warning",
          );
          return;
       }
@@ -168,7 +169,7 @@ function SignPage() {
       if (phoneDigits.length < MIN_PHONE_DIGITS) {
          addMessage(
             "Introdu un număr de telefon valid (minim 8 cifre).",
-            "warning"
+            "warning",
          );
          return;
       }
@@ -197,7 +198,7 @@ function SignPage() {
       } catch (err) {
          addMessage(
             err?.message || "Eroare la înregistrare. Încearcă din nou.",
-            "error"
+            "error",
          );
       }
    };
@@ -227,239 +228,76 @@ function SignPage() {
             redirectByRole(userInfo.role);
             addMessage(
                "Autentificare reușită. Se încarcă dashboard-ul...",
-               "success"
+               "success",
             );
          }
       } catch (err) {
          addMessage(
             "Eroare la autentificare. Verifică datele și încearcă din nou.",
-            "error"
+            "error",
          );
       }
    };
 
    return (
-      <main className="main-sign">
-         <div className="container">
-            <AlertPills messages={messages} onDismiss={clearMessages} />
-            <div className="sign">
-               <div className="sign__left">
-                  <M3Link
-                     className="sign__img-btn"
-                     type="accent"
-                     icon={arrowIcon}
-                     link="https://instruire-auto.md/"
-                  >
-                     <span>Acasă</span>
-                  </M3Link>
-               </div>
-
-               <ul className="header__settings settings ">
-                  <DarkModeToggle />
-               </ul>
-               <div className="sign__right">
-                  <div
-                     className={`sign__switcher ${
-                        mode === "sign-in" ? "" : "active"
-                     } ${mode === "reset-password" ? "reset" : ""}`}
-                  >
-                     {/* AUTENTIFICARE */}
-                     <div
-                        className={`sign__form-wrapper ${
-                           mode === "sign-in"
-                              ? "sign__form--active"
-                              : "sign__form--leave"
-                        }`}
+      <>
+         <main className="main-sign">
+            <div className="container">
+               <AlertPills messages={messages} onDismiss={clearMessages} />
+               <div className="sign">
+                  <div className="sign__left">
+                     <M3Link
+                        className="sign__img-btn"
+                        type="accent"
+                        icon={arrowIcon}
+                        link="https://instruire-auto.md/"
                      >
-                        <h1 className="sign__title">Autentificare</h1>
-                        <p className="sign__subtitle">
-                           Intră în contul tău completând datele de logare.
-                        </p>
-                        <form
-                           className="sign__form"
-                           onSubmit={handleLoginSubmit}
+                        <span>Acasă</span>
+                     </M3Link>
+                  </div>
+
+                  <ul className="header__settings settings ">
+                     <DarkModeToggle />
+                  </ul>
+                  <div className="sign__right">
+                     <div
+                        className={`sign__switcher ${
+                           mode === "sign-in" ? "" : "active"
+                        } ${mode === "reset-password" ? "reset" : ""}`}
+                     >
+                        {/* AUTENTIFICARE */}
+                        <div
+                           className={`sign__form-wrapper ${
+                              mode === "sign-in"
+                                 ? "sign__form--active"
+                                 : "sign__form--leave"
+                           }`}
                         >
-                           <input
-                              type="email"
-                              name="email"
-                              placeholder="Adresa de E-mail"
-                              className="sign__input"
-                              value={loginForm.email}
-                              onChange={handleLoginChange}
-                              required
-                           />
-                           <div className="sign__input-wrapper">
+                           <h1 className="sign__title">Autentificare</h1>
+                           <p className="sign__subtitle">
+                              Intră în contul tău completând datele de logare.
+                           </p>
+                           <form
+                              className="sign__form"
+                              onSubmit={handleLoginSubmit}
+                           >
                               <input
-                                 type={showPasswords ? "text" : "password"}
-                                 name="password"
-                                 placeholder="Parola"
+                                 type="email"
+                                 name="email"
+                                 placeholder="Adresa de E-mail"
                                  className="sign__input"
-                                 value={loginForm.password}
+                                 value={loginForm.email}
                                  onChange={handleLoginChange}
                                  required
                               />
-                              <button
-                                 type="button"
-                                 className="sign__eye-btn"
-                                 aria-label={
-                                    showPasswords
-                                       ? "Ascunde parolele"
-                                       : "Arată parolele"
-                                 }
-                                 title={
-                                    showPasswords
-                                       ? "Ascunde parolele"
-                                       : "Arată parolele"
-                                 }
-                                 onClick={() =>
-                                    setShowPasswords((prev) => !prev)
-                                 }
-                              >
-                                 <ReactSVG
-                                    src={
-                                       showPasswords
-                                          ? eyeClosedIcon
-                                          : eyeOpenIcon
-                                    }
-                                 />
-                              </button>
-                           </div>
-
-                           <div className="sign__row-btns">
-                              <button
-                                 type="button"
-                                 className="sign__link-button"
-                                 onClick={() => setMode("reset-password")}
-                              >
-                                 <ReactSVG
-                                    src={resetIcon}
-                                    className="sign__icon-inline"
-                                 />
-                                 <span>Resetează parola</span>
-                              </button>
-
-                              <button type="submit" className="sign__button">
-                                 <span>Log in</span>
-                                 <ReactSVG
-                                    className="sign__button-icon sign__icon"
-                                    src={arrowIcon}
-                                 />
-                              </button>
-                           </div>
-                        </form>
-                     </div>
-
-                     {/* ÎNREGISTRARE */}
-                     <div
-                        className={`sign__form-wrapper ${
-                           mode === "sign-up"
-                              ? "sign__form--active"
-                              : "sign__form--leave"
-                        }`}
-                     >
-                        <h1 className="sign__title">Înregistrare</h1>
-                        <p className="sign__subtitle">
-                           Creează-ți un cont nou completând informațiile de mai
-                           jos.
-                        </p>
-                        <form
-                           className="sign__form"
-                           onSubmit={handleRegisterSubmit}
-                        >
-                           <div className="sign__form-row">
-                              <input
-                                 type="text"
-                                 placeholder="Nume Prenume"
-                                 className="sign__input"
-                                 name="name"
-                                 value={registerForm.name}
-                                 onChange={handleRegisterChange}
-                                 required
-                              />
-                              <input
-                                 type="email"
-                                 placeholder="Adresă E-mail"
-                                 className="sign__input"
-                                 name="email"
-                                 value={registerForm.email}
-                                 onChange={handleRegisterChange}
-                                 required
-                              />
-                           </div>
-
-                           <div className="sign__form-row">
-                              <input
-                                 type="text"
-                                 placeholder="Cheie Unică"
-                                 className="sign__input"
-                                 name="groupToken"
-                                 value={registerForm.groupToken}
-                                 onChange={handleRegisterChange}
-                                 required
-                              />
-
-                              <div className="sign__input-wrapper">
-                                 <input
-                                    type="tel"
-                                    placeholder="067-123-421"
-                                    className="sign__input sign__input--phone"
-                                    name="phone"
-                                    value={formatLocalPhone(registerForm.phone)}
-                                    onChange={handlePhoneChange}
-                                    inputMode="numeric"
-                                    maxLength={13} //
-                                    aria-label="Număr de telefon (minim 8 cifre)"
-                                    required
-                                 />
-                              </div>
-                           </div>
-
-                           <div className="sign__form-row">
                               <div className="sign__input-wrapper">
                                  <input
                                     type={showPasswords ? "text" : "password"}
-                                    placeholder="Parolă"
-                                    className="sign__input"
                                     name="password"
-                                    value={registerForm.password}
-                                    onChange={handleRegisterChange}
-                                    required
-                                 />
-                                 <button
-                                    type="button"
-                                    className="sign__eye-btn"
-                                    aria-label={
-                                       showPasswords
-                                          ? "Ascunde parolele"
-                                          : "Arată parolele"
-                                    }
-                                    title={
-                                       showPasswords
-                                          ? "Ascunde parolele"
-                                          : "Arată parolele"
-                                    }
-                                    onClick={() =>
-                                       setShowPasswords((prev) => !prev)
-                                    }
-                                 >
-                                    <ReactSVG
-                                       src={
-                                          showPasswords
-                                             ? eyeClosedIcon
-                                             : eyeOpenIcon
-                                       }
-                                    />
-                                 </button>
-                              </div>
-
-                              <div className="sign__input-wrapper">
-                                 <input
-                                    type={showPasswords ? "text" : "password"}
-                                    placeholder="Confirmă Parola"
+                                    placeholder="Parola"
                                     className="sign__input"
-                                    name="confirmPassword"
-                                    value={registerForm.confirmPassword}
-                                    onChange={handleRegisterChange}
+                                    value={loginForm.password}
+                                    onChange={handleLoginChange}
                                     required
                                  />
                                  <button
@@ -488,191 +326,365 @@ function SignPage() {
                                     />
                                  </button>
                               </div>
-                           </div>
 
-                           {/* ✅ Termeni și Condiții (obligatoriu) */}
-                           <div className="sign__terms">
-                              <label className="sign__checkbox">
-                                 <input
-                                    type="checkbox"
-                                    checked={registerAccepted}
-                                    onChange={(e) =>
-                                       setRegisterAccepted(e.target.checked)
-                                    }
-                                    required
-                                    aria-required="true"
-                                    aria-label="Accept termenii și condițiile"
-                                 />
-                                 <span style={{ lineHeight: 1.3 }}>
-                                    Sunt de acord cu{" "}
-                                    <a
-                                       href="/termeni"
-                                       target="_blank"
-                                       rel="noopener noreferrer"
-                                    >
-                                       Termenii și Condițiile
-                                    </a>{" "}
-                                    și{" "}
-                                    <a
-                                       href="/confidentialitate"
-                                       target="_blank"
-                                       rel="noopener noreferrer"
-                                    >
-                                       Politica de confidențialitate
-                                    </a>
-                                    .
-                                 </span>
-                              </label>
-                           </div>
+                              <div className="sign__row-btns">
+                                 <button
+                                    type="button"
+                                    className="sign__link-button"
+                                    onClick={() => setMode("reset-password")}
+                                 >
+                                    <ReactSVG
+                                       src={resetIcon}
+                                       className="sign__icon-inline"
+                                    />
+                                    <span>Resetează parola</span>
+                                 </button>
 
-                           <button
-                              type="submit"
-                              className="sign__button"
-                              disabled={!registerAccepted}
-                              aria-disabled={!registerAccepted}
-                              title={
-                                 !registerAccepted
-                                    ? "Bifează Termenii și Condițiile pentru a continua"
-                                    : "Înregistrează-te"
-                              }
-                           >
-                              <span>Înregistrează-te</span>
-                              <ReactSVG
-                                 className="sign__button-icon sign__icon"
-                                 src={addIcon}
-                              />
-                           </button>
-                        </form>
-                     </div>
+                                 <button type="submit" className="sign__button">
+                                    <span>Log in</span>
+                                    <ReactSVG
+                                       className="sign__button-icon sign__icon"
+                                       src={arrowIcon}
+                                    />
+                                 </button>
+                              </div>
+                           </form>
+                        </div>
 
-                     {/* RESETARE PAROLĂ */}
-                     <div
-                        className={`sign__form-wrapper ${
-                           mode === "reset-password"
-                              ? "sign__form--active"
-                              : "sign__form--leave"
-                        }`}
-                     >
-                        <h1 className="sign__title">Resetare Parolă</h1>
-                        <p className="sign__subtitle">
-                           Introdu adresa ta de email și îți vom trimite
-                           instrucțiunile de resetare.
-                        </p>
-
-                        <form
-                           className="sign__form"
-                           onSubmit={handleRequestReset}
+                        {/* ÎNREGISTRARE */}
+                        <div
+                           className={`sign__form-wrapper ${
+                              mode === "sign-up"
+                                 ? "sign__form--active"
+                                 : "sign__form--leave"
+                           }`}
                         >
-                           <div
-                              className="sign__info-box"
-                              role="note"
-                              aria-live="polite"
+                           <h1 className="sign__title">Înregistrare</h1>
+                           <p className="sign__subtitle">
+                              Creează-ți un cont nou completând informațiile de
+                              mai jos.
+                           </p>
+                           <form
+                              className="sign__form"
+                              onSubmit={handleRegisterSubmit}
                            >
-                              <p>
-                                 1. Vei primi un email cu un link sau cod pentru
-                                 resetare.
-                              </p>
-                              <p>
-                                 2. Urmărește linkul pentru a seta o parolă nouă
-                                 în pagina dedicată.
-                              </p>
-                              <p className="sign__info-hint">
-                                 ** Verifică și folderul{" "}
-                                 <strong>Spam/Promoții</strong> dacă nu găsești
-                                 mesajul.
-                              </p>
-                           </div>
-                           <input
-                              type="email"
-                              placeholder="Adresa de E-mail"
-                              className="sign__input"
-                              value={resetEmail}
-                              onChange={(e) => setResetEmail(e.target.value)}
-                              required
-                           />
-                           <div className="sign__row-btns">
-                              <button
-                                 type="button"
-                                 className="sign__link-button arrow"
-                                 onClick={() => setMode("sign-in")}
-                              >
-                                 <ReactSVG
-                                    src={arrowIcon}
-                                    className="sign__icon-inline"
+                              <div className="sign__form-row">
+                                 <input
+                                    type="text"
+                                    placeholder="Nume Prenume"
+                                    className="sign__input"
+                                    name="name"
+                                    value={registerForm.name}
+                                    onChange={handleRegisterChange}
+                                    required
                                  />
-                                 <span>Autentificare</span>
-                              </button>
+                                 <input
+                                    type="email"
+                                    placeholder="Adresă E-mail"
+                                    className="sign__input"
+                                    name="email"
+                                    value={registerForm.email}
+                                    onChange={handleRegisterChange}
+                                    required
+                                 />
+                              </div>
+
+                              <div className="sign__form-row">
+                                 <input
+                                    type="text"
+                                    placeholder="Cheie Unică"
+                                    className="sign__input"
+                                    name="groupToken"
+                                    value={registerForm.groupToken}
+                                    onChange={handleRegisterChange}
+                                    required
+                                 />
+
+                                 <div className="sign__input-wrapper">
+                                    <input
+                                       type="tel"
+                                       placeholder="067-123-421"
+                                       className="sign__input sign__input--phone"
+                                       name="phone"
+                                       value={formatLocalPhone(
+                                          registerForm.phone,
+                                       )}
+                                       onChange={handlePhoneChange}
+                                       inputMode="numeric"
+                                       maxLength={13} //
+                                       aria-label="Număr de telefon (minim 8 cifre)"
+                                       required
+                                    />
+                                 </div>
+                              </div>
+
+                              <div className="sign__form-row">
+                                 <div className="sign__input-wrapper">
+                                    <input
+                                       type={
+                                          showPasswords ? "text" : "password"
+                                       }
+                                       placeholder="Parolă"
+                                       className="sign__input"
+                                       name="password"
+                                       value={registerForm.password}
+                                       onChange={handleRegisterChange}
+                                       required
+                                    />
+                                    <button
+                                       type="button"
+                                       className="sign__eye-btn"
+                                       aria-label={
+                                          showPasswords
+                                             ? "Ascunde parolele"
+                                             : "Arată parolele"
+                                       }
+                                       title={
+                                          showPasswords
+                                             ? "Ascunde parolele"
+                                             : "Arată parolele"
+                                       }
+                                       onClick={() =>
+                                          setShowPasswords((prev) => !prev)
+                                       }
+                                    >
+                                       <ReactSVG
+                                          src={
+                                             showPasswords
+                                                ? eyeClosedIcon
+                                                : eyeOpenIcon
+                                          }
+                                       />
+                                    </button>
+                                 </div>
+
+                                 <div className="sign__input-wrapper">
+                                    <input
+                                       type={
+                                          showPasswords ? "text" : "password"
+                                       }
+                                       placeholder="Confirmă Parola"
+                                       className="sign__input"
+                                       name="confirmPassword"
+                                       value={registerForm.confirmPassword}
+                                       onChange={handleRegisterChange}
+                                       required
+                                    />
+                                    <button
+                                       type="button"
+                                       className="sign__eye-btn"
+                                       aria-label={
+                                          showPasswords
+                                             ? "Ascunde parolele"
+                                             : "Arată parolele"
+                                       }
+                                       title={
+                                          showPasswords
+                                             ? "Ascunde parolele"
+                                             : "Arată parolele"
+                                       }
+                                       onClick={() =>
+                                          setShowPasswords((prev) => !prev)
+                                       }
+                                    >
+                                       <ReactSVG
+                                          src={
+                                             showPasswords
+                                                ? eyeClosedIcon
+                                                : eyeOpenIcon
+                                          }
+                                       />
+                                    </button>
+                                 </div>
+                              </div>
+
+                              {/* ✅ Termeni și Condiții (obligatoriu) */}
+                              <div className="sign__terms">
+                                 <label className="sign__checkbox">
+                                    <input
+                                       type="checkbox"
+                                       checked={registerAccepted}
+                                       onChange={(e) =>
+                                          setRegisterAccepted(e.target.checked)
+                                       }
+                                       required
+                                       aria-required="true"
+                                       aria-label="Accept termenii și condițiile"
+                                    />
+                                    <span style={{ lineHeight: 1.3 }}>
+                                       Sunt de acord cu{" "}
+                                       <a
+                                          href="/termeni"
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                       >
+                                          Termenii și Condițiile
+                                       </a>{" "}
+                                       și{" "}
+                                       <a
+                                          href="/confidentialitate"
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                       >
+                                          Politica de confidențialitate
+                                       </a>
+                                       .
+                                    </span>
+                                 </label>
+                              </div>
 
                               <button
                                  type="submit"
                                  className="sign__button"
-                                 disabled={resetLoading}
+                                 disabled={!registerAccepted}
+                                 aria-disabled={!registerAccepted}
+                                 title={
+                                    !registerAccepted
+                                       ? "Bifează Termenii și Condițiile pentru a continua"
+                                       : "Înregistrează-te"
+                                 }
                               >
-                                 <span>
-                                    {resetLoading ? "Se trimite..." : "Trimite"}
-                                 </span>
+                                 <span>Înregistrează-te</span>
                                  <ReactSVG
                                     className="sign__button-icon sign__icon"
-                                    src={arrowIcon}
+                                    src={addIcon}
                                  />
                               </button>
-                           </div>
-                        </form>
-                     </div>
-                  </div>
+                           </form>
+                        </div>
 
-                  {/* Footer */}
-                  <div className="sign__footer">
-                     <div className="sign__hr">
-                        {[...Array(6)].map((_, i) => (
-                           <ReactSVG
-                              key={i}
-                              className="sign__icon-wave"
-                              src={waveSegmentIcon}
-                           />
-                        ))}
-                        <ReactSVG
-                           className="sign__icon-wave"
-                           src={waveSegmentEndIcon}
-                        />
-                     </div>
-                     <div className="sign__links">
-                        <M3Link
-                           type="accent"
-                           icon={arrowIcon}
-                           link="https://instruire-auto.md/"
+                        {/* RESETARE PAROLĂ */}
+                        <div
+                           className={`sign__form-wrapper ${
+                              mode === "reset-password"
+                                 ? "sign__form--active"
+                                 : "sign__form--leave"
+                           }`}
                         >
-                           <span>Acasă</span>
-                        </M3Link>
-                        {mode === "sign-in" ? (
-                           <M3Link
-                              type="succes"
-                              icon={addIcon}
-                              onClick={(e) => {
-                                 e.preventDefault();
-                                 setMode("sign-up");
-                              }}
+                           <h1 className="sign__title">Resetare Parolă</h1>
+                           <p className="sign__subtitle">
+                              Introdu adresa ta de email și îți vom trimite
+                              instrucțiunile de resetare.
+                           </p>
+
+                           <form
+                              className="sign__form"
+                              onSubmit={handleRequestReset}
                            >
-                              <span>Creare Cont</span>
-                           </M3Link>
-                        ) : (
+                              <div
+                                 className="sign__info-box"
+                                 role="note"
+                                 aria-live="polite"
+                              >
+                                 <p>
+                                    1. Vei primi un email cu un link sau cod
+                                    pentru resetare.
+                                 </p>
+                                 <p>
+                                    2. Urmărește linkul pentru a seta o parolă
+                                    nouă în pagina dedicată.
+                                 </p>
+                                 <p className="sign__info-hint">
+                                    ** Verifică și folderul{" "}
+                                    <strong>Spam/Promoții</strong> dacă nu
+                                    găsești mesajul.
+                                 </p>
+                              </div>
+                              <input
+                                 type="email"
+                                 placeholder="Adresa de E-mail"
+                                 className="sign__input"
+                                 value={resetEmail}
+                                 onChange={(e) => setResetEmail(e.target.value)}
+                                 required
+                              />
+                              <div className="sign__row-btns">
+                                 <button
+                                    type="button"
+                                    className="sign__link-button arrow"
+                                    onClick={() => setMode("sign-in")}
+                                 >
+                                    <ReactSVG
+                                       src={arrowIcon}
+                                       className="sign__icon-inline"
+                                    />
+                                    <span>Autentificare</span>
+                                 </button>
+
+                                 <button
+                                    type="submit"
+                                    className="sign__button"
+                                    disabled={resetLoading}
+                                 >
+                                    <span>
+                                       {resetLoading
+                                          ? "Se trimite..."
+                                          : "Trimite"}
+                                    </span>
+                                    <ReactSVG
+                                       className="sign__button-icon sign__icon"
+                                       src={arrowIcon}
+                                    />
+                                 </button>
+                              </div>
+                           </form>
+                        </div>
+                     </div>
+
+                     {/* Footer */}
+                     <div className="sign__footer">
+                        <div className="sign__hr">
+                           {[...Array(6)].map((_, i) => (
+                              <ReactSVG
+                                 key={i}
+                                 className="sign__icon-wave"
+                                 src={waveSegmentIcon}
+                              />
+                           ))}
+                           <ReactSVG
+                              className="sign__icon-wave"
+                              src={waveSegmentEndIcon}
+                           />
+                        </div>
+                        <div className="sign__links">
                            <M3Link
-                              type="succes"
-                              icon={loginIcon}
-                              onClick={(e) => {
-                                 e.preventDefault();
-                                 setMode("sign-in");
-                              }}
+                              type="accent"
+                              icon={arrowIcon}
+                              link="https://instruire-auto.md/"
                            >
-                              <span>Autentificare</span>
+                              <span>Acasă</span>
                            </M3Link>
-                        )}
+                           {mode === "sign-in" ? (
+                              <M3Link
+                                 type="succes"
+                                 icon={addIcon}
+                                 onClick={(e) => {
+                                    e.preventDefault();
+                                    setMode("sign-up");
+                                 }}
+                              >
+                                 <span>Creare Cont</span>
+                              </M3Link>
+                           ) : (
+                              <M3Link
+                                 type="succes"
+                                 icon={loginIcon}
+                                 onClick={(e) => {
+                                    e.preventDefault();
+                                    setMode("sign-in");
+                                 }}
+                              >
+                                 <span>Autentificare</span>
+                              </M3Link>
+                           )}
+                        </div>
                      </div>
                   </div>
                </div>
             </div>
-         </div>
-      </main>
+         </main>
+         <FooterSign />
+      </>
    );
 }
 

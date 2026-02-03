@@ -3,7 +3,7 @@
    bottom: 6px;
    left: 6px;
    width: 100%;
-   min-width: 500px;
+   max-width: 500px;
    background-color: var(--black-s);
    z-index: 10000;
    padding: 25px 25px 0 25px;
@@ -23,7 +23,7 @@
       width: 100vw;
       height: 100vh;
       background-color: rgba(0, 0, 0, 0.4);
-      z-index: -1;
+      z-index: 999;
       backdrop-filter: blur(5px);
       opacity: 0;
       transition: opacity 0.2s ease;
@@ -88,13 +88,17 @@
          rotate: 45deg;
       }
       &:hover {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          color: var(--accent-l);
          border-radius: 16px;
          padding: 14px 22px;
       }
       &:active {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          transform: scale(0.95);
          padding: 14px 20px;
          border-radius: 32px;
@@ -117,6 +121,7 @@ body.popup-open .popup-panel__overlay {
    position: fixed;
    bottom: 6px;
    left: 6px;
+   max-width: 500px;
    width: 100%;
    min-width: 500px;
    background-color: var(--black-s);
@@ -203,13 +208,17 @@ body.popup-open .popup-panel__overlay {
          rotate: 45deg;
       }
       &:hover {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          color: var(--accent-l);
          border-radius: 16px;
          padding: 14px 22px;
       }
       &:active {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          transform: scale(0.95);
          padding: 14px 20px;
          border-radius: 32px;

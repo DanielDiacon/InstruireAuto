@@ -751,12 +751,9 @@ function PPanel() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
 
          <main className="main">
-            <section className="professor">
+            <section className="professor ">
                {/* ✅ toate grupele din overview */}
                <CourseGroupsList
                   groups={myGroups}

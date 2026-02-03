@@ -18,7 +18,7 @@ import GroupManager from "../../components/APanel/GroupManager";
 import SubPopup from "../../components/Utils/SubPopup";
 
 function MPGroups() {
-  const links = [
+   const links = [
       { link: "/manager", text: "Acasă", icon: homeIcon },
       { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
@@ -38,10 +38,6 @@ function MPGroups() {
 
    return (
       <>
-         <Header links={links}>
-            <SubPopup />
-            <Popup />
-         </Header>
          <main className="main">
             <section className="page-wrapper">
                <GroupManager />

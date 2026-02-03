@@ -3,7 +3,7 @@ import apiClientService from "./ApiClientService";
 // === utils ===
 const clean = (o = {}) =>
    Object.fromEntries(
-      Object.entries(o).filter(([_, v]) => v !== undefined && v !== null)
+      Object.entries(o).filter(([_, v]) => v !== undefined && v !== null),
    );
 
 /** GET /users */
@@ -29,10 +29,7 @@ export async function setDesiredInstructor(instructorId) {
 
    // Unele backend-uri așteaptă chei diferite.
    // Încercăm pe rând, iar dacă prima pică, retry cu alt payload.
-   const payloads = [
-      { instructorId: id },
-      { desiredInstructorId: id },
-   ];
+   const payloads = [{ instructorId: id }, { desiredInstructorId: id }];
 
    let lastErr = null;
 
@@ -40,7 +37,7 @@ export async function setDesiredInstructor(instructorId) {
       const res = await apiClientService.patch(
          "/users/me/desired-instructor",
          JSON.stringify(payload),
-         "application/json; charset=UTF-8"
+         "application/json; charset=UTF-8",
       );
 
       if (res.ok) {
@@ -71,7 +68,7 @@ export async function createUser(userData) {
    const res = await apiClientService.post(
       "/users",
       JSON.stringify(payload),
-      "application/json; charset=UTF-8"
+      "application/json; charset=UTF-8",
    );
    if (!res.ok) {
       const text = await res.text();
@@ -86,12 +83,12 @@ export async function createUser(userData) {
 /** PATCH /users/:id — IMPORTANT: trimitem JSON stringificat */
 export async function updateUser(userId, userData) {
    const payload = clean(userData);
-   //console.log("[updateUser] payload JSON ->", payload);
+   console.log("[updateUser] payload JSON ->", payload);
 
    const res = await apiClientService.patch(
       `/users/${userId}`,
       JSON.stringify(payload),
-      "application/json; charset=UTF-8"
+      "application/json; charset=UTF-8",
    );
    if (!res.ok) {
       const text = await res.text();
@@ -103,7 +100,6 @@ export async function updateUser(userId, userData) {
    return json;
 }
 
-/** DELETE /users/:id */
 /** DELETE /users/:id */
 export async function deleteUser(userId) {
    const res = await apiClientService.delete(`/users/${userId}`);

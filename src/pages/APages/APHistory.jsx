@@ -3,8 +3,8 @@ import React, { useContext, useEffect, useState } from "react";
 import Header from "../../components/Header/Header";
 import Popup from "../../components/Utils/Popup";
 import SubPopup from "../../components/Utils/SubPopup";
+
 import addIcon from "../../assets/svg/mdi--calendar-plus-outline.svg";
-import accIcon from "../../assets/svg/acc.svg";
 import clockIcon from "../../assets/svg/clock.svg";
 import categoriiIcon from "../../assets/svg/mdi--category-plus-outline.svg";
 import groupsIcon from "../../assets/svg/material-symbols--group-outline.svg";
@@ -38,8 +38,8 @@ function APHistory() {
       },
       { link: "/admin/history", text: "Istoric", icon: clockIcon },
       { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
-      //{ popup: "profile", text: "Profil", icon: accIcon },
    ];
+
    const dispatch = useDispatch();
    const [reservations, setReservations] = useState([]);
    const [users, setUsers] = useState([]);
@@ -63,55 +63,23 @@ function APHistory() {
                getUsers(),
             ]);
 
-            setReservations(resData);
-            setUsers(userData);
+            setReservations(Array.isArray(resData) ? resData : []);
+            setUsers(Array.isArray(userData) ? userData : []);
          } catch (err) {
             console.error("Eroare la preluare:", err);
          }
       })();
    }, [user, dispatch]);
 
-   const findUserById = (id) => users.find((u) => u.id === id);
-   const findInstructorById = (id) =>
-      instructors.find((inst) => inst.id === id);
-
-   const formattedReservations = reservations.map((res) => {
-      const start = new Date(res.startTime);
-      const end = new Date(start.getTime() + 90 * 60 * 1000);
-
-      const personUser = findUserById(res.userId);
-      const instructorObj = findInstructorById(res.instructorId);
-
-      const pad2 = (n) => String(n).padStart(2, "0");
-      const time = `${start.getHours()}:${pad2(
-         start.getMinutes()
-      )} - ${end.getHours()}:${pad2(end.getMinutes())}`;
-
-      return {
-         id: res.id,
-         start,
-         end,
-         time,
-         person: personUser
-            ? `${personUser.firstName} ${personUser.lastName}`
-            : "Anonim",
-         instructor: instructorObj
-            ? `${instructorObj.firstName} ${instructorObj.lastName}`
-            : "Necunoscut",
-         status: res.status || "pending",
-      };
-   });
-
    return (
       <>
-         <Header links={links}>
-            <SubPopup />
-            <Popup />
-         </Header>
          <main className="main">
             <section className="page-wrapper">
                <ReservationHistory
-                  formattedReservations={formattedReservations}
+                  reservations={reservations}
+                  users={users}
+                  instructors={instructors}
+                  durationMinDefault={90}
                />
             </section>
          </main>

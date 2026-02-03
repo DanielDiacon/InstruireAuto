@@ -1,0 +1,111 @@
+.popupPanelUI {
+   position: fixed;
+   bottom: 6px;
+   left: 6px;
+   width: 100%;
+   max-width: 500px;
+   height: calc(100svh - 12px);
+   border-radius: 35px;
+   corner-shape: superellipse(1.2);
+   background-color: var(--black-s);
+   overflow: hidden;
+   z-index: 1040;
+
+   will-change: transform, opacity;
+
+   // ✅ închis: împins clar în jos (în afara ecranului)
+   transform: translateX(-120%) scaleY(0.7) scaleX(1);
+   pointer-events: none;
+
+   transition: transform 0.3s cubic-bezier(0.43, 1, 0.32, 0.875);
+   // ✅ animație vizibilă, fără “delay” ci direct
+   will-change: transform;
+   &.is-open {
+      transition: transform 0.3s cubic-bezier(0.075, 1.2, 0.32, 1.075);
+      transform: translateX(0) scaleY(1);
+      pointer-events: all;
+   }
+
+   &__inner {
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+
+      &::-webkit-scrollbar {
+         display: none !important;
+      }
+   }
+   &__content {
+      height: 100%;
+   }
+   &__close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: var(--black-p);
+      color: var(--white-s);
+      border-radius: 25px;
+      padding: 14px 20px;
+      cursor: pointer;
+      z-index: 999999;
+
+      svg {
+         rotate: 45deg;
+      }
+   }
+}
+
+.popupPanelUI__overlay {
+   position: fixed;
+   inset: 0;
+   background: linear-gradient(to right, #4b493659, #ffffff00);
+
+   backdrop-filter: blur(5px);
+   z-index: 1000;
+   opacity: 0;
+   pointer-events: none;
+   transition: opacity 0.22s ease;
+   cursor: pointer;
+
+   &.is-open {
+      opacity: 1;
+
+      pointer-events: auto;
+   }
+}
+
+/* doar scroll lock */
+
+@media only screen and (max-width: $mobile) {
+   .popupPanelUI {
+      min-width: auto;
+      padding: 0px;
+      top: 0;
+      left: 0;
+      width: 100%;
+      pointer-events: all;
+      align-items: center;
+      justify-content: center;
+      background: none;
+
+      transform: translateX(120%) scaleY(1) scaleX(0.8);
+      &.is-open {
+         transform: translateX(0) scaleY(1) scaleX(1);
+         pointer-events: all;
+      }
+
+      &__title {
+         font-size: 24px;
+      }
+      &__header {
+         margin-bottom: 20px;
+      }
+      &__overlay {
+         background: var(--black-s);
+         backdrop-filter: none;
+      }
+   }
+   body.popupui-open {
+      overflow: hidden;
+   }
+}

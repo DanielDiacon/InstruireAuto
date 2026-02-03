@@ -160,14 +160,7 @@ export function getStudentPrivateMessageFromEv(ev) {
 // telefonul studentului (user), nu al instructorului
 export function getStudentPhoneFromEv(ev) {
    const raw = ev?.raw || {};
-   const v =
-      ev?.studentPhone ??
-      raw?.clientPhone ??
-      raw?.phoneNumber ??
-      raw?.phone ??
-      raw?.user?.phone ??
-      raw?.user?.phoneNumber ??
-      "";
+   const v =  raw?.user?.phone ?? "";
    return typeof v === "string" ? v.trim() : String(v ?? "").trim();
 }
 
@@ -209,7 +202,7 @@ export function isAutoInstructor(inst, cars = []) {
    if (!idStr || !Array.isArray(cars)) return false;
 
    const car = cars.find(
-      (c) => String(c.instructorId ?? c.instructor_id ?? "") === idStr
+      (c) => String(c.instructorId ?? c.instructor_id ?? "") === idStr,
    );
    if (!car) return false;
 
@@ -309,7 +302,7 @@ export function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
       hh,
       mm,
       0,
-      0
+      0,
    );
    const offMin = tzOffsetMinutesAt(utcGuess, MOLDOVA_TZ);
    const fixedUtcMs = utcGuess - offMin * 60000;
@@ -397,7 +390,7 @@ export function buildVirtualSlotForDayHHMM(dayLike, hhmm) {
 export function buildWaitNoteDateIsoForSlot(
    dayLike,
    slotIndex,
-   busyKeysMode = "local-match"
+   busyKeysMode = "local-match",
 ) {
    if (slotIndex == null) return null;
    const idx = Number(slotIndex);

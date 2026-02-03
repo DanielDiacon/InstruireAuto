@@ -28,15 +28,23 @@ $fontSize: 14;
    --white-p: #fff;
    --white-s: #dfdfdf;
    --white-t: #8a8a8a;
+
    --bd: #6b6b6b5c;
    --transparent: #303030da;
+   --blur-bg: rgba(125, 125, 125, 0.178) !important;
+   --popup-bg: rgba(43, 43, 43, 0.812);
 
    // other colors pallet
+   --green-t: #ace69a;
+   --purple-t: hsla(267, 87%, 73%, 0.507);
+   --blue-t: #63ccfcda;
+   --red-t: #e5abab;
+   --orange-t: hsla(35, 87%, 73%, 0.527);
+
    --green-l: #9cf680;
    --green-d: #0d3700;
    --blue-l: #80d1f6;
    --blue-d: #002c41;
-
    --red-l: #f68080;
    --red-d: #410000;
    --orange-l: hsl(35, 87%, 73%);
@@ -49,6 +57,13 @@ $fontSize: 14;
       #994d00 63%,
       #9e6b33 100%
    );
+   //--main-bg: radial-gradient(
+   //   circle farthest-side,
+   //   #575c1e 0%,
+   //   #421a1a 28%,
+   //   #5b3c20 63%,
+   //   #573c1e 100%
+   //);
 
    // transitions
    --elastic-s: 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
@@ -64,28 +79,33 @@ $fontSize: 14;
    --accent-t: #e3ef97d7;
 
    // main colors
-
    --black-p: #f2f4ef;
    --black-s: #e6e9e3;
-   //--black-p: #FFF7FF;
-   //--black-s: #E1E0F9;
    --black-t: #eaebe6;
    --white-p: hsl(0, 0%, 10%);
    --white-s: hsl(0, 0%, 8%);
    --white-t: hsl(0, 0%, 42%);
+
    --bd: rgba(125, 125, 125, 0.178) !important;
    --transparent: #e0e0e0bf;
+   --blur-bg: rgba(168, 168, 168, 0.178) !important;
+   --popup-bg: #ffffff87;
 
    // other colors pallet
    --green-l: #9cf680;
+   --green-t: #9cf68076;
    --green-d: #0d3700;
    --purple-l: hsl(267, 87%, 73%);
+   --purple-t: hsla(267, 87%, 73%, 0.507);
    --purple-d: hsl(267, 100%, 13%);
    --blue-l: #80d1f6;
+   --blue-t: #57caff74;
    --blue-d: #002c41;
    --red-l: #f68080;
+   --red-t: #f680807c;
    --red-d: #410000;
    --orange-l: hsl(35, 87%, 73%);
+   --orange-t: hsla(35, 87%, 73%, 0.527);
    --orange-d: hsl(35, 100%, 13%);
 
    // main bg gred
@@ -135,6 +155,7 @@ body {
    max-width: 1140px;
    width: 100%;
    margin: 0 auto;
+   z-index: 10;
    //fix for slider
    > * {
       min-width: 0;
@@ -186,7 +207,7 @@ body {
    min-height: 0 !important; /* CHEIE */
 
    @media (max-width: $tablet) {
-      padding: 0 0 96px 0;
+      padding: 0 0 80px 0;
    }
 }
 
@@ -239,8 +260,9 @@ body {
    align-items: center;
    transition:
       opacity 0.5s ease,
-      transform 0.5s ease;
-   transform: translateX(-0%);
+      filter 0.5s ease;
+   //transform: translateX(-0%);
+   //filter: blur(0);
    opacity: 1;
    pointer-events: all;
    p {
@@ -248,7 +270,8 @@ body {
    }
 }
 .loading-overlay.fade-out {
-   transform: translateX(-100%);
+   //filter: blur(1000px);
+   //transform: translateX(-100%);
    opacity: 0;
    pointer-events: none; /* să nu blocheze interacțiunea */
 }
@@ -275,6 +298,7 @@ body {
 }
 
 // footer
+.footer-sign,
 .footer {
    padding: 12px 12px 12px 12px;
    @media only screen and (max-width: $mobile) {
@@ -293,6 +317,33 @@ body {
       color: var(--white-s);
       @media only screen and (max-width: $mobile) {
          padding: 15px 20px;
+      }
+      a {
+         color: var(--white-s);
+      }
+      svg {
+         height: 14px;
+         width: auto;
+         color: var(--white-s);
+         margin-bottom: -1px;
+      }
+   }
+}
+
+.footer-sign {
+   position: absolute;
+   bottom: 0;
+   z-index: 0;
+
+   &__body {
+      padding: 10px;
+      background: transparent;
+      border-radius: 0;
+      font-weight: 500;
+      color: var(--white-s);
+      opacity: 0.8;
+      @media only screen and (max-width: $mobile) {
+         padding: 10px;
       }
       a {
          color: var(--white-s);
@@ -342,3 +393,21 @@ body.is-exam-mode main {
 @import "./scss/Popups/aAddProg";
 @import "./scss/Popups/_eventInfo";
 @import "./scss/Popups/_permision";
+
+// ui no cu corectii =======================================
+@import "./scss/APanel/adminPanel";
+
+// components
+@import "./scss/APanel/studentsUI";
+@import "./scss/APanel/studentsGroupsUI";
+@import "./scss/APanel/instructorsGroupsUI";
+@import "./scss/APanel/reservationHistoryUI";
+
+//popups
+@import "./scss/Popups/studentProfileUI";
+
+// ui no cu corectii "Common"
+@import "./scss/Common/studentItemUI";
+@import "./scss/Common/iconButtonUI";
+@import "./scss/Common/confirmDeleteButton";
+@import "./scss/Common/popupUI";

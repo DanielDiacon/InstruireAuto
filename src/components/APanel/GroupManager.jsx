@@ -1,13 +1,4 @@
-// src/components/Groups/GroupManager.jsx
 import React, { useState, useEffect, useContext, useMemo } from "react";
-import { ReactSVG } from "react-svg";
-
-import addIcon from "../../assets/svg/add-s.svg"; // folosit și ca close (rotate45)
-import editIcon from "../../assets/svg/edit.svg";
-import eyeIcon from "../../assets/svg/eye.svg";
-import keyIcon from "../../assets/svg/key.svg";
-import searchIcon from "../../assets/svg/search.svg";
-import arrowIcon from "../../assets/svg/arrow-s.svg";
 
 import { UserContext } from "../../UserContext";
 import { useDispatch, useSelector } from "react-redux";
@@ -19,6 +10,12 @@ import {
 } from "../../store/groupsSlice";
 import { openPopup } from "../Utils/popupStore";
 
+import StudentItem from "../Common/StudentItem";
+import IconButton from "../Common/IconButton";
+import UIIcon from "../Common/UIIcon";
+import SearchToggle from "../Common/SearchToggle";
+import ConfirmDeleteButton from "../Common/ConfirmDeleteButton";
+
 /* ===================== Utils ===================== */
 const toNum = (v) =>
    v === null || v === undefined || v === "" || Number.isNaN(Number(v))
@@ -28,7 +25,7 @@ const toNum = (v) =>
 const escapeRegExp = (s = "") =>
    String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const highlightText = (text, query) => {
+const highlightText = (text, query, highlightClassName) => {
    const t = String(text ?? "");
    const q = String(query ?? "");
    if (!q) return t;
@@ -38,7 +35,7 @@ const highlightText = (text, query) => {
 
    return parts.map((part, index) =>
       part.toLowerCase() === q.toLowerCase() ? (
-         <i key={index} className="highlight">
+         <i key={index} className={highlightClassName}>
             {part}
          </i>
       ) : (
@@ -53,18 +50,18 @@ const isProtectedToken = (token) =>
       .trim()
       .toUpperCase() === "ABCD1234";
 
-/* ===================== Student avatar helpers (ca în StudentsManager) ===================== */
+/* ===== Student avatar helpers ===== */
 const firstLetter = (v) =>
    String(v || "")
       .trim()
       .charAt(0) || "";
+
 function getInitials(student) {
    const fn = String(student?.firstName || "").trim();
    const ln = String(student?.lastName || "").trim();
 
    const a = firstLetter(fn);
    const b = firstLetter(ln);
-
    if (a && b) return (a + b).toUpperCase();
 
    const two = fn.slice(0, 2);
@@ -75,22 +72,20 @@ function getInitials(student) {
 
 function hashStringToUInt(str) {
    let h = 0;
-   for (let i = 0; i < str.length; i++) {
-      h = (h * 31 + str.charCodeAt(i)) | 0;
-   }
+   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
    return h >>> 0;
 }
 
 const AVATAR_HUES = [
-   { h: 70, s: 75 }, // lime
-   { h: 0, s: 100 }, // red
-   { h: 30, s: 100 }, // orange
-   { h: 54, s: 95 }, // yellow
-   { h: 130, s: 65 }, // green
-   { h: 210, s: 90 }, // blue
-   { h: 255, s: 98 }, // indigo
-   { h: 285, s: 100 }, // purple
-   { h: 330, s: 96 }, // pink
+   { h: 70, s: 75 },
+   { h: 0, s: 100 },
+   { h: 30, s: 100 },
+   { h: 54, s: 95 },
+   { h: 130, s: 65 },
+   { h: 210, s: 90 },
+   { h: 255, s: 98 },
+   { h: 285, s: 100 },
+   { h: 330, s: 96 },
 ];
 
 const AVATAR_LIGHTNESSES = [94, 92, 90, 88, 86, 84, 82, 80, 78, 76, 74];
@@ -103,11 +98,6 @@ function getRandomAvatarColor() {
    return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 }
 
-/**
- * Culoare din nume:
- * - dacă are cel puțin o literă -> deterministic
- * - dacă nu are litere -> null (intră pe random)
- */
 function getAvatarColorFromName(student) {
    const fullName =
       `${student?.firstName || ""} ${student?.lastName || ""}`.trim();
@@ -119,7 +109,7 @@ function getAvatarColorFromName(student) {
    return AVATAR_COLORS[idx];
 }
 
-/* ====== Chooser pentru PROFESSOR ====== */
+/* ====== PROFESSOR Chooser ====== */
 function ProfessorChooser({
    professors,
    excludeIds = [],
@@ -147,66 +137,56 @@ function ProfessorChooser({
            })
          : professors;
 
-      return base.map((p) => ({
-         ...p,
-         disabled: taken.has(String(p.id)),
-      }));
+      return base.map((p) => ({ ...p, disabled: taken.has(String(p.id)) }));
    }, [query, professors, excludeIds]);
 
    return (
-      <div
-         className={
-            inline
-               ? "instructorsgroup__create-form active"
-               : "instructorsgroup__edit-form"
-         }
-         style={inline ? { position: "static" } : undefined}
-      >
-         <div
-            className="instructorsgroup__actions"
-            style={{ alignItems: "center" }}
-         >
+      <div className={`studentsGroupsUI__picker ${inline ? "is-inline" : ""}`}>
+         <div className="studentsGroupsUI__pickerTop">
             <button
                type="button"
-               className="instructorsgroup__button"
+               className="studentsGroupsUI__btnSecondary"
                onClick={onClose}
             >
                Înapoi
             </button>
+
             <input
-               className="picker__search"
+               className="studentsGroupsUI__pickerSearch"
                placeholder="Caută profesor (nume, telefon, email)…"
                value={query}
                onChange={(e) => setQuery(e.target.value)}
-               style={{ width: "100%" }}
             />
          </div>
 
-         <ul className="picker__list" role="listbox">
+         <ul className="studentsGroupsUI__pickerList" role="listbox">
             {list.length === 0 && (
-               <li className="picker__empty">Niciun rezultat</li>
+               <li className="studentsGroupsUI__pickerEmpty">
+                  Niciun rezultat
+               </li>
             )}
+
             {list.map((p) => (
                <li
                   key={p.id}
                   role="option"
-                  className={
-                     "picker__item" + (p.disabled ? " is-disabled" : "")
-                  }
+                  className={`studentsGroupsUI__pickerItem ${p.disabled ? "is-disabled" : ""}`}
                   title={
                      p.disabled
                         ? "Deja selectat"
-                        : `${p.firstName || ""} ${p.lastName || ""} ${p.phone || "—"} ${
-                             p.email || ""
-                          }`
+                        : `${p.firstName || ""} ${p.lastName || ""} ${p.phone || "—"} ${p.email || ""}`
                   }
                   onClick={() => !p.disabled && onPick(p)}
                >
-                  <div className="picker__label">
+                  <div className="studentsGroupsUI__pickerLabel">
                      {p.firstName} {p.lastName}
                   </div>
-                  <div className="picker__meta">{p.phone || "—"}</div>
-                  <div className="picker__meta">{p.email || "—"}</div>
+                  <div className="studentsGroupsUI__pickerMeta">
+                     {p.phone || "—"}
+                  </div>
+                  <div className="studentsGroupsUI__pickerMeta">
+                     {p.email || "—"}
+                  </div>
                </li>
             ))}
          </ul>
@@ -216,9 +196,9 @@ function ProfessorChooser({
 
 /* ========= Form Reutilizabil (Create & Edit) ========= */
 function GroupForm({
-   mode, // "create" | "edit"
-   values, // { name, token, professorLabel }
-   setValues, // (patch) => void
+   mode,
+   values,
+   setValues,
    onSubmit,
    onCancel,
    openPicker,
@@ -230,100 +210,75 @@ function GroupForm({
    onCancelDelete,
 }) {
    return (
-      <div className="groups__form instructorsgroup__create-form active">
-         <div
-            className="groups__item-left-top"
-            style={{ display: "flex", alignItems: "center", gap: 6 }}
-         >
+      <div className="studentsGroupsUI__form">
+         <div className="studentsGroupsUI__formTop">
             <input
                type="text"
                placeholder="Numele grupei"
                value={values.name}
                onChange={(e) => setValues({ name: e.target.value })}
-               className="instructorsgroup__input"
-               style={{ flex: 1 }}
+               className="studentsGroupsUI__input"
             />
+
             {mode === "edit" && (
-               <button
-                  type="button"
-                  className="instructorsgroup__button rotate45 react-icon"
+               <IconButton
+                  className="studentsGroupsUI__iconBtn studentsGroupsUI__formBtn"
+                  icon="add"
+                  iconClassName="studentsGroupsUI__icon is-rotated"
                   onClick={onCancel}
                   title="Închide editarea"
                   aria-label="Închide editarea"
-               >
-                  <ReactSVG src={addIcon} />
-               </button>
+               />
             )}
          </div>
 
          {mode === "edit" && (
-            <div className="groups__keyline instructorsgroup__keyline">
+            <div className="studentsGroupsUI__keyline">
                <input
                   type="text"
                   placeholder="Token / Key (opțional)"
                   value={values.token}
                   onChange={(e) => setValues({ token: e.target.value })}
-                  className="instructorsgroup__input"
+                  className="studentsGroupsUI__input"
                />
             </div>
          )}
 
          <button
             type="button"
-            className="groups__chooser-btn instructorsgroup__input"
+            className="studentsGroupsUI__chooserBtn"
             onClick={openPicker}
-            style={{ textAlign: "left" }}
          >
             {values.professorLabel}
          </button>
 
-         <div
-            className="instructorsgroup__actions"
-            style={{ display: "flex", gap: 6, alignItems: "center" }}
-         >
-            <button onClick={onSubmit} className="instructorsgroup__button">
+         <div className="studentsGroupsUI__actions">
+            <button
+               type="button"
+               onClick={onSubmit}
+               className="studentsGroupsUI__btnPrimary"
+            >
                {mode === "create" ? "Creează" : "Salvează"}
             </button>
 
             {mode === "create" && (
-               <button onClick={onCancel} className="cancel-confirm">
+               <button
+                  type="button"
+                  onClick={onCancel}
+                  className="studentsGroupsUI__btnSecondary"
+               >
                   Anulează
                </button>
             )}
 
+            {/* ✅ DELETE (nou) */}
             {mode === "edit" && showDelete && (
-               <div
-                  className="instructorsgroup__item-delete groups__item-delete"
-                  style={{ position: "static" }}
-               >
-                  {!isConfirmingDelete ? (
-                     <button
-                        onClick={onStartDelete}
-                        className="delete-btn"
-                        style={{ position: "static" }}
-                     >
-                        Șterge
-                     </button>
-                  ) : (
-                     <div
-                        className="delete-confirmation"
-                        style={{ position: "static", display: "flex", gap: 6 }}
-                     >
-                        <button
-                           onClick={onConfirmDelete}
-                           className="delete-confirm"
-                        >
-                           Da
-                        </button>
-                        <button
-                           onClick={onCancelDelete}
-                           className="cancel-confirm"
-                        >
-                           Nu
-                        </button>
-                     </div>
-                  )}
-               </div>
+               <ConfirmDeleteButton
+                  confirming={isConfirmingDelete}
+                  onStart={onStartDelete}
+                  onCancel={onCancelDelete}
+                  onConfirm={onConfirmDelete}
+               />
             )}
          </div>
       </div>
@@ -352,7 +307,7 @@ function GroupManager() {
 
    const [form, setForm] = useState({
       open: false,
-      mode: null, // "create" | "edit"
+      mode: null,
       groupId: null,
       values: { name: "", token: "", professorId: "" },
    });
@@ -373,7 +328,6 @@ function GroupManager() {
    const groupedUsersByGroup = useMemo(() => {
       return groups.map((group) => ({
          ...group,
-         // ✅ membri doar USER (studenți), nu profesor
          members: users.filter(
             (u) =>
                String(u.groupId) === String(group.id) &&
@@ -442,8 +396,6 @@ function GroupManager() {
             }),
          );
          await runThunk(fetchGroups());
-      } catch (e) {
-         // optional
       } finally {
          setPicker({ open: false });
          cancelForm();
@@ -486,8 +438,6 @@ function GroupManager() {
             }),
          );
          await runThunk(fetchGroups());
-      } catch (e) {
-         // optional
       } finally {
          setPicker({ open: false });
          cancelForm();
@@ -505,8 +455,6 @@ function GroupManager() {
       try {
          await runThunk(removeGroup(id));
          await runThunk(fetchGroups());
-      } catch (e) {
-         // optional
       } finally {
          setConfirmDeleteId(null);
          setPicker({ open: false });
@@ -518,102 +466,90 @@ function GroupManager() {
       openPopup("studentDetails", { student });
    };
 
-   /* ====== culori pentru membrii din DETAILS (stabil cât timp lista nu se schimbă) ====== */
+   /* ====== culori pentru membrii din DETAILS ====== */
    const detailMembers =
       viewMode.mode === "details" && viewMode.group
          ? viewMode.group.members || []
          : [];
+
    const detailColorByKey = useMemo(() => {
       const m = new Map();
-
       detailMembers.forEach((s, idx) => {
          const key = String(s.id ?? s.phone ?? s.email ?? `__idx_${idx}`);
          const det = getAvatarColorFromName(s);
          m.set(key, det || getRandomAvatarColor());
       });
-
       return m;
    }, [detailMembers]);
 
    return (
-      <div className="groups instructorsgroup">
+      <div className="studentsGroupsUI">
          <div
-            className={`groups__header instructorsgroup__header ${search.open ? "open" : ""}`}
+            className={`studentsGroupsUI__header ${search.open ? "is-open" : ""}`}
          >
-            <h2>Grupe</h2>
+            <h2 className="studentsGroupsUI__title">Grupe</h2>
 
-            <div className="groups__right">
-               <div className="groups__search">
-                  <input
-                     type="text"
-                     placeholder="Caută grupă..."
-                     className="groups__input instructorsgroup__input"
-                     value={search.query}
-                     onChange={(e) =>
-                        setSearch({ ...search, query: e.target.value })
-                     }
-                  />
-                  <button
-                     onClick={() =>
-                        setSearch({ ...search, open: !search.open })
-                     }
-                  >
-                     <ReactSVG
-                        className={`groups__icon instructorsgroup__icon react-icon ${search.open ? "rotate45" : ""}`}
-                        src={search.open ? addIcon : searchIcon}
-                     />
-                  </button>
-               </div>
+            <div className="studentsGroupsUI__right">
+               <SearchToggle
+                  open={search.open}
+                  value={search.query}
+                  onValueChange={(val) =>
+                     setSearch((s) => ({ ...s, query: val }))
+                  }
+                  onToggle={() => setSearch((s) => ({ ...s, open: !s.open }))}
+                  placeholder="Caută grupă..."
+                  wrapperClassName="studentsGroupsUI__search"
+                  inputClassName="studentsGroupsUI__inputSearch"
+                  buttonClassName="studentsGroupsUI__iconBtn"
+                  iconClassName={`studentsGroupsUI__icon ${search.open ? "is-rotated" : ""}`}
+                  titleOpen="Închide căutarea"
+                  titleClosed="Caută"
+               />
 
-               <button
+               <IconButton
+                  className="studentsGroupsUI__iconBtn"
+                  icon="add"
+                  iconClassName="studentsGroupsUI__icon"
                   onClick={() =>
                      form.open && form.mode === "create"
                         ? cancelForm()
                         : openCreate()
                   }
-               >
-                  <ReactSVG
-                     className="groups__icon instructorsgroup__icon react-icon"
-                     src={addIcon}
-                  />
-               </button>
+                  title="Adaugă grupă"
+               />
             </div>
          </div>
 
-         <div className="groups__grid-wrapper instructorsgroup__grid-wrapper">
-            <div className="groups__grid instructorsgroup__grid">
+         <div className="studentsGroupsUI__gridWrap">
+            <div className="studentsGroupsUI__grid">
                {/* ===== CREATE ===== */}
                {form.open && form.mode === "create" && (
                   <>
                      {picker.open ? (
-                        <div className="groups__create">
-                           <ProfessorChooser
-                              inline
-                              professors={professors}
-                              excludeIds={[]}
-                              onClose={() => setPicker({ open: false })}
-                              onPick={(p) => {
-                                 patchFormValues({ professorId: String(p.id) });
-                                 setPicker({ open: false });
-                              }}
-                           />
-                        </div>
+                        <ProfessorChooser
+                           inline
+                           professors={professors}
+                           excludeIds={[]}
+                           onClose={() => setPicker({ open: false })}
+                           onPick={(p) => {
+                              patchFormValues({ professorId: String(p.id) });
+                              setPicker({ open: false });
+                           }}
+                        />
                      ) : (
-                        <div className="groups__create">
-                           <GroupForm
-                              mode="create"
-                              values={{
-                                 ...form.values,
-                                 professorLabel: professorLabel(
-                                    form.values.professorId,
-                                 ),
-                              }}
-                              setValues={(p) => patchFormValues(p)}
-                              onSubmit={submitCreate}
-                              onCancel={cancelForm}
-                              openPicker={() => setPicker({ open: true })}
-                           />
-                        </div>
+                        <GroupForm
+                           mode="create"
+                           values={{
+                              ...form.values,
+                              professorLabel: professorLabel(
+                                 form.values.professorId,
+                              ),
+                           }}
+                           setValues={(p) => patchFormValues(p)}
+                           onSubmit={submitCreate}
+                           onCancel={cancelForm}
+                           openPicker={() => setPicker({ open: true })}
+                        />
                      )}
                   </>
                )}
@@ -632,7 +568,7 @@ function GroupManager() {
                         return (
                            <div
                               key={group.id}
-                              className="instructorsgroup__item active"
+                              className="studentsGroupsUI__item is-active"
                            >
                               {picker.open ? (
                                  <ProfessorChooser
@@ -690,43 +626,59 @@ function GroupManager() {
                         : "—";
 
                      return (
-                        <div key={group.id} className="groups__item">
-                           <div className="groups__item-left">
-                              <div className="groups__item-left-top">
+                        <div key={group.id} className="studentsGroupsUI__item">
+                           <div className="studentsGroupsUI__itemLeft">
+                              <div className="studentsGroupsUI__itemTop">
                                  <h3>
-                                    {highlightText(group.name, search.query)}
+                                    {highlightText(
+                                       group.name,
+                                       search.query,
+                                       "studentsGroupsUI__highlight",
+                                    )}
                                  </h3>
                               </div>
 
-                              <div className="groups__item-left-bottom">
-                                 <span className="groups__item-key">
-                                    <ReactSVG src={keyIcon} />
+                              <div className="studentsGroupsUI__itemBottom">
+                                 <span className="studentsGroupsUI__itemKey">
+                                    <UIIcon
+                                       name="key"
+                                       className="studentsGroupsUI__keyIcon"
+                                    />
                                     {highlightText(
                                        group.token || "",
                                        search.query,
+                                       "studentsGroupsUI__highlight",
                                     )}
                                  </span>
                               </div>
 
-                              <div className="groups__item-left-bottom">
-                                 <span className="groups__item-instructor">
-                                    {highlightText(pLabel, search.query)}
+                              <div className="studentsGroupsUI__itemBottom">
+                                 <span className="studentsGroupsUI__itemProfessor">
+                                    {highlightText(
+                                       pLabel,
+                                       search.query,
+                                       "studentsGroupsUI__highlight",
+                                    )}
                                  </span>
                               </div>
 
-                              <p>{group.members.length} per</p>
+                              <p className="studentsGroupsUI__count">
+                                 {group.members.length} per
+                              </p>
                            </div>
 
-                           <div className="groups__item-right">
-                              <ReactSVG
-                                 className="groups__item-icon edit"
-                                 src={editIcon}
+                           <div className="studentsGroupsUI__itemRight">
+                              <IconButton
+                                 className="studentsGroupsUI__itemIcon"
+                                 icon="edit"
+                                 iconClassName="studentsGroupsUI__icon"
                                  onClick={() => openEdit(group)}
                                  title="Editează"
                               />
-                              <ReactSVG
-                                 className="groups__item-icon see"
-                                 src={eyeIcon}
+                              <IconButton
+                                 className="studentsGroupsUI__itemIcon"
+                                 icon="eye"
+                                 iconClassName="studentsGroupsUI__icon"
                                  onClick={() =>
                                     setViewMode({ mode: "details", group })
                                  }
@@ -737,11 +689,12 @@ function GroupManager() {
                      );
                   })}
 
-               {/* ===== DETALII GRUP (studenți cu avatar + culoare, fără email) ===== */}
+               {/* ===== DETALII GRUP ===== */}
                {viewMode.mode === "details" && viewMode.group && (
                   <>
                      <button
-                        className="groups__back-btn"
+                        type="button"
+                        className="studentsGroupsUI__backBtn"
                         onClick={() =>
                            setViewMode({ mode: "list", group: null })
                         }
@@ -762,54 +715,19 @@ function GroupManager() {
                               getRandomAvatarColor();
 
                            return (
-                              <div
+                              <StudentItem
                                  key={student.id ?? key}
-                                 className="students__item"
-                                 onClick={() => handleOpenStudentPopup(student)}
-                                 role="button"
-                                 tabIndex={0}
-                                 onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                       e.preventDefault();
-                                       handleOpenStudentPopup(student);
-                                    }
-                                 }}
-                              >
-                                 <div
-                                    className="students__avatar"
-                                    aria-hidden="true"
-                                    style={{
-                                       background: color,
-                                       color: "var(--black-p)",
-                                    }}
-                                 >
-                                    <span>{getInitials(student)}</span>
-                                 </div>
-
-                                 <div className="students__info">
-                                    <h3>
-                                       {student.firstName} {student.lastName}
-                                    </h3>
-                                    <p>{student.phone || "–"}</p>
-                                 </div>
-
-                                 <div
-                                    className="students__chev"
-                                    aria-hidden="true"
-                                 >
-                                    <ReactSVG
-                                       className="students__chev-icon"
-                                       src={arrowIcon}
-                                    />
-                                 </div>
-                              </div>
+                                 student={student}
+                                 color={color}
+                                 initials={getInitials(student)}
+                                 onOpen={handleOpenStudentPopup}
+                                 highlightQuery=""
+                                 secondaryText={student.phone || "–"}
+                              />
                            );
                         })
                      ) : (
-                        <p
-                           className="groups__empty"
-                           style={{ gridColumn: "1 / -1" }}
-                        >
+                        <p className="studentsGroupsUI__empty">
                            Nu sunt studenți în această grupă.
                         </p>
                      )}

@@ -1,0 +1,102 @@
+.studentItem {
+   cursor: pointer;
+   border-radius: 35px;
+   background: var(--black-p);
+   position: relative;
+   height: auto;
+   padding: 6px;
+   transition: all 0.25s ease;
+   display: flex;
+   align-items: center;
+   gap: 12px;
+   min-width: 0;
+
+   @media only screen and (max-width: $mobile) {
+      gap: 6px;
+   }
+
+   &:hover {
+      background: var(--black-t);
+   }
+
+   &:active {
+      transform: scale(0.98);
+   }
+
+   &__avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+
+      span {
+         font-weight: 600;
+         letter-spacing: 0.5px;
+         line-height: 1;
+         color: black;
+         user-select: none;
+      }
+   }
+
+   &__info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1 1 auto;
+   }
+
+   &__name {
+      color: var(--white-p);
+      margin: 0;
+      padding: 0;
+      font-weight: 500;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+   }
+
+   &__meta {
+      margin: 0;
+      color: var(--white-s);
+      font-weight: 400;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+   }
+
+   &__chevIcon {
+      width: 36px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+
+      @media only screen and (max-width: $mobile) {
+         display: none;
+      }
+
+      div {
+         display: grid;
+         place-items: center;
+      }
+
+      svg {
+         width: 16px;
+         height: 16px;
+         color: var(--white-s);
+         rotate: 180deg;
+      }
+   }
+
+   &__highlight {
+      font-style: normal;
+      background: var(--accent-l);
+      color: var(--accent-d);
+      border-radius: 4px;
+   }
+}

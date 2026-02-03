@@ -108,10 +108,7 @@ function SPExam() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
-
+       
          <main className="main">
             <section className="test page">
                <ExamPage />

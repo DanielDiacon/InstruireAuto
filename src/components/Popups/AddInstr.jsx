@@ -961,7 +961,7 @@ function AddInstr() {
                                              </div>
 
                                              {/* rând 3 */}
-                                             {/*<div className="instructors-popup__form-row">
+                                             <div className="instructors-popup__form-row">
                                                 <input
                                                    type="text"
                                                    className="instructors-popup__input"
@@ -975,7 +975,7 @@ function AddInstr() {
                                                    }
                                                    autoComplete="off"
                                                 />
-                                             </div>*/}
+                                             </div>
                                              {/* rând 4 */}
                                              <div className="instructors-popup__form-row">
                                                 <input

@@ -1,4 +1,3 @@
-// src/components/APanel/Calendar/DayOrderEditorModal.jsx
 import React, {
    useEffect,
    useMemo,
@@ -29,12 +28,16 @@ import { CSS } from "@dnd-kit/utilities";
 
 const isPadId = (id) => String(id || "").startsWith("__pad_");
 
-// ✅ local-only “gap/spacer” items
-const GAP_PREFIX = "__gap_";
-const isGapId = (id) => String(id || "").startsWith(GAP_PREFIX);
+// local-only “gap/spacer” items (DOAR UI)
+const GAP_PREFIX_L = "__gapL_";
+const GAP_PREFIX_R = "__gapR_";
+const isGapId = (id) => {
+   const s = String(id || "");
+   return s.startsWith(GAP_PREFIX_L) || s.startsWith(GAP_PREFIX_R);
+};
 
-const L = "L"; // left list (cu Buiucani)
-const R = "R"; // right list (fără Buiucani)
+const L = "L"; // left list (Marți/Joi/Duminică) cu Buiucani
+const R = "R"; // right list (restul zilelor) fără Buiucani
 const toDndId = (ctx, realId) => `${ctx}:${String(realId)}`;
 
 function parseDndId(id) {
@@ -42,47 +45,6 @@ function parseDndId(id) {
    const i = s.indexOf(":");
    if (i === -1) return { ctx: "", realId: s };
    return { ctx: s.slice(0, i), realId: s.slice(i + 1) };
-}
-
-/* ===== order token helpers: "12XXX" ===== */
-
-const MAX_GAPS_AFTER = 40;
-
-function parseOrderToken(v) {
-   const s = String(v ?? "").trim();
-   if (!s) return { pos: Number.POSITIVE_INFINITY, gapsAfter: 0, raw: s };
-
-   // "12XXX"
-   let m = s.match(/^(\d+)([xX]+)$/);
-   if (m) {
-      const pos = Math.max(1, parseInt(m[1], 10));
-      const gapsAfter = Math.max(0, Math.min(MAX_GAPS_AFTER, m[2].length));
-      return { pos, gapsAfter, raw: s };
-   }
-
-   // "12"
-   m = s.match(/^(\d+)$/);
-   if (m) {
-      const pos = Math.max(1, parseInt(m[1], 10));
-      return { pos, gapsAfter: 0, raw: s };
-   }
-
-   // fallback numeric-ish
-   const n = Number(s);
-   if (Number.isFinite(n) && n > 0) {
-      return { pos: Math.max(1, Math.round(n)), gapsAfter: 0, raw: s };
-   }
-
-   return { pos: Number.POSITIVE_INFINITY, gapsAfter: 0, raw: s };
-}
-
-function encodeOrderToken(pos, gapsAfter = 0) {
-   const p = Math.max(1, Math.trunc(Number(pos) || 1));
-   const g = Math.max(
-      0,
-      Math.min(MAX_GAPS_AFTER, Math.trunc(Number(gapsAfter) || 0)),
-   );
-   return g > 0 ? `${p}${"X".repeat(g)}` : String(p);
 }
 
 /* ===== car meta helpers ===== */
@@ -137,28 +99,13 @@ function safeName(inst) {
    return v || "—";
 }
 
-function normalizeOrder(v) {
-   const { pos } = parseOrderToken(v);
-   return Number.isFinite(pos) && pos > 0 ? pos : Number.POSITIVE_INFINITY;
-}
-
-function sortLikeCurrent(insts) {
-   return (insts || []).slice().sort((a, b) => {
-      const ao = normalizeOrder(a?.order);
-      const bo = normalizeOrder(b?.order);
-      if (ao !== bo) return ao - bo;
-
-      const an = safeName(a).toLowerCase();
-      const bn = safeName(b).toLowerCase();
-      if (an !== bn) return an < bn ? -1 : 1;
-
-      return String(a?.id || "").localeCompare(String(b?.id || ""));
-   });
-}
-
 function sectorKey(inst) {
    const raw = inst?.sector ?? inst?.groupSector ?? "";
    return String(raw || "").toLowerCase();
+}
+
+function isBuiucani(inst) {
+   return sectorKey(inst).includes("bui");
 }
 
 function sectorCanon(inst) {
@@ -177,14 +124,34 @@ function sectorClass(inst) {
    return "is-other";
 }
 
-function isBuiucani(inst) {
-   const s = sectorKey(inst);
-   return s.includes("bui");
+function parseDualOrder(v) {
+   const s = String(v ?? "").trim();
+   if (!s) return { a: Number.POSITIVE_INFINITY, b: Number.POSITIVE_INFINITY };
+
+   const parts = s.split(/x/i);
+   const left = (parts[0] ?? "").trim();
+   const right = (parts[1] ?? "").trim();
+
+   const parseSide = (t) => {
+      const m = String(t || "").match(/^(\d+)/);
+      if (!m) return Number.POSITIVE_INFINITY;
+      const n = parseInt(m[1], 10);
+      return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+   };
+
+   let a = parseSide(left);
+   let b = parseSide(right);
+
+   // compatibilitate: "6" sau "6X" => b=a ; "X7" => a=b
+   if (!Number.isFinite(a) && Number.isFinite(b)) a = b;
+   if (Number.isFinite(a) && !Number.isFinite(b)) b = a;
+
+   return { a, b };
 }
 
-/* ===================== Sortable item (editor pane) ===================== */
+/* ===================== Sortable item ===================== */
 
-function SortableCard({ dndId, inst, carMeta }) {
+function SortableCard({ dndId, inst, carMeta, preview = false }) {
    const {
       attributes,
       listeners,
@@ -206,54 +173,12 @@ function SortableCard({ dndId, inst, carMeta }) {
       <div
          ref={setNodeRef}
          className={
-            "dv-order-card" + (isDragging ? " is-dragging" : "") + " " + secCls
+            "dv-order-card" +
+            (preview ? " is-preview" : "") +
+            (isDragging ? " is-dragging" : "") +
+            " " +
+            secCls
          }
-         style={style}
-         {...attributes}
-         {...listeners}
-      >
-         <div className="dv-order-card__top">
-            <div className="dv-order-card__handle" aria-hidden="true">
-               ⋮⋮
-            </div>
-            <div className="dv-order-card__title">
-               <div className="dv-order-card__name">{safeName(inst)}</div>
-               <div className="dv-order-card__sub">
-                  {carMeta ? (
-                     <span className="dv-order-card__car" title={carMeta}>
-                        {carMeta}
-                     </span>
-                  ) : null}
-               </div>
-            </div>
-         </div>
-      </div>
-   );
-}
-
-/* ✅ Sortable Preview card (right side) */
-function SortablePreviewCard({ dndId, inst, carMeta }) {
-   const {
-      attributes,
-      listeners,
-      setNodeRef,
-      transform,
-      transition,
-      isDragging,
-   } = useSortable({ id: dndId });
-
-   const secCls = sectorClass(inst);
-
-   const style = {
-      transform: CSS.Transform.toString(transform),
-      transition,
-      opacity: isDragging ? 0.25 : 1,
-   };
-
-   return (
-      <div
-         ref={setNodeRef}
-         className={"dv-order-card is-preview " + secCls}
          style={style}
          {...attributes}
          {...listeners}
@@ -361,7 +286,7 @@ function AddGapCard({ onAdd }) {
                <div className="dv-order-card__name">Adaugă spațiu</div>
                <div className="dv-order-card__sub">
                   <span className="dv-order-card__car" style={{ opacity: 0.7 }}>
-                     pentru “salturi” în ordine
+                     (nu se salvează ca obiect)
                   </span>
                </div>
             </div>
@@ -370,7 +295,30 @@ function AddGapCard({ onAdd }) {
    );
 }
 
-function OverlayCard({ inst, carMeta }) {
+function OverlayCard({ inst, carMeta, isGap }) {
+   if (isGap) {
+      return (
+         <div className="dv-order-card dv-order-card--overlay dv-order-card--gap">
+            <div className="dv-order-card__top">
+               <div className="dv-order-card__handle" aria-hidden="true">
+                  ⋮⋮
+               </div>
+               <div className="dv-order-card__title">
+                  <div className="dv-order-card__name">Spațiu</div>
+                  <div className="dv-order-card__sub">
+                     <span
+                        className="dv-order-card__car"
+                        style={{ opacity: 0.7 }}
+                     >
+                        element gol
+                     </span>
+                  </div>
+               </div>
+            </div>
+         </div>
+      );
+   }
+
    if (!inst) return null;
    const secCls = sectorClass(inst);
 
@@ -396,26 +344,6 @@ function OverlayCard({ inst, carMeta }) {
    );
 }
 
-function OverlayGap() {
-   return (
-      <div className="dv-order-card dv-order-card--overlay dv-order-card--gap">
-         <div className="dv-order-card__top">
-            <div className="dv-order-card__handle" aria-hidden="true">
-               ⋮⋮
-            </div>
-            <div className="dv-order-card__title">
-               <div className="dv-order-card__name">Spațiu</div>
-               <div className="dv-order-card__sub">
-                  <span className="dv-order-card__car" style={{ opacity: 0.7 }}>
-                     element gol
-                  </span>
-               </div>
-            </div>
-         </div>
-      </div>
-   );
-}
-
 /* ===================== component ===================== */
 
 export default function DayOrderEditorModal({
@@ -429,21 +357,8 @@ export default function DayOrderEditorModal({
 }) {
    const realInstructors = useMemo(() => {
       const list = Array.isArray(instructors) ? instructors : [];
-      return sortLikeCurrent(list.filter((x) => x && !isPadId(x.id)));
+      return list.filter((x) => x && !isPadId(x.id));
    }, [instructors]);
-
-   const [items, setItems] = useState(() => []);
-   const [activeDndId, setActiveDndId] = useState(null);
-
-   const didInitRef = useRef(false);
-
-   // ✅ gap id generator (local only)
-   const gapSeqRef = useRef(1);
-   const makeGapId = useCallback(() => {
-      const id = `${GAP_PREFIX}${gapSeqRef.current}`;
-      gapSeqRef.current += 1;
-      return id;
-   }, []);
 
    const byId = useMemo(() => {
       const m = new Map();
@@ -456,17 +371,14 @@ export default function DayOrderEditorModal({
 
    const carMetaByInstructorId = useMemo(() => {
       const m = new Map();
-
       (cars || []).forEach((car) => {
          const iid = String(
             car?.instructorId ?? car?.instructor_id ?? "",
          ).trim();
          if (!iid) return;
-
          const meta = buildCarMeta(car);
          if (meta) m.set(iid, meta);
       });
-
       return m;
    }, [cars]);
 
@@ -479,134 +391,121 @@ export default function DayOrderEditorModal({
       [carMetaByInstructorId],
    );
 
-   /**
-    * ✅ Inițializare:
-    * - construim slots după pos (din token "posXXX")
-    * - apoi EXPAND: după fiecare instructor adăugăm gapsAfter gap-uri (local)
-    */
-   const buildInitialItems = useCallback(() => {
-      const list = Array.isArray(realInstructors) ? realInstructors : [];
+   // ✅ gap generators (independent)
+   const gapSeqL = useRef(1);
+   const gapSeqR = useRef(1);
 
-      // meta map: id -> {pos,gapsAfter}
-      const metaById = new Map();
-      for (const inst of list) {
-         const id = String(inst?.id || "").trim();
-         if (!id) continue;
-         metaById.set(id, parseOrderToken(inst?.order));
+   const makeGapId = useCallback((ctx) => {
+      if (ctx === L) {
+         const id = `${GAP_PREFIX_L}${gapSeqL.current}`;
+         gapSeqL.current += 1;
+         return id;
       }
+      const id = `${GAP_PREFIX_R}${gapSeqR.current}`;
+      gapSeqR.current += 1;
+      return id;
+   }, []);
 
-      const rows = list
-         .map((x) => ({
-            id: String(x?.id || "").trim(),
-            order: normalizeOrder(x?.order), // doar pos
-            name: safeName(x).toLowerCase(),
-         }))
-         .filter((x) => x.id);
+   const [itemsA, setItemsA] = useState([]);
+   const [itemsB, setItemsB] = useState([]);
+   const [activeDndId, setActiveDndId] = useState(null);
 
-      const finite = rows
-         .filter(
-            (x) =>
-               Number.isFinite(x.order) && x.order !== Number.POSITIVE_INFINITY,
-         )
-         .map((x) => ({ ...x, order: Math.max(1, Math.trunc(x.order)) }))
-         .sort((a, b) => {
-            if (a.order !== b.order) return a.order - b.order;
-            if (a.name !== b.name) return a.name < b.name ? -1 : 1;
-            return String(a.id).localeCompare(String(b.id));
-         });
+   const didInitRef = useRef(false);
 
-      if (!finite.length) {
-         // fallback: în ordinea curentă sortLikeCurrent + expand
-         const base = rows.map((x) => x.id);
-         const expanded = [];
-         for (const id of base) {
-            expanded.push(id);
-            const meta = metaById.get(String(id));
-            const g = meta?.gapsAfter || 0;
-            for (let k = 0; k < g; k += 1) expanded.push(makeGapId());
-         }
-         return expanded;
-      }
+   const buildList = useCallback(
+      (ctx) => {
+         const listAll = Array.isArray(realInstructors) ? realInstructors : [];
 
-      const rawMax = Math.max(...finite.map((x) => x.order));
-      const MAX_MATERIALIZED = 160;
-      const maxOrder = Math.min(rawMax, MAX_MATERIALIZED);
+         const list =
+            ctx === R ? listAll.filter((inst) => !isBuiucani(inst)) : listAll;
 
-      const slots = Array.from({ length: maxOrder }, () => makeGapId());
+         const rows = list
+            .map((inst) => {
+               const id = String(inst?.id || "").trim();
+               if (!id) return null;
+               const { a, b } = parseDualOrder(inst?.order);
+               const ord = ctx === R ? b : a;
+               return {
+                  id,
+                  ord,
+                  name: safeName(inst).toLowerCase(),
+               };
+            })
+            .filter(Boolean);
 
-      const placed = new Set();
-      const overflow = [];
+         const finite = rows
+            .filter((x) => Number.isFinite(x.ord))
+            .map((x) => ({ ...x, ord: Math.max(1, Math.trunc(x.ord)) }))
+            .sort((a, b) => {
+               if (a.ord !== b.ord) return a.ord - b.ord;
+               if (a.name !== b.name) return a.name < b.name ? -1 : 1;
+               return String(a.id).localeCompare(String(b.id));
+            });
 
-      for (const r of finite) {
-         if (placed.has(r.id)) {
-            overflow.push(r.id);
-            continue;
+         if (!finite.length) {
+            return rows.map((x) => x.id);
          }
 
-         const idx = r.order - 1;
-         if (idx < 0 || idx >= slots.length) {
-            overflow.push(r.id);
-            continue;
+         const rawMax = Math.max(...finite.map((x) => x.ord));
+         const MAX_MATERIALIZED = 160;
+         const maxOrd = Math.min(rawMax, MAX_MATERIALIZED);
+
+         const slots = Array.from({ length: maxOrd }, () => makeGapId(ctx));
+
+         const placed = new Set();
+         const overflow = [];
+
+         for (const r of finite) {
+            if (placed.has(r.id)) {
+               overflow.push(r.id);
+               continue;
+            }
+            const idx = r.ord - 1;
+            if (idx < 0 || idx >= slots.length) {
+               overflow.push(r.id);
+               continue;
+            }
+            if (!isGapId(slots[idx])) {
+               overflow.push(r.id);
+               continue;
+            }
+            slots[idx] = r.id;
+            placed.add(r.id);
          }
 
-         if (!isGapId(slots[idx])) {
-            overflow.push(r.id);
-            continue;
-         }
+         const remaining = rows
+            .map((x) => x.id)
+            .filter((id) => !placed.has(id) && !overflow.includes(id));
 
-         slots[idx] = r.id;
-         placed.add(r.id);
-      }
-
-      const remaining = rows
-         .map((x) => x.id)
-         .filter((id) => !placed.has(id) && !overflow.includes(id));
-
-      const resultIds = [...slots, ...overflow, ...remaining];
-
-      // ✅ EXPAND după token gapsAfter: "1XXX"
-      const expanded = [];
-      for (const id of resultIds) {
-         expanded.push(id);
-
-         if (isGapId(id)) continue;
-
-         const meta = metaById.get(String(id));
-         const g = meta?.gapsAfter || 0;
-         for (let k = 0; k < g; k += 1) expanded.push(makeGapId());
-      }
-
-      return expanded;
-   }, [realInstructors, makeGapId]);
+         return [...slots, ...overflow, ...remaining];
+      },
+      [realInstructors, makeGapId],
+   );
 
    useEffect(() => {
       if (!open) {
          didInitRef.current = false;
          setActiveDndId(null);
-         gapSeqRef.current = 1;
+         setItemsA([]);
+         setItemsB([]);
+         gapSeqL.current = 1;
+         gapSeqR.current = 1;
          return;
       }
       if (didInitRef.current) return;
 
       didInitRef.current = true;
-      setItems(buildInitialItems());
-   }, [open, buildInitialItems]);
+      setItemsA(buildList(L));
+      setItemsB(buildList(R));
+   }, [open, buildList]);
 
-   // ✅ right list ids (fără Buiucani) derivată din items
-   const noBuiIds = useMemo(() => {
-      return (items || []).filter((id) => {
-         if (isGapId(id)) return true;
-         const inst = byId.get(String(id));
-         if (!inst) return true;
-         return !isBuiucani(inst);
-      });
-   }, [items, byId]);
-
-   // ✅ DnD ids (unique) per list
-   const leftDndIds = useMemo(() => items.map((id) => toDndId(L, id)), [items]);
+   const leftDndIds = useMemo(
+      () => (itemsA || []).map((id) => toDndId(L, id)),
+      [itemsA],
+   );
    const rightDndIds = useMemo(
-      () => noBuiIds.map((id) => toDndId(R, id)),
-      [noBuiIds],
+      () => (itemsB || []).map((id) => toDndId(R, id)),
+      [itemsB],
    );
 
    const sensors = useSensors(
@@ -623,144 +522,117 @@ export default function DayOrderEditorModal({
 
    const handleDragCancel = useCallback(() => setActiveDndId(null), []);
 
-   const handleDragEnd = useCallback(
-      (event) => {
-         const aRaw =
-            event?.active?.id != null ? String(event.active.id) : null;
-         const oRaw = event?.over?.id != null ? String(event.over.id) : null;
+   const handleDragEnd = useCallback((event) => {
+      const aRaw = event?.active?.id != null ? String(event.active.id) : null;
+      const oRaw = event?.over?.id != null ? String(event.over.id) : null;
 
-         setActiveDndId(null);
+      setActiveDndId(null);
+      if (!aRaw || !oRaw || aRaw === oRaw) return;
 
-         if (!aRaw || !oRaw || aRaw === oRaw) return;
+      const a = parseDndId(aRaw);
+      const o = parseDndId(oRaw);
+      if (!a.ctx || a.ctx !== o.ctx) return;
 
-         const a = parseDndId(aRaw);
-         const o = parseDndId(oRaw);
+      if (a.ctx === L) {
+         setItemsA((prev) => {
+            const prevDnd = prev.map((id) => toDndId(L, id));
+            const oldIndex = prevDnd.indexOf(aRaw);
+            const newIndex = prevDnd.indexOf(oRaw);
+            if (oldIndex === -1 || newIndex === -1) return prev;
+            const nextDnd = arrayMove(prevDnd, oldIndex, newIndex);
+            return nextDnd.map((x) => parseDndId(x).realId);
+         });
+         return;
+      }
 
-         // nu permitem mutare între liste (stânga <-> dreapta)
-         if (!a.ctx || a.ctx !== o.ctx) return;
+      if (a.ctx === R) {
+         setItemsB((prev) => {
+            const prevDnd = prev.map((id) => toDndId(R, id));
+            const oldIndex = prevDnd.indexOf(aRaw);
+            const newIndex = prevDnd.indexOf(oRaw);
+            if (oldIndex === -1 || newIndex === -1) return prev;
+            const nextDnd = arrayMove(prevDnd, oldIndex, newIndex);
+            return nextDnd.map((x) => parseDndId(x).realId);
+         });
+      }
+   }, []);
 
-         // ===== LEFT: reorder direct pe items (toți, inclusiv Bui + gaps)
-         if (a.ctx === L) {
-            setItems((prev) => {
-               const prevDnd = prev.map((id) => toDndId(L, id));
-               const oldIndex = prevDnd.indexOf(aRaw);
-               const newIndex = prevDnd.indexOf(oRaw);
-               if (oldIndex === -1 || newIndex === -1) return prev;
-
-               const nextDnd = arrayMove(prevDnd, oldIndex, newIndex);
-               return nextDnd.map((x) => parseDndId(x).realId);
-            });
-            return;
-         }
-
-         // ===== RIGHT: reorder DOAR subsetul "fără Buiucani" în items (gaps incluse)
-         if (a.ctx === R) {
-            setItems((prev) => {
-               const prevNoBui = prev.filter((id) => {
-                  if (isGapId(id)) return true;
-                  const inst = byId.get(String(id));
-                  if (!inst) return true;
-                  return !isBuiucani(inst);
-               });
-
-               const prevNoBuiDnd = prevNoBui.map((id) => toDndId(R, id));
-               const oldIndex = prevNoBuiDnd.indexOf(aRaw);
-               const newIndex = prevNoBuiDnd.indexOf(oRaw);
-               if (oldIndex === -1 || newIndex === -1) return prev;
-
-               const nextNoBuiDnd = arrayMove(prevNoBuiDnd, oldIndex, newIndex);
-               const nextNoBui = nextNoBuiDnd.map((x) => parseDndId(x).realId);
-
-               // reconstruim items: păstrăm Buiucani pe pozițiile lor,
-               // înlocuim în ordine doar non-Buiucani (gaps incluse)
-               let p = 0;
-               return prev.map((id) => {
-                  if (isGapId(id)) return nextNoBui[p++] ?? id;
-
-                  const inst = byId.get(String(id));
-                  if (inst && isBuiucani(inst)) return id;
-
-                  const repl = nextNoBui[p++];
-                  return repl ?? id;
-               });
-            });
-         }
-      },
-      [byId],
+   const addGapA = useCallback(
+      () => setItemsA((p) => [...p, makeGapId(L)]),
+      [makeGapId],
+   );
+   const addGapB = useCallback(
+      () => setItemsB((p) => [...p, makeGapId(R)]),
+      [makeGapId],
    );
 
-   const addGap = useCallback(() => {
-      setItems((prev) => [...prev, makeGapId()]);
-   }, [makeGapId]);
-
-   const removeGap = useCallback((gapId) => {
+   const removeGapA = useCallback((gapId) => {
       const gid = String(gapId || "");
-      if (!isGapId(gid)) return;
-      setItems((prev) => prev.filter((x) => x !== gid));
+      if (!gid.startsWith(GAP_PREFIX_L)) return;
+      setItemsA((p) => p.filter((x) => x !== gid));
+   }, []);
+
+   const removeGapB = useCallback((gapId) => {
+      const gid = String(gapId || "");
+      if (!gid.startsWith(GAP_PREFIX_R)) return;
+      setItemsB((p) => p.filter((x) => x !== gid));
    }, []);
 
    const handleSave = useCallback(() => {
-      const overrides = new Map(); // id -> forcedPos
-
-      // 1) Bui trage vecinul imediat din dreapta dacă:
-      //    - next NU e gap
-      //    - next NU e Bui
-      for (let i = 0; i < (items || []).length; i += 1) {
-         const curId = String(items?.[i] ?? "");
-         if (!curId || isGapId(curId)) continue;
-
-         const curInst = byId.get(curId);
-         if (!curInst || !isBuiucani(curInst)) continue;
-
-         const nextId = String(items?.[i + 1] ?? "");
-         if (!nextId || isGapId(nextId)) continue;
-
-         const nextInst = byId.get(nextId);
-         if (!nextInst) continue;
-
-         if (!isBuiucani(nextInst)) {
-            overrides.set(nextId, i + 1); // aceeași poziție ca Bui (index vizual)
-         }
-      }
-
-      // 2) numărăm gap-urile consecutive DUPĂ fiecare instructor (pentru XXX)
-      const gapsAfter = new Map(); // id -> count
-      for (let i = 0; i < (items || []).length; i += 1) {
-         const id = String(items?.[i] ?? "");
-         if (!id || isGapId(id)) continue;
-
-         let c = 0;
-         for (let j = i + 1; j < items.length; j += 1) {
-            const nid = String(items[j] ?? "");
-            if (isGapId(nid)) c += 1;
-            else break;
-         }
-         gapsAfter.set(id, c);
-      }
-
-      // 3) changes: order devine STRING "posXXX"
       const changes = [];
 
-      (items || []).forEach((id, idx) => {
-         const realId = String(id || "");
-         if (!realId || isGapId(realId)) return;
-
-         const inst = byId.get(realId);
-         if (!inst) return;
-
-         const basePos = idx + 1; // poziție vizuală (include gaps)
-         const pos = overrides.get(realId) ?? basePos;
-
-         const g = gapsAfter.get(realId) || 0;
-         const order = encodeOrderToken(pos, g);
-
-         changes.push({ id: realId, order });
+      // map id -> old a/b
+      const oldPairById = new Map();
+      realInstructors.forEach((inst) => {
+         const id = String(inst?.id || "").trim();
+         if (!id) return;
+         oldPairById.set(id, parseDualOrder(inst?.order));
       });
 
+      const idxA = new Map();
+      (itemsA || []).forEach((id, i) => idxA.set(String(id), i));
+
+      const idxB = new Map();
+      (itemsB || []).forEach((id, i) => idxB.set(String(id), i));
+
+      for (const inst of realInstructors) {
+         const id = String(inst?.id || "").trim();
+         if (!id) continue;
+
+         const old = oldPairById.get(id) || {
+            a: Number.POSITIVE_INFINITY,
+            b: Number.POSITIVE_INFINITY,
+         };
+
+         const posA0 = idxA.has(id) ? idxA.get(id) + 1 : old.a;
+         let posB0 = idxB.has(id) ? idxB.get(id) + 1 : old.b;
+
+         // dacă nu există în B (de ex. Buiucani) => păstrăm old.b, iar dacă nu există -> posA
+         if (!Number.isFinite(posB0)) posB0 = posA0;
+
+         const orderA = Number.isFinite(posA0)
+            ? Math.max(1, Math.trunc(posA0))
+            : 1;
+         const orderB = Number.isFinite(posB0)
+            ? Math.max(1, Math.trunc(posB0))
+            : orderA;
+
+         const oldA = Number.isFinite(old.a)
+            ? Math.max(1, Math.trunc(old.a))
+            : orderA;
+         const oldB = Number.isFinite(old.b)
+            ? Math.max(1, Math.trunc(old.b))
+            : oldA;
+
+         if (oldA === orderA && oldB === orderB) continue;
+
+         changes.push({ id, orderA, orderB });
+      }
+
       // eslint-disable-next-line no-console
-      console.log("[OrderEditor] SAVE tokenized", {
-         items: [...(items || [])],
-         overrides: Object.fromEntries(overrides.entries()),
+      console.log("[OrderEditor] SAVE dual order", {
+         itemsA: [...(itemsA || [])],
+         itemsB: [...(itemsB || [])],
          changes,
       });
 
@@ -769,7 +641,7 @@ export default function DayOrderEditorModal({
       } catch (e) {
          console.warn("DayOrderEditorModal onSave error:", e);
       }
-   }, [items, onSave, byId]);
+   }, [itemsA, itemsB, onSave, realInstructors]);
 
    if (!open) return null;
 
@@ -823,7 +695,7 @@ export default function DayOrderEditorModal({
                onDragCancel={handleDragCancel}
             >
                <div className="dv-order-day-wrapper">
-                  {/* ===================== LEFT ===================== */}
+                  {/* ===================== LEFT (A) ===================== */}
                   <div className="dv-order-day">
                      <div className="dv-order-day__head">
                         <div className="dv-order-day__title">
@@ -840,13 +712,13 @@ export default function DayOrderEditorModal({
                            strategy={rectSortingStrategy}
                         >
                            <div className="dv-order-grid dv-order-grid--3">
-                              {items.map((realId) => {
+                              {(itemsA || []).map((realId) => {
                                  if (isGapId(realId)) {
                                     return (
                                        <SortableGapCard
                                           key={toDndId(L, realId)}
                                           dndId={toDndId(L, realId)}
-                                          onRemove={() => removeGap(realId)}
+                                          onRemove={() => removeGapA(realId)}
                                        />
                                     );
                                  }
@@ -864,13 +736,13 @@ export default function DayOrderEditorModal({
                                  );
                               })}
 
-                              <AddGapCard onAdd={addGap} />
+                              <AddGapCard onAdd={addGapA} />
                            </div>
                         </SortableContext>
                      </div>
                   </div>
 
-                  {/* ===================== RIGHT ===================== */}
+                  {/* ===================== RIGHT (B) ===================== */}
                   <div className="dv-order-day">
                      <div className="dv-order-day__head">
                         <div className="dv-order-day__title">
@@ -887,14 +759,14 @@ export default function DayOrderEditorModal({
                            strategy={rectSortingStrategy}
                         >
                            <div className="dv-order-grid dv-order-grid--3 is-preview">
-                              {noBuiIds.map((realId) => {
+                              {(itemsB || []).map((realId) => {
                                  if (isGapId(realId)) {
                                     return (
                                        <SortableGapCard
                                           key={toDndId(R, realId)}
                                           dndId={toDndId(R, realId)}
                                           preview
-                                          onRemove={() => removeGap(realId)}
+                                          onRemove={() => removeGapB(realId)}
                                        />
                                     );
                                  }
@@ -903,14 +775,17 @@ export default function DayOrderEditorModal({
                                  if (!inst) return null;
 
                                  return (
-                                    <SortablePreviewCard
+                                    <SortableCard
                                        key={toDndId(R, realId)}
                                        dndId={toDndId(R, realId)}
                                        inst={inst}
                                        carMeta={getCarMetaForInst(inst)}
+                                       preview
                                     />
                                  );
                               })}
+
+                              <AddGapCard onAdd={addGapB} />
                            </div>
                         </SortableContext>
                      </div>
@@ -920,11 +795,11 @@ export default function DayOrderEditorModal({
                <DragOverlay
                   dropAnimation={{ duration: 160, easing: "ease-out" }}
                >
-                  {overlayIsGap ? (
-                     <OverlayGap />
-                  ) : overlayInst ? (
-                     <OverlayCard inst={overlayInst} carMeta={overlayCarMeta} />
-                  ) : null}
+                  <OverlayCard
+                     inst={overlayInst}
+                     carMeta={overlayCarMeta}
+                     isGap={overlayIsGap}
+                  />
                </DragOverlay>
             </DndContext>
          </div>

@@ -26,9 +26,7 @@ function IPInstrGroups() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
+       
 
          <main className="main ">
             <section className="page-wrapper">

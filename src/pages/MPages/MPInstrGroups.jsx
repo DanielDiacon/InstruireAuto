@@ -39,10 +39,7 @@ function MPInstrGroups() {
 
    return (
       <>
-         <Header links={links}>
-            <SubPopup />
-            <Popup />
-         </Header>
+     
          <main className="main">
             <section className="page-wrapper">
                <InstructorsGroupManager />

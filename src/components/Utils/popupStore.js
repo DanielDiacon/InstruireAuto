@@ -41,7 +41,7 @@ export function closeSubPopup() {
    // doar cere închidere (NU pop încă)
    const depth = __subStack.length;
    __subListeners.forEach((cb) =>
-      cb({ detail: null, depth, action: "request-close" })
+      cb({ detail: null, depth, action: "request-close" }),
    );
 }
 

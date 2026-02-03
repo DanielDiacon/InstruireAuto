@@ -32,7 +32,7 @@ import { fetchInstructors } from "../store/instructorsSlice";
 import StudentsManager from "../components/APanel/StudentsManager";
 import GroupManager from "../components/APanel/GroupManager";
 import InstructorManager from "../components/APanel/InstructorManager";
-import ClockDisplay from "../components/UI/ClockDisplay";
+import ClockDisplay from "../components/Common/ClockDisplay";
 import ReservationHistory from "../components/APanel/ReservationHistory";
 
 import { UserContext } from "../UserContext";
@@ -56,8 +56,8 @@ function MPanel() {
          text: "Ins. Grupe",
          icon: instrGroupsIcon,
       },
-      { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
       { link: "/manager/history", text: "Istoric", icon: clockIcon },
+      { popup: "questionCategories", text: "Categorii", icon: categoriiIcon },
       //{ popup: "profile", text: "Profil", icon: accIcon },
    ];
 
@@ -113,21 +113,12 @@ function MPanel() {
       fetchData();
    }, [user, dispatch]);
 
-  
-
- 
-
-  
-   
    return (
       <>
-         <Header links={links}>
-            <SubPopup />
-            <Popup />
-         </Header>
+       
          <PreloadAppData />
          <main className="main">
-            <section className="home__admin">
+            <section className="home-admin">
                <StudentsManager />
                <GroupManager />
             </section>

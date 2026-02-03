@@ -1,39 +1,47 @@
 // src/components/Popups/StudentInfoPopup.jsx
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+
 import { fetchUserReservations } from "../../store/reservationsSlice";
 import { updateStudent, removeStudent } from "../../store/studentsSlice";
-import { fetchUsers } from "../../store/usersSlice";
-import { updateUser } from "../../api/usersService";
+
+import { getInstructors } from "../../api/instructorsService";
+
 import {
    getExamHistoryForStudentIdAll,
-   getExamHistoryForUser,
    downloadExamPdf,
 } from "../../api/examService";
 
 import { ReactSVG } from "react-svg";
-import phoneIcon from "../../assets/svg/phone.svg";
 import successIcon from "../../assets/svg/success.svg";
 import cancelIcon from "../../assets/svg/cancel.svg";
 import clockIcon from "../../assets/svg/clock.svg";
-import emailIcon from "../../assets/svg/email.svg";
 import downloadIcon from "../../assets/svg/download.svg";
+
+// ✅ same UI icons as PPStudentStatistics
+import closeIcon from "../../assets/svg/material-symbols--close-rounded.svg";
+import checkIcon from "../../assets/svg/material-symbols--check-rounded.svg";
+
+import UIIcon from "../Common/UIIcon";
+import IconButton from "../Common/IconButton";
+import ConfirmDeleteButton from "../Common/ConfirmDeleteButton";
 
 import {
    closePopup as closePopupStore,
    openSubPopup,
 } from "../Utils/popupStore";
 
-const normEmail = (s) =>
-   String(s || "")
-      .trim()
-      .toLowerCase();
+/* ===================== small helpers ===================== */
 
-// === Format ISO -> "DD MM YYYY - HH:MM" fără schimbare de oră ===
+const clampInt = (n, min = 0) => {
+   const x = Number(n);
+   if (!Number.isFinite(x)) return min;
+   return Math.max(min, Math.trunc(x));
+};
+
+// ISO -> "DD MM YYYY - HH:MM" (fără timezone shift)
 function fmtIsoDDMMYYYY_HHMM(val) {
    if (val == null) return "—";
-
-   // Dacă e string ISO: extragem direct componentele (fără a crea Date)
    if (typeof val === "string") {
       const m = val.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
       if (m) {
@@ -42,20 +50,14 @@ function fmtIsoDDMMYYYY_HHMM(val) {
       }
       return String(val);
    }
-
-   // Dacă e Date/număr: folosim *UTC* ca să nu deplasăm ora din ISO-ul inițial
    const d = val instanceof Date ? val : new Date(val);
    if (isNaN(d)) return "—";
    const pad = (n) => String(n).padStart(2, "0");
-   const Y = d.getUTCFullYear();
-   const M = pad(d.getUTCMonth() + 1);
-   const D = pad(d.getUTCDate());
-   const h = pad(d.getUTCHours());
-   const min = pad(d.getUTCMinutes());
-   return `${D} ${M} ${Y} - ${h}:${min}`;
+   return `${pad(d.getUTCDate())} ${pad(d.getUTCMonth() + 1)} ${d.getUTCFullYear()} - ${pad(
+      d.getUTCHours(),
+   )}:${pad(d.getUTCMinutes())}`;
 }
 
-/** Obține în siguranță un timestamp numeric pentru începutul programării (pentru sortare). */
 function getReservationStartMs(r) {
    const v =
       r?.startTime ??
@@ -64,115 +66,408 @@ function getReservationStartMs(r) {
       r?.startISO ??
       r?.startDate ??
       null;
-
    if (v == null) return 0;
-
    if (typeof v === "string") {
-      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
-      if (m) {
-         const Y = Number(m[1]);
-         const M = Number(m[2]) - 1;
-         const D = Number(m[3]);
-         const h = Number(m[4]);
-         const min = Number(m[5]);
-         return Date.UTC(Y, M, D, h, min, 0, 0);
-      }
       const p = Date.parse(v);
       return Number.isNaN(p) ? 0 : p;
    }
-
    const d = v instanceof Date ? v : new Date(v);
    const ms = d.getTime();
    return Number.isNaN(ms) ? 0 : ms;
 }
 
-/**
- * Determină dacă o rezervare trebuie tratată ca "Anulare" (isCancelled).
- * - Prioritar: flag-uri boolean isCancelled / is_cancelled / isCanceled / is_canceled
- * - Fallback: status === cancelled/canceled doar dacă flag-ul nu există în payload
- */
 function isReservationCancelled(r) {
-   if (!r) return false;
-
-   const hasFlag =
-      r.isCancelled !== undefined ||
-      r.is_cancelled !== undefined ||
-      r.isCanceled !== undefined ||
-      r.is_canceled !== undefined;
-
    const flag =
       r?.isCancelled ??
       r?.is_cancelled ??
       r?.isCanceled ??
       r?.is_canceled ??
       null;
-
-   if (hasFlag) return Boolean(flag);
-
+   if (flag !== null) return Boolean(flag);
    const st = String(r?.status || "").toLowerCase();
    return st === "cancelled" || st === "canceled";
 }
 
-const clampInt = (n, min = 0, max = Number.POSITIVE_INFINITY) => {
-   const x = Number(n);
-   if (!Number.isFinite(x)) return min;
-   return Math.max(min, Math.min(max, Math.trunc(x)));
-};
+function getReservationStudentId(r) {
+   return r?.studentId ?? r?.student_id ?? r?.student?.id ?? r?.userId ?? null;
+}
 
-const parseAbsences = (v) => {
+// ✅ extras helpers (copiate logic din PP)
+const normExtras = (src) => ({
+   medical_documents: Boolean(src?.medical_documents),
+   individual_work: Boolean(src?.individual_work),
+   number_of_absences: clampInt(src?.number_of_absences ?? 0, 0),
+});
+
+/* ===== Student avatar helpers (same logic ca în StudentItem / StudentProfileUI) ===== */
+
+const firstLetter = (v) =>
+   String(v || "")
+      .trim()
+      .charAt(0) || "";
+
+function getInitials(student) {
+   const fn = String(student?.firstName || "").trim();
+   const ln = String(student?.lastName || "").trim();
+
+   const a = firstLetter(fn);
+   const b = firstLetter(ln);
+   if (a && b) return (a + b).toUpperCase();
+
+   const two = fn.slice(0, 2);
+   if (two) return two.toUpperCase();
+
+   return "–";
+}
+
+function hashStringToUInt(str) {
+   let h = 0;
+   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+   return h >>> 0;
+}
+
+const AVATAR_HUES = [
+   { h: 70, s: 75 },
+   { h: 0, s: 100 },
+   { h: 30, s: 100 },
+   { h: 54, s: 95 },
+   { h: 130, s: 65 },
+   { h: 210, s: 90 },
+   { h: 255, s: 98 },
+   { h: 285, s: 100 },
+   { h: 330, s: 96 },
+];
+
+const AVATAR_LIGHTNESSES = [94, 92, 90, 88, 86, 84, 82, 80, 78, 76, 74];
+
+const AVATAR_COLORS = AVATAR_HUES.flatMap(({ h, s }) =>
+   AVATAR_LIGHTNESSES.map((l) => `hsl(${h} ${s}% ${l}%)`),
+);
+
+function getAvatarColorFromKey(key) {
+   const k = String(key ?? "").trim();
+   if (!k) return null;
+   const idx = hashStringToUInt(k) % AVATAR_COLORS.length;
+   return AVATAR_COLORS[idx];
+}
+
+function getAvatarColorFromName(student) {
+   const fullName =
+      `${student?.firstName || ""} ${student?.lastName || ""}`.trim();
+   const hasLetter = /[A-Za-z\u00C0-\u024F\u0400-\u04FF]/.test(fullName);
+   if (!hasLetter) return null;
+
+   let normalized = fullName;
+   try {
+      normalized = fullName.normalize("NFKD");
+   } catch {}
+   const idx = hashStringToUInt(normalized) % AVATAR_COLORS.length;
+   return AVATAR_COLORS[idx];
+}
+
+function isLikelyCssColor(v) {
    const s = String(v ?? "").trim();
-   if (!s) return 0;
-   // păstrăm doar cifre
-   const only = s.replace(/[^\d]/g, "");
-   return clampInt(only === "" ? 0 : parseInt(only, 10), 0);
-};
+   if (!s) return false;
+   if (s.startsWith("var(")) return true;
+   if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s)) return true;
+   if (/^(rgb|rgba|hsl|hsla)\(/i.test(s)) return true;
+   return false;
+}
+
+/* ===================== inline “StudentItem” ===================== */
+/* Cerințe:
+   - lângă nume să nu arate nimic
+   - dedesubt: Telefon · IDNP
+*/
+function StudentItemInline({
+   student,
+   color,
+   initials,
+   secondaryText,
+   className = "",
+}) {
+   const fullName = useMemo(() => {
+      const fn = String(student?.firstName || "").trim();
+      const ln = String(student?.lastName || "").trim();
+      return `${fn} ${ln}`.trim();
+   }, [student]);
+
+   const phoneText =
+      String(secondaryText ?? student?.phone ?? "—").trim() || "—";
+   const idnp = String(student?.idnp ?? "").trim();
+   const meta = idnp ? `${phoneText} · IDNP ${idnp}` : phoneText;
+
+   return (
+      <div className={`studentItem ${className}`}>
+         <div
+            className="studentItem__avatar"
+            aria-hidden="true"
+            style={{
+               background: color,
+               color: "var(--black-p)",
+            }}
+         >
+            <span>{initials}</span>
+         </div>
+
+         <div className="studentItem__info">
+            <h3 className="studentItem__name">{fullName || "–"}</h3>
+            <p className="studentItem__meta">{meta || "—"}</p>
+         </div>
+      </div>
+   );
+}
 
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
+   const storeStudent = useSelector((s) => {
+      const sid = student?.id;
+      if (!sid) return null;
+      const list = s.students?.list || [];
+      return list.find((u) => String(u.id) === String(sid)) || null;
+   });
 
    const {
       list: reservations = [],
       loading,
       error,
-   } = useSelector((state) => state.reservations);
-
-   const users = useSelector((s) => s.users?.list || []);
+   } = useSelector((s) => s.reservations);
 
    const [isEditing, setIsEditing] = useState(false);
-   const [isEditingNote, setIsEditingNote] = useState(false);
 
+   // edit form: DOAR date profil
    const [formData, setFormData] = useState({
-      firstName: student?.firstName || "",
-      lastName: student?.lastName || "",
-      email: student?.email || "",
-      phone: student?.phone || "",
-      privateMessage: student?.privateMessage || "",
+      firstName: "",
+      lastName: "",
+      email: "",
+      phone: "",
    });
 
-   const [noteValue, setNoteValue] = useState(student?.privateMessage || "");
+   // local snapshot
    const [liveStudent, setLiveStudent] = useState(student || {});
-   const [confirmDelete, setConfirmDelete] = useState(false);
 
+   // save profile
+   const [saving, setSaving] = useState(false);
+   const [saveError, setSaveError] = useState("");
+
+   // tabs
    const [tab, setTab] = useState("reservations"); // 'reservations' | 'cancelled' | 'attempts'
    const [attempts, setAttempts] = useState([]);
    const [attemptsLoading, setAttemptsLoading] = useState(false);
    const [attemptsError, setAttemptsError] = useState("");
 
+   // pdf download
    const [downloadingId, setDownloadingId] = useState(null);
    const [downloadError, setDownloadError] = useState("");
 
-   // ===== NEW: user extras (PATCH /api/users/{id}) =====
-   const [userExtras, setUserExtras] = useState({
-      medical_documents: false,
-      individual_work: false,
-      number_of_absences: 0,
-   });
+   /* ===================== note (autosave on blur) ===================== */
+
+   const [noteValue, setNoteValue] = useState("");
+   const [noteSaving, setNoteSaving] = useState(false);
+   const [noteError, setNoteError] = useState("");
+
+   const noteSaveSeqRef = useRef(Promise.resolve());
+   const noteDesiredRef = useRef("");
+   const noteLastSavedRef = useRef("");
+
+   const requestSaveNote = (nextText) => {
+      if (!student?.id) return;
+
+      const desired = String(nextText ?? "");
+      noteDesiredRef.current = desired;
+
+      setNoteSaving(true);
+      setNoteError("");
+
+      noteSaveSeqRef.current = noteSaveSeqRef.current
+         .then(async () => {
+            const cur = noteDesiredRef.current;
+            if (cur === noteLastSavedRef.current) return;
+
+            const updated = await dispatch(
+               updateStudent({
+                  id: student.id,
+                  data: { privateMessage: cur },
+               }),
+            ).unwrap();
+
+            const serverMsg = String(updated?.privateMessage ?? cur);
+            noteLastSavedRef.current = serverMsg;
+
+            setNoteValue(serverMsg);
+            setLiveStudent((p) => ({ ...p, privateMessage: serverMsg }));
+         })
+         .catch((e) => {
+            console.error("Autosave note failed:", e);
+            setNoteError("Nu s-a putut salva notița. Vezi consola / Network.");
+         })
+         .finally(() => {
+            if (noteDesiredRef.current === noteLastSavedRef.current)
+               setNoteSaving(false);
+         });
+   };
+
+   const onNoteChange = (e) => {
+      setNoteError("");
+      setNoteValue(e.target.value);
+   };
+
+   const onNoteBlur = () => requestSaveNote(noteValue);
+
+   // Enter = save (Shift+Enter = newline)
+   const onNoteKeyDown = (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+         e.preventDefault();
+         e.currentTarget.blur();
+      }
+   };
+
+   /* ===================== extras (Doc / Individual / Absente) ===================== */
+
    const [extrasSaving, setExtrasSaving] = useState(false);
    const [extrasError, setExtrasError] = useState("");
+   const [extrasBase, setExtrasBase] = useState(() => normExtras(student));
+   const [extrasForm, setExtrasForm] = useState(() => normExtras(student));
 
-   const [absencesDraft, setAbsencesDraft] = useState("0");
-   const [absencesEditing, setAbsencesEditing] = useState(false);
-   const lastExtrasSnapshotRef = useRef(null);
+   // absences text input (UI)
+   const [absText, setAbsText] = useState("0");
+   const absFocusedRef = useRef(false);
+
+   // autosave queue (ca în PP)
+   const saveSeqRef = useRef(Promise.resolve());
+   const desiredRef = useRef(normExtras(student));
+   const lastSentRef = useRef("");
+
+   const requestSaveExtras = (nextForm) => {
+      if (!student?.id) return;
+
+      const desired = normExtras(nextForm);
+      desiredRef.current = desired;
+
+      setExtrasSaving(true);
+      setExtrasError("");
+
+      saveSeqRef.current = saveSeqRef.current
+         .then(async () => {
+            const cur = desiredRef.current;
+            const curJson = JSON.stringify(cur);
+
+            if (curJson === lastSentRef.current) return;
+
+            const updated = await dispatch(
+               updateStudent({ id: student.id, data: cur }),
+            ).unwrap();
+            lastSentRef.current = curJson;
+
+            // mismatch detection (dacă backend ignoră)
+            const mismatches = [];
+            if (
+               typeof updated?.medical_documents === "boolean" &&
+               updated.medical_documents !== cur.medical_documents
+            )
+               mismatches.push("medical_documents");
+            if (
+               typeof updated?.individual_work === "boolean" &&
+               updated.individual_work !== cur.individual_work
+            )
+               mismatches.push("individual_work");
+            if (
+               updated?.number_of_absences != null &&
+               Number(updated.number_of_absences) !== cur.number_of_absences
+            )
+               mismatches.push("number_of_absences");
+
+            const serverState = normExtras(updated ?? cur);
+
+            if (mismatches.length) {
+               setExtrasError(
+                  `Backend a ignorat: ${mismatches.join(", ")}. Payload-ul e corect, dar serverul nu aplică aceste câmpuri.`,
+               );
+            }
+
+            setExtrasBase(serverState);
+
+            // nu suprascriem dacă user a schimbat iar între timp
+            const desiredNowJson = JSON.stringify(desiredRef.current);
+            if (desiredNowJson === curJson) setExtrasForm(serverState);
+
+            // sync liveStudent
+            setLiveStudent((p) => ({
+               ...p,
+               ...(updated || cur),
+               ...serverState,
+            }));
+         })
+         .catch((e) => {
+            console.error("Autosave extras failed:", e);
+            setExtrasError("Salvarea a eșuat. Vezi consola / Network.");
+         })
+         .finally(() => {
+            const desiredNowJson = JSON.stringify(desiredRef.current);
+            if (desiredNowJson === lastSentRef.current) setExtrasSaving(false);
+         });
+   };
+
+   const toggleField = (key) => {
+      setExtrasError("");
+      setExtrasForm((p) => {
+         const next = { ...p, [key]: !Boolean(p[key]) };
+         requestSaveExtras(next);
+         return next;
+      });
+   };
+
+   const onAbsFocus = (e) => {
+      absFocusedRef.current = true;
+      const el = e.currentTarget;
+      const n = clampInt(extrasForm.number_of_absences ?? 0, 0);
+
+      setAbsText(n === 0 ? "" : String(n));
+
+      requestAnimationFrame(() => {
+         if (el && typeof el.select === "function") el.select();
+      });
+   };
+
+   const onAbsChange = (e) => {
+      const digits = String(e.target.value ?? "").replace(/[^\d]/g, "");
+      const cleaned = digits.replace(/^0+(?=\d)/, "");
+      setAbsText(cleaned);
+
+      const n = cleaned === "" ? 0 : clampInt(parseInt(cleaned, 10), 0);
+      setExtrasForm((p) => ({ ...p, number_of_absences: n }));
+   };
+
+   const onAbsBlur = () => {
+      absFocusedRef.current = false;
+
+      const digits = String(absText ?? "").replace(/[^\d]/g, "");
+      const cleaned = digits.replace(/^0+(?=\d)/, "");
+      const n = cleaned === "" ? 0 : clampInt(parseInt(cleaned, 10), 0);
+
+      setAbsText(String(n));
+
+      setExtrasForm((p) => {
+         const next = { ...p, number_of_absences: n };
+         requestSaveExtras(next);
+         return next;
+      });
+   };
+
+   const onAbsKeyDown = (e) => {
+      if (e.key === "Enter") {
+         e.preventDefault();
+         e.currentTarget.blur();
+      }
+   };
+
+   // keep absText synced when extrasForm changes (dacă nu e focus)
+   useEffect(() => {
+      if (absFocusedRef.current) return;
+      setAbsText(String(clampInt(extrasForm.number_of_absences ?? 0, 0)));
+   }, [extrasForm.number_of_absences]);
+
+   /* ===================== close ===================== */
 
    const safeClose = () => {
       if (typeof onClose === "function") onClose();
@@ -183,146 +478,143 @@ export default function StudentInfoPopup({ student, onClose }) {
       }
    };
 
-   const targetUser = useMemo(() => {
-      if (!student) return null;
-      if (student.userId) {
-         const u = users.find((x) => String(x.id) === String(student.userId));
-         if (u) return u;
-      }
-      const e = normEmail(student.email);
-      if (e) {
-         const u = users.find((x) => normEmail(x.email) === e);
-         if (u) return u;
-      }
-      return null;
-   }, [student, users]);
-
-   const targetUserId = targetUser?.id || student?.userId || null;
-
-   const getUserExtrasFromUser = (u) => ({
-      medical_documents: Boolean(u?.medical_documents),
-      individual_work: Boolean(u?.individual_work),
-      number_of_absences: clampInt(u?.number_of_absences ?? 0, 0),
-   });
+   /* ===================== init/reset when student changes ===================== */
 
    useEffect(() => {
-      dispatch(fetchUsers());
+      setLiveStudent(student || {});
+      setTab("reservations");
+      setIsEditing(false);
+      setSaveError("");
+      setSaving(false);
 
       setFormData({
          firstName: student?.firstName || "",
          lastName: student?.lastName || "",
          email: student?.email || "",
          phone: student?.phone || "",
-         privateMessage: student?.privateMessage || "",
       });
-      setNoteValue(student?.privateMessage || "");
-      setLiveStudent(student || {});
-      setConfirmDelete(false);
-      setTab("reservations");
-      setIsEditing(false);
-      setIsEditingNote(false);
 
-      // reset extras UI state
-      setExtrasError("");
+      // note init + reset queue
+      const baseNote = String(student?.privateMessage || "");
+      setNoteValue(baseNote);
+
+      noteSaveSeqRef.current = Promise.resolve();
+      noteDesiredRef.current = baseNote;
+      noteLastSavedRef.current = baseNote;
+      setNoteSaving(false);
+      setNoteError("");
+
+      // extras init + reset queue
+      const base = normExtras(student);
+      setExtrasBase(base);
+      setExtrasForm(base);
+      setAbsText(String(base.number_of_absences ?? 0));
+      absFocusedRef.current = false;
+
+      saveSeqRef.current = Promise.resolve();
+      desiredRef.current = base;
+      lastSentRef.current = "";
       setExtrasSaving(false);
-      setAbsencesEditing(false);
-   }, [student, dispatch]);
+      setExtrasError("");
+   }, [student]);
+
+   // keep in sync with store updates (ex: privateMessage saved elsewhere)
+   useEffect(() => {
+      if (!storeStudent?.id) return;
+
+      setLiveStudent((p) => ({ ...p, ...storeStudent }));
+
+      if (!isEditing) {
+         setFormData({
+            firstName: storeStudent?.firstName || "",
+            lastName: storeStudent?.lastName || "",
+            email: storeStudent?.email || "",
+            phone: storeStudent?.phone || "",
+         });
+
+         const baseNote = String(storeStudent?.privateMessage || "");
+         setNoteValue(baseNote);
+         noteDesiredRef.current = baseNote;
+         noteLastSavedRef.current = baseNote;
+         setNoteSaving(false);
+         setNoteError("");
+
+         const baseExtras = normExtras(storeStudent);
+         setExtrasBase(baseExtras);
+         setExtrasForm(baseExtras);
+         setAbsText(String(baseExtras.number_of_absences ?? 0));
+         absFocusedRef.current = false;
+         setExtrasSaving(false);
+         setExtrasError("");
+      }
+   }, [storeStudent, isEditing]);
+
+   /* ===================== reservations load ===================== */
 
    useEffect(() => {
-      if (targetUserId) {
-         dispatch(fetchUserReservations(String(targetUserId)));
-      }
-   }, [dispatch, targetUserId]);
+      if (student?.id) dispatch(fetchUserReservations(String(student.id)));
+   }, [dispatch, student?.id]);
 
-   useEffect(() => {
-      if (!isEditing && targetUser?.email) {
-         setFormData((prev) => ({ ...prev, email: targetUser.email }));
-      }
-   }, [targetUser?.email, isEditing]);
+   /* ===================== profile edit handlers ===================== */
 
-   // Sync userExtras from store user (dar nu suprascriem când salvează sau când user editează absences)
-   useEffect(() => {
-      if (!targetUserId) return;
-      if (extrasSaving) return;
+   const startEdit = () => {
+      setIsEditing(true);
+      setSaveError("");
+   };
 
-      const next = getUserExtrasFromUser(targetUser);
-      setUserExtras(next);
+   const cancelEdit = () => {
+      setIsEditing(false);
+      setSaveError("");
 
-      if (!absencesEditing) {
-         setAbsencesDraft(String(next.number_of_absences ?? 0));
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [
-      targetUserId,
-      targetUser?.medical_documents,
-      targetUser?.individual_work,
-      targetUser?.number_of_absences,
-      extrasSaving,
-      absencesEditing,
-   ]);
-
-   const handleEditToggle = () => setIsEditing(!isEditing);
+      setFormData({
+         firstName: liveStudent?.firstName ?? student?.firstName ?? "",
+         lastName: liveStudent?.lastName ?? student?.lastName ?? "",
+         email: liveStudent?.email ?? student?.email ?? "",
+         phone: liveStudent?.phone ?? student?.phone ?? "",
+      });
+   };
 
    const handleChange = (e) => {
       const { name, value } = e.target;
-      setFormData((prev) => ({ ...prev, [name]: value }));
+      setFormData((p) => ({ ...p, [name]: value }));
    };
 
    const handleSave = async () => {
+      if (!student?.id) return;
+
+      setSaving(true);
+      setSaveError("");
+
       try {
-         const dataToSend = { ...formData };
+         // ✅ save ONLY profile fields (nu extras, nu note)
+         const payload = {
+            firstName: String(formData.firstName || "").trim(),
+            lastName: String(formData.lastName || "").trim(),
+            email: String(formData.email || "").trim(),
+            phone: String(formData.phone || "").trim(),
+         };
 
          const updated = await dispatch(
-            updateStudent({ id: student.id, data: dataToSend }),
+            updateStudent({ id: student.id, data: payload }),
          ).unwrap();
 
-         const newEmail = normEmail(dataToSend.email);
-         const oldEmail = normEmail(targetUser?.email || "");
-         if (targetUserId && newEmail && newEmail !== oldEmail) {
-            try {
-               await updateUser(targetUserId, { email: dataToSend.email });
-               dispatch(fetchUsers());
-            } catch (e) {
-               console.warn("Update user email failed:", e);
-            }
-         }
+         const next = { ...liveStudent, ...payload, ...(updated || {}) };
+         setLiveStudent(next);
 
-         setLiveStudent(updated);
-         setFormData({
-            firstName: updated?.firstName ?? dataToSend.firstName ?? "",
-            lastName: updated?.lastName ?? dataToSend.lastName ?? "",
-            email: updated?.email ?? dataToSend.email ?? "",
-            phone: updated?.phone ?? dataToSend.phone ?? "",
-            privateMessage:
-               updated?.privateMessage ?? dataToSend.privateMessage ?? "",
-         });
          setIsEditing(false);
       } catch (err) {
-         console.error("Eroare la salvare:", err);
-         alert("Actualizarea a eșuat!");
+         console.error("Save failed:", err);
+         setSaveError("Actualizarea a eșuat. Vezi consola / Network.");
+      } finally {
+         setSaving(false);
       }
    };
 
-   const handleSaveNote = async () => {
-      try {
-         await dispatch(
-            updateStudent({
-               id: student.id,
-               data: { privateMessage: noteValue },
-            }),
-         ).unwrap();
-      } catch {
-         alert("Nu s-a putut salva notița!");
-         return;
-      }
-      setLiveStudent((prev) => ({ ...prev, privateMessage: noteValue }));
-      setIsEditingNote(false);
-   };
+   /* ===================== delete ===================== */
 
    const handleDelete = async () => {
       try {
          await dispatch(removeStudent(student.id)).unwrap();
-         setConfirmDelete(false);
          setIsEditing(false);
          setLiveStudent({});
          safeClose();
@@ -332,70 +624,24 @@ export default function StudentInfoPopup({ student, onClose }) {
       }
    };
 
-   const getReservationUserId = (r) => {
-      const v =
-         r?.userId ??
-         r?.user_id ??
-         r?.studentId ??
-         r?.student?.id ??
-         r?.user?.id ??
-         r?.student?.userId ??
-         null;
-      return v != null ? String(v) : null;
-   };
+   /* ===================== reservations derived ===================== */
 
-   const getAttemptUserId = (it) => {
-      const v =
-         it?.userId ??
-         it?.user_id ??
-         it?.user?.id ??
-         it?.studentId ??
-         it?.student?.id ??
-         it?.student?.userId ??
-         null;
-      return v != null ? String(v) : null;
-   };
-
-   const normalizeAttempt = (it) => ({
-      id:
-         it.id ??
-         `${it.examId || "exam"}-${it.startedAt || it.createdAt || Date.now()}`,
-      examId: it.examId ?? it.id ?? null,
-      startedAt: it.startedAt ?? it.createdAt ?? it.started ?? null,
-      finishedAt: it.finishedAt ?? it.completedAt ?? it.endedAt ?? null,
-      status: (
-         it.status ?? (it.finishedAt ? "FINISHED" : "IN_PROGRESS")
-      ).toUpperCase(),
-      total: it.total ?? it.totalQuestions ?? it.questionsTotal ?? null,
-      correct: it.correct ?? it.correctCount ?? it.right ?? null,
-      wrong: it.wrong ?? it.wrongCount ?? it.incorrect ?? null,
-      scorePct:
-         (typeof it.scorePct === "number" && it.scorePct) ||
-         (typeof it.percentage === "number" && it.percentage) ||
-         (typeof it.score === "number" && it.score) ||
-         null,
-      attemptUserId: getAttemptUserId(it),
-   });
-
-   // doar programările studentului curent
    const myReservations = useMemo(() => {
-      if (!targetUserId) return [];
-      const uid = String(targetUserId);
-      return reservations.filter((r) => getReservationUserId(r) === uid);
-   }, [reservations, targetUserId]);
+      if (!student?.id) return [];
+      const sid = String(student.id);
+      return reservations.filter(
+         (r) => String(getReservationStudentId(r) ?? "") === sid,
+      );
+   }, [reservations, student?.id]);
 
-   // split: programări normale vs anulări (isCancelled)
    const { activeReservations, cancelledReservations } = useMemo(() => {
       const active = [];
       const cancelled = [];
-      for (const r of myReservations) {
-         if (isReservationCancelled(r)) cancelled.push(r);
-         else active.push(r);
-      }
+      for (const r of myReservations)
+         (isReservationCancelled(r) ? cancelled : active).push(r);
       return { activeReservations: active, cancelledReservations: cancelled };
    }, [myReservations]);
 
-   // sortare crescătoare după startTime
    const myReservationsAsc = useMemo(() => {
       const arr = [...activeReservations];
       arr.sort((a, b) => getReservationStartMs(a) - getReservationStartMs(b));
@@ -408,103 +654,226 @@ export default function StudentInfoPopup({ student, onClose }) {
       return arr;
    }, [cancelledReservations]);
 
+   /* ===================== exam attempts ===================== */
+
    useEffect(() => {
-      let cancelled = false;
-      if (tab !== "attempts" || !targetUserId) return;
+      let stop = false;
+      if (tab !== "attempts" || !student?.id) return;
 
       (async () => {
          setAttemptsLoading(true);
          setAttemptsError("");
          try {
             const all = await getExamHistoryForStudentIdAll(
-               String(targetUserId),
+               String(student.id),
                {
                   pageSize: 50,
                   maxPages: 10,
                },
             );
-
-            const uid = String(targetUserId);
-            const normalized = all
-               .map(normalizeAttempt)
-               .filter((a) => !a.attemptUserId || a.attemptUserId === uid)
-               .sort((a, b) => {
-                  const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
-                  const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
-                  return tb - ta;
-               });
-
-            if (!cancelled) setAttempts(normalized);
+            if (!stop) setAttempts(Array.isArray(all) ? all : []);
          } catch (e) {
-            try {
-               const pageSize = 50;
-               let page = 1;
-               const all = [];
-               for (;;) {
-                  const batch = await getExamHistoryForUser(
-                     String(targetUserId),
-                     {
-                        page,
-                        limit: pageSize,
-                     },
-                  );
-                  const items = Array.isArray(batch)
-                     ? batch
-                     : batch?.data || batch?.items || batch?.results || [];
-                  if (!items?.length) break;
-                  all.push(...items);
-
-                  const totalPages =
-                     batch?.pagination?.totalPages ??
-                     batch?.meta?.totalPages ??
-                     batch?.totalPages ??
-                     null;
-
-                  if (totalPages ? page >= totalPages : items.length < pageSize)
-                     break;
-                  page += 1;
-               }
-
-               const uid = String(targetUserId);
-               const normalized = all
-                  .map(normalizeAttempt)
-                  .filter((a) => a.attemptUserId === uid)
-                  .sort((a, b) => {
-                     const ta = a.startedAt ? Date.parse(a.startedAt) : 0;
-                     const tb = b.startedAt ? Date.parse(b.startedAt) : 0;
-                     return tb - ta;
-                  });
-
-               if (!cancelled) setAttempts(normalized);
-            } catch (e2) {
-               if (!cancelled) {
-                  const msg = String(
-                     e?.message ||
-                        e2?.message ||
-                        "Nu am putut încărca încercările.",
-                  );
-                  const friendly =
-                     msg === "AUTH_401"
-                        ? "Nu ești autentificat (401)."
-                        : msg === "AUTH_403"
-                          ? "Doar Manager/Admin pot vedea încercările acestui student (403)."
-                          : msg;
-                  setAttemptsError(friendly);
-               }
-            }
+            if (!stop)
+               setAttemptsError(
+                  e?.message || "Nu am putut încărca încercările.",
+               );
          } finally {
-            if (!cancelled) setAttemptsLoading(false);
+            if (!stop) setAttemptsLoading(false);
          }
       })();
 
       return () => {
-         cancelled = true;
+         stop = true;
       };
-   }, [tab, targetUserId]);
+   }, [tab, student?.id]);
 
+   /* ===================== derived “TOP UI” ===================== */
+
+   const fn = String(liveStudent?.firstName ?? student?.firstName ?? "");
+   const ln = String(liveStudent?.lastName ?? student?.lastName ?? "");
+   const email = String(liveStudent?.email ?? student?.email ?? "");
+   const phone = String(liveStudent?.phone ?? student?.phone ?? "");
+   const idnp = String(liveStudent?.idnp ?? student?.idnp ?? "").trim();
+
+   const rawExplicitColor = String(
+      liveStudent?.color ?? student?.color ?? "",
+   ).trim();
+   const explicitColor = isLikelyCssColor(rawExplicitColor)
+      ? rawExplicitColor
+      : "";
+
+   const fullName = `${fn} ${ln}`.trim() || "—";
+
+   const desiredInstructorId =
+      liveStudent?.desiredInstructorId ??
+      liveStudent?.desiredInstructor?.id ??
+      student?.desiredInstructorId ??
+      student?.desiredInstructor?.id ??
+      null;
+
+   // ===== instructor name resolve (ID -> nume prenume) =====
+   const [instructorsById, setInstructorsById] = useState(() => new Map());
+   const [instLoading, setInstLoading] = useState(false);
+   const [instError, setInstError] = useState("");
+
+   const instFetchSeqRef = useRef(Promise.resolve());
+   const instLoadedRef = useRef(false);
+
+   useEffect(() => {
+      let stop = false;
+
+      if (!desiredInstructorId) return;
+
+      const obj =
+         liveStudent?.desiredInstructor ?? student?.desiredInstructor ?? null;
+      const objName = obj
+         ? `${obj?.firstName || ""} ${obj?.lastName || ""}`.trim()
+         : "";
+      if (objName) return;
+
+      if (instLoadedRef.current && instructorsById.size) return;
+
+      setInstLoading(true);
+      setInstError("");
+
+      instFetchSeqRef.current = instFetchSeqRef.current
+         .then(async () => {
+            const list = await getInstructors();
+            if (stop) return;
+
+            const map = new Map();
+            for (const it of Array.isArray(list) ? list : []) {
+               const id = it?.id ?? it?._id;
+               if (id != null) map.set(String(id), it);
+            }
+
+            instLoadedRef.current = true;
+            setInstructorsById(map);
+         })
+         .catch((e) => {
+            console.error("getInstructors failed:", e);
+            if (!stop)
+               setInstError("Nu am putut încărca lista de instructori.");
+         })
+         .finally(() => {
+            if (!stop) setInstLoading(false);
+         });
+
+      return () => {
+         stop = true;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [desiredInstructorId]);
+
+   const desiredInstructorName = useMemo(() => {
+      if (!desiredInstructorId) return "";
+
+      const obj =
+         liveStudent?.desiredInstructor ?? student?.desiredInstructor ?? null;
+      const objName = obj
+         ? `${obj?.firstName || ""} ${obj?.lastName || ""}`.trim()
+         : "";
+      if (objName) return objName;
+
+      const hit = instructorsById.get(String(desiredInstructorId));
+      const hitName = hit
+         ? `${hit?.firstName || ""} ${hit?.lastName || ""}`.trim()
+         : "";
+      if (hitName) return hitName;
+
+      return instLoading ? "Se încarcă..." : "—";
+   }, [
+      desiredInstructorId,
+      liveStudent,
+      student,
+      instructorsById,
+      instLoading,
+   ]);
+
+   const avatarKey =
+      student?.id ?? liveStudent?.id ?? phone ?? email ?? "__student__";
+   const avatarSeed = useMemo(() => {
+      const k = String(avatarKey ?? "").trim();
+      if (k) return k;
+
+      const n = `${fn} ${ln}`.trim();
+      if (n) return n;
+
+      const p = String(phone ?? "").trim();
+      if (p) return p;
+
+      const e = String(email ?? "").trim();
+      if (e) return e;
+
+      return "__student__";
+   }, [avatarKey, fn, ln, phone, email]);
+
+   const avatarInitials = useMemo(
+      () => getInitials({ firstName: fn, lastName: ln }),
+      [fn, ln],
+   );
+
+   const avatarBg = useMemo(() => {
+      if (explicitColor) return explicitColor;
+
+      const byName = getAvatarColorFromName({ firstName: fn, lastName: ln });
+      if (byName) return byName;
+
+      const byKey = getAvatarColorFromKey(avatarSeed);
+      return byKey || "var(--black-s)";
+   }, [explicitColor, fn, ln, avatarSeed]);
+
+   const chipData = useMemo(() => {
+      const v = (x) =>
+         x === null || x === undefined || x === "" ? "—" : String(x);
+      const out = [];
+
+      if (desiredInstructorId) {
+         out.push({
+            key: "desiredInstructorId",
+            label: "Doar:",
+            value: desiredInstructorName || "—",
+         });
+      }
+
+      out.push({
+         key: "email",
+         label: "",
+         value: v(email),
+      });
+
+      out.push({
+         key: "medical_documents",
+         label: "Doc. medicale",
+         value: "",
+         icon: extrasForm.medical_documents ? "check" : "close",
+      });
+
+      out.push({
+         key: "individual_work",
+         label: "L. individual",
+         value: "",
+         icon: extrasForm.individual_work ? "check" : "close",
+      });
+
+      out.push({
+         key: "number_of_absences",
+         label: "Absențe:",
+         value: v(extrasForm.number_of_absences),
+      });
+
+      return out;
+   }, [
+      desiredInstructorId,
+      desiredInstructorName,
+      email,
+      extrasForm.medical_documents,
+      extrasForm.individual_work,
+      extrasForm.number_of_absences,
+   ]);
+
+   /* ✅ safe return */
    if (!student) return null;
-
-   const displayEmail = targetUser?.email || liveStudent.email || "–";
 
    const handleDownloadPdf = async (examId) => {
       setDownloadError("");
@@ -519,376 +888,286 @@ export default function StudentInfoPopup({ student, onClose }) {
       }
    };
 
-   // ===== NEW: PATCH helpers for extras =====
-   const patchUserExtras = async (partial) => {
-      if (!targetUserId) return;
+   // classes like in PP (păstrate)
+   const mdBtnClass =
+      "pp-stats__toggle" +
+      (extrasForm.medical_documents ? " is-on" : " is-off") +
+      (extrasSaving ? " is-disabled" : "");
 
-      setExtrasError("");
-      const prev = { ...userExtras };
-      lastExtrasSnapshotRef.current = prev;
-
-      const next = {
-         medical_documents: Boolean(
-            partial?.medical_documents ?? userExtras.medical_documents,
-         ),
-         individual_work: Boolean(
-            partial?.individual_work ?? userExtras.individual_work,
-         ),
-         number_of_absences: clampInt(
-            partial?.number_of_absences ?? userExtras.number_of_absences,
-            0,
-         ),
-      };
-
-      // optimistic UI
-      setUserExtras(next);
-      if (!absencesEditing) setAbsencesDraft(String(next.number_of_absences));
-
-      setExtrasSaving(true);
-      try {
-         await updateUser(targetUserId, next); // PATCH /api/users/{id}
-         dispatch(fetchUsers());
-      } catch (e) {
-         console.error("Update user extras failed:", e);
-         setExtrasError("Nu s-au putut salva modificările (user).");
-         // rollback
-         const snap = lastExtrasSnapshotRef.current;
-         if (snap) {
-            setUserExtras(snap);
-            if (!absencesEditing)
-               setAbsencesDraft(String(snap.number_of_absences ?? 0));
-         }
-      } finally {
-         setExtrasSaving(false);
-      }
-   };
-
-   const canEditExtras = Boolean(targetUserId) && !extrasSaving;
-
-   const incAbs = () => {
-      const n = clampInt(userExtras.number_of_absences ?? 0, 0) + 1;
-      setAbsencesEditing(false);
-      patchUserExtras({ number_of_absences: n });
-   };
-
-   const decAbs = () => {
-      const n = Math.max(
-         0,
-         clampInt(userExtras.number_of_absences ?? 0, 0) - 1,
-      );
-      setAbsencesEditing(false);
-      patchUserExtras({ number_of_absences: n });
-   };
-
-   const commitAbsences = () => {
-      const n = parseAbsences(absencesDraft);
-      setAbsencesEditing(false);
-      patchUserExtras({ number_of_absences: n });
-   };
+   const iwBtnClass =
+      "pp-stats__toggle" +
+      (extrasForm.individual_work ? " is-on" : " is-off") +
+      (extrasSaving ? " is-disabled" : "");
 
    return (
-      <div className="students-info">
-         <div className="popup-panel__header">
-            <h3 className="popup-panel__title students-info__title">
-               <span>Profil</span>{" "}
-               {!isEditing
-                  ? `${liveStudent.firstName} ${liveStudent.lastName}`
-                  : "Editare student"}
+      <div className="studentsProfileUI studentsProfileUI--popup students-info">
+         {/* Header */}
+         <div className="studentsProfileUI__header popup-panel__header">
+            <h3 className="popup-panel__title">
+               {!isEditing ? "Profil elev" : "Editare elev"}
             </h3>
+
+            <div className="studentsProfileUI__headerActions">
+               {!isEditing && (
+                  <IconButton
+                     className="studentsProfileUI__iconBtn"
+                     icon="edit"
+                     variant="square"
+                     onClick={startEdit}
+                     title="Editează"
+                     aria-label="Editează"
+                  />
+               )}
+            </div>
          </div>
 
-         <div className="students-info__actions">
-            {!isEditing && (
-               <button
-                  className="students-info__btn students-info__btn--edit"
-                  onClick={handleEditToggle}
-               >
-                  Edit
-               </button>
-            )}
-         </div>
+         <div
+            style={{ padding: 0 }}
+            className="studentsProfileUI__content students-info__content students-info-popup"
+         >
+            {/* ✅ VIEW */}
+            {!isEditing ? (
+               <>
+                  <StudentItemInline
+                     student={{
+                        ...student,
+                        ...liveStudent,
+                        firstName: fn,
+                        lastName: ln,
+                        email,
+                        phone,
+                        idnp,
+                     }}
+                     color={avatarBg}
+                     initials={avatarInitials}
+                     secondaryText={phone || "—"}
+                     className="studentsProfileUI__studentItemTop"
+                  />
 
-         <div className="students-info__content">
-            {isEditing ? (
-               <div className="students-info__form">
-                  <div className="students-info__inputs">
-                     <input
-                        type="text"
-                        name="firstName"
-                        value={formData.firstName}
-                        onChange={handleChange}
-                     />
-                     <input
-                        type="text"
-                        name="lastName"
-                        value={formData.lastName}
-                        onChange={handleChange}
-                     />
-                     <input
-                        type="email"
-                        name="email"
-                        value={formData.email}
-                        onChange={handleChange}
-                     />
-                     <input
-                        type="text"
-                        name="phone"
-                        value={formData.phone}
-                        onChange={handleChange}
-                     />
-                     <input
-                        name="privateMessage"
-                        value={formData.privateMessage}
-                        onChange={handleChange}
-                     />
+                  <div className="studentsProfileUI__heroMeta">
+                     {chipData.map((c) => {
+                        const titleText =
+                           `${String(c.label || "").trim()} ${String(c.value || "").trim()}`.trim();
+                        return (
+                           <div
+                              key={c.key}
+                              className="studentsProfileUI__chip"
+                              title={titleText || undefined}
+                           >
+                              {c.icon && (
+                                 <UIIcon
+                                    name={c.icon}
+                                    className="studentsProfileUI__chipIcon"
+                                 />
+                              )}
+                              <span>
+                                 {c.label ? `${c.label} ` : ""}
+                                 {c.value}
+                              </span>
+                           </div>
+                        );
+                     })}
                   </div>
-
-                  <div className="students-info__btns">
-                     <button
-                        className="students-info__btn students-info__btn--save"
-                        onClick={handleSave}
+                  <div className="students-info__admin">
+                     {/* NOTIȚĂ - input separat în edit */}
+                     <div
+                        className={
+                           "students-info__admin-note" +
+                           (noteSaving ? " is-saving" : "")
+                        }
                      >
-                        Salvează
-                     </button>
-                     <button
-                        className="students-info__btn students-info__btn--normal"
-                        onClick={handleEditToggle}
-                     >
-                        Cancel
-                     </button>
-
-                     <div className="students__item-delete">
-                        <button
-                           onClick={() => setConfirmDelete(true)}
-                           className={`delete-btn ${confirmDelete ? "hidden" : ""}`}
-                        >
-                           Șterge
-                        </button>
-
-                        <div
-                           className={`delete-confirmation ${
-                              confirmDelete ? "" : "hidden"
-                           }`}
-                        >
-                           <button
-                              onClick={handleDelete}
-                              className="delete-confirm"
-                           >
-                              Da
-                           </button>
-                           <button
-                              onClick={() => setConfirmDelete(false)}
-                              className="cancel-confirm"
-                           >
-                              Nu
-                           </button>
-                        </div>
+                        <span className="students-info__admin-note-label">
+                           Notiță
+                        </span>
+                        <input
+                           className="students-info__admin-note-input"
+                           value={noteValue}
+                           onChange={onNoteChange}
+                           onBlur={onNoteBlur}
+                           onKeyDown={onNoteKeyDown}
+                           placeholder="Notiță rapidă…"
+                           type="text"
+                           autoComplete="off"
+                        />
                      </div>
                   </div>
-               </div>
+               </>
             ) : (
                <>
-                  <div className="students-info__field">
-                     <ReactSVG
-                        src={emailIcon}
-                        className="students-info__icon"
-                     />
-                     {displayEmail}
-                  </div>
-
-                  <div className="students-info__field">
-                     <ReactSVG
-                        src={phoneIcon}
-                        className="students-info__icon"
-                     />
-                     {liveStudent.phone || "–"}
-                  </div>
-
-                  {/* ===== NEW: 3 elemente (fără Edit mode) într-un rând, PATCH /api/users/{id} ===== */}
-                  <div className="students-info__field students-info__field--extras">
-                     <div
-                        className="students-info__extras-row"
-                        style={{
-                           display: "flex",
-                           gap: 12,
-                           alignItems: "center",
-                           flexWrap: "wrap",
-                           width: "100%",
-                        }}
-                     >
-                        <label
-                           className="students-info__toggle"
-                           style={{
-                              display: "flex",
-                              gap: 8,
-                              alignItems: "center",
-                           }}
-                           title="medical_documents"
-                        >
-                           <input
-                              type="checkbox"
-                              checked={Boolean(userExtras.medical_documents)}
-                              disabled={!canEditExtras}
-                              onChange={(e) =>
-                                 patchUserExtras({
-                                    medical_documents: e.target.checked,
-                                 })
-                              }
-                           />
-                           <span>Doc. medicale</span>
-                        </label>
-
-                        <label
-                           className="students-info__toggle"
-                           style={{
-                              display: "flex",
-                              gap: 8,
-                              alignItems: "center",
-                           }}
-                           title="individual_work"
-                        >
-                           <input
-                              type="checkbox"
-                              checked={Boolean(userExtras.individual_work)}
-                              disabled={!canEditExtras}
-                              onChange={(e) =>
-                                 patchUserExtras({
-                                    individual_work: e.target.checked,
-                                 })
-                              }
-                           />
-                           <span>Individual</span>
-                        </label>
-
+                  {/* ✅ EDIT: notiță (input 2) + 3 controale doar aici */}
+                  <div className="studentsProfileUI__form">
+                     {/* INPUTS profil */}
+                     <div className="studentsProfileUI__inputs">
+                        <input
+                           type="text"
+                           name="firstName"
+                           value={formData.firstName}
+                           onChange={handleChange}
+                           placeholder="Prenume"
+                        />
+                        <input
+                           type="text"
+                           name="lastName"
+                           value={formData.lastName}
+                           onChange={handleChange}
+                           placeholder="Nume"
+                        />
+                        <input
+                           type="email"
+                           name="email"
+                           value={formData.email}
+                           onChange={handleChange}
+                           placeholder="Email"
+                        />
+                        <input
+                           type="text"
+                           name="phone"
+                           value={formData.phone}
+                           onChange={handleChange}
+                           placeholder="Telefon"
+                        />
+                     </div>
+                     <div className="students-info__admin">
+                        {/* NOTIȚĂ - input separat în edit */}
                         <div
-                           className="students-info__absences"
-                           style={{
-                              display: "flex",
-                              gap: 8,
-                              alignItems: "center",
-                           }}
-                           title="number_of_absences"
+                           className={
+                              "students-info__admin-note" +
+                              (noteSaving ? " is-saving" : "")
+                           }
                         >
-                           <span style={{ opacity: 0.9 }}>Absențe</span>
-
-                           <button
-                              type="button"
-                              className="students-info__btn students-info__btn--normal"
-                              onClick={decAbs}
-                              disabled={!canEditExtras}
-                              style={{ padding: "4px 10px" }}
-                           >
-                              –
-                           </button>
+                           <span className="students-info__admin-note-label">
+                              Notiță
+                           </span>
 
                            <input
-                              type="number"
-                              inputMode="numeric"
-                              min={0}
-                              value={absencesDraft}
-                              disabled={!Boolean(targetUserId)}
-                              onFocus={() => setAbsencesEditing(true)}
-                              onChange={(e) => {
-                                 setAbsencesDraft(e.target.value);
-                              }}
-                              onKeyDown={(e) => {
-                                 if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    commitAbsences();
-                                 }
-                              }}
-                              onBlur={commitAbsences}
-                              style={{
-                                 width: 80,
-                                 padding: "6px 8px",
-                              }}
+                              className="students-info__admin-note-input"
+                              value={noteValue}
+                              onChange={onNoteChange}
+                              onBlur={onNoteBlur}
+                              onKeyDown={onNoteKeyDown}
+                              placeholder="Scrie o notiță…"
+                              type="text"
+                              autoComplete="off"
                            />
 
+                           {noteError && (
+                              <div className="students-info__error">
+                                 {noteError}
+                              </div>
+                           )}
+                        </div>
+
+                        {/* 3 controale - un singur rând flex */}
+                        <div
+                           className={
+                              "students-info__admin-row" +
+                              (extrasSaving ? " is-disabled" : "")
+                           }
+                        >
+                           {/* DOC MEDICALE */}
                            <button
                               type="button"
-                              className="students-info__btn students-info__btn--normal"
-                              onClick={incAbs}
-                              disabled={!canEditExtras}
-                              style={{ padding: "4px 10px" }}
+                              onClick={() => toggleField("medical_documents")}
+                              disabled={extrasSaving}
+                              aria-pressed={Boolean(
+                                 extrasForm.medical_documents,
+                              )}
+                              className={mdBtnClass}
                            >
-                              +
+                              <ReactSVG
+                                 src={
+                                    extrasForm.medical_documents
+                                       ? checkIcon
+                                       : closeIcon
+                                 }
+                                 className="pp-stats__toggle-icon"
+                              />
+                              <span className="pp-stats__toggle-text">
+                                 Doc. medicale
+                              </span>
                            </button>
 
-                           {extrasSaving && (
-                              <span style={{ fontSize: 12, opacity: 0.8 }}>
-                                 Salvez...
+                           {/* INDIVIDUAL */}
+                           <button
+                              type="button"
+                              onClick={() => toggleField("individual_work")}
+                              disabled={extrasSaving}
+                              aria-pressed={Boolean(extrasForm.individual_work)}
+                              className={iwBtnClass}
+                              //style={{ flex: "1 1 auto" }}
+                           >
+                              <ReactSVG
+                                 src={
+                                    extrasForm.individual_work
+                                       ? checkIcon
+                                       : closeIcon
+                                 }
+                                 className="pp-stats__toggle-icon"
+                              />
+                              <span className="pp-stats__toggle-text">
+                                 Individual
                               </span>
-                           )}
+                           </button>
+
+                           {/* ABSENȚE */}
+                           <div
+                              className={
+                                 "pp-stats__stepper " +
+                                 (extrasSaving ? " is-disabled" : "")
+                              }
+                           >
+                              <span className="pp-stats__stepper-label">
+                                 Absențe
+                              </span>
+
+                              <input
+                                 type="text"
+                                 name="number_of_absences"
+                                 inputMode="numeric"
+                                 pattern="[0-9]*"
+                                 value={absText}
+                                 disabled={extrasSaving}
+                                 onFocus={onAbsFocus}
+                                 onChange={onAbsChange}
+                                 onBlur={onAbsBlur}
+                                 onKeyDown={onAbsKeyDown}
+                                 className="pp-stats__stepper-input"
+                              />
+                           </div>
                         </div>
                      </div>
 
-                     {extrasError && (
-                        <div
-                           className="students-info__error"
-                           style={{ marginTop: 8 }}
+                     <div className="studentsProfileUI__btns">
+                        <ConfirmDeleteButton
+                           disabled={saving}
+                           onConfirm={handleDelete}
+                           title="Șterge elevul"
+                           fullWidth={false}
                         >
-                           {extrasError}
-                        </div>
-                     )}
+                           Șterge
+                        </ConfirmDeleteButton>
 
-                     {!targetUserId && (
-                        <div
-                           style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}
+                        <button
+                           className="studentsProfileUI__btn studentsProfileUI__btn--save"
+                           onClick={handleSave}
+                           disabled={saving}
                         >
-                           Nu am găsit userId pentru acest student (nu pot salva
-                           extras).
-                        </div>
-                     )}
-                  </div>
+                           {saving ? "Salvez..." : "Salvează"}
+                        </button>
 
-                  <div className="students-info__note-section">
-                     {isEditingNote ? (
-                        <>
-                           <input
-                              value={noteValue}
-                              onChange={(e) => setNoteValue(e.target.value)}
-                           />
-                           <button
-                              className="students-info__btn students-info__btn--save"
-                              onClick={handleSaveNote}
-                           >
-                              Salvează
-                           </button>
-                           <button
-                              className="students-info__btn students-info__btn--normal"
-                              onClick={() => setIsEditingNote(false)}
-                           >
-                              Anulează
-                           </button>
-                        </>
-                     ) : (
-                        <>
-                           {liveStudent.privateMessage ? (
-                              <>
-                                 <span className="students-info__note">
-                                    „{liveStudent.privateMessage}”
-                                 </span>
-                                 <button
-                                    className="students-info__btn students-info__btn--edit"
-                                    onClick={() => setIsEditingNote(true)}
-                                 >
-                                    Editează notița
-                                 </button>
-                              </>
-                           ) : (
-                              <button
-                                 className="students-info__btn students-info__btn--normal"
-                                 onClick={() => setIsEditingNote(true)}
-                              >
-                                 Adaugă notiță
-                              </button>
-                           )}
-                        </>
-                     )}
+                        <button
+                           className="studentsProfileUI__btn studentsProfileUI__btn--normal"
+                           onClick={cancelEdit}
+                           disabled={saving}
+                        >
+                           Cancel
+                        </button>
+                     </div>
                   </div>
                </>
             )}
 
+            {/* TABS (nemodificat) */}
             <div className="students-info__tabs">
                <button
                   className={
@@ -899,7 +1178,6 @@ export default function StudentInfoPopup({ student, onClose }) {
                >
                   Programări
                </button>
-
                <button
                   className={
                      "students-info__tab" +
@@ -909,7 +1187,6 @@ export default function StudentInfoPopup({ student, onClose }) {
                >
                   Anulări
                </button>
-
                <button
                   className={
                      "students-info__tab" +
@@ -932,6 +1209,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                </>
             )}
 
+            {/* RESERVATIONS */}
             {tab === "reservations" && (
                <>
                   {!loading && myReservationsAsc.length === 0 && (
@@ -960,11 +1238,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                                     className={`students-info__item students-info__item--${status}`}
                                  >
                                     <div className="students-info__item-left">
-                                       <h3>
-                                          {liveStudent.firstName
-                                             ? `${liveStudent.firstName} ${liveStudent.lastName}`
-                                             : res.student || "–"}
-                                       </h3>
+                                       <h3>{fullName}</h3>
                                        <p>
                                           {res.instructor?.firstName
                                              ? `cu ${res.instructor.firstName} ${res.instructor.lastName}`
@@ -1003,6 +1277,7 @@ export default function StudentInfoPopup({ student, onClose }) {
                </>
             )}
 
+            {/* CANCELLED */}
             {tab === "cancelled" && (
                <>
                   {!loading && myCancelledAsc.length === 0 && (
@@ -1012,52 +1287,44 @@ export default function StudentInfoPopup({ student, onClose }) {
                   {!loading && myCancelledAsc.length > 0 && (
                      <div className="students-info__list-wrapper">
                         <div className="students-info__list">
-                           {myCancelledAsc.map((res, index) => {
-                              const status = res.status || "cancelled";
-                              return (
-                                 <div
-                                    key={
-                                       (res.id ?? res._id ?? "res") +
-                                       "-" +
-                                       index
-                                    }
-                                    onClick={() =>
-                                       openSubPopup("reservationEdit", {
-                                          reservationId: res.id,
-                                       })
-                                    }
-                                    className={`students-info__item students-info__item--${status}`}
-                                 >
-                                    <div className="students-info__item-left">
-                                       <h3>
-                                          {liveStudent.firstName
-                                             ? `${liveStudent.firstName} ${liveStudent.lastName}`
-                                             : res.student || "–"}
-                                       </h3>
-                                       <p>
-                                          {res.instructor?.firstName
-                                             ? `cu ${res.instructor.firstName} ${res.instructor.lastName}`
-                                             : "fără instructor"}
-                                       </p>
-                                       <span>
-                                          {fmtIsoDDMMYYYY_HHMM(res.startTime)}
-                                       </span>
-                                    </div>
-                                    <div className="students-info__item-right">
-                                       <ReactSVG
-                                          className="students-info__item-icon cancelled"
-                                          src={cancelIcon}
-                                       />
-                                    </div>
+                           {myCancelledAsc.map((res, index) => (
+                              <div
+                                 key={
+                                    (res.id ?? res._id ?? "res") + "-" + index
+                                 }
+                                 onClick={() =>
+                                    openSubPopup("reservationEdit", {
+                                       reservationId: res.id,
+                                    })
+                                 }
+                                 className="students-info__item students-info__item--cancelled"
+                              >
+                                 <div className="students-info__item-left">
+                                    <h3>{fullName}</h3>
+                                    <p>
+                                       {res.instructor?.firstName
+                                          ? `cu ${res.instructor.firstName} ${res.instructor.lastName}`
+                                          : "fără instructor"}
+                                    </p>
+                                    <span>
+                                       {fmtIsoDDMMYYYY_HHMM(res.startTime)}
+                                    </span>
                                  </div>
-                              );
-                           })}
+                                 <div className="students-info__item-right">
+                                    <ReactSVG
+                                       className="students-info__item-icon cancelled"
+                                       src={cancelIcon}
+                                    />
+                                 </div>
+                              </div>
+                           ))}
                         </div>
                      </div>
                   )}
                </>
             )}
 
+            {/* ATTEMPTS */}
             {tab === "attempts" && (
                <div className="students-info__attempts">
                   {attemptsLoading && <p>Se încarcă încercările…</p>}
@@ -1082,17 +1349,18 @@ export default function StudentInfoPopup({ student, onClose }) {
                      !attemptsError &&
                      attempts.length > 0 && (
                         <div className="students-info__list students-info__list--attempts">
-                           {attempts.slice(0, 50).map((a) => {
-                              const status = (
-                                 a.status || "UNKNOWN"
+                           {attempts.slice(0, 50).map((a, idx) => {
+                              const eid = a.examId ?? a.id;
+                              const status = String(
+                                 a.status || "UNKNOWN",
                               ).toLowerCase();
+
                               const started = a.startedAt
                                  ? fmtIsoDDMMYYYY_HHMM(a.startedAt)
                                  : "–";
                               const finished = a.finishedAt
                                  ? fmtIsoDDMMYYYY_HHMM(a.finishedAt)
                                  : null;
-
                               const lineLeft = finished
                                  ? `${started} → ${finished}`
                                  : started;
@@ -1102,15 +1370,11 @@ export default function StudentInfoPopup({ student, onClose }) {
                                     ? `${Math.round(a.scorePct)}%`
                                     : a.correct != null && a.total != null
                                       ? `${a.correct}/${a.total}`
-                                      : a.correct != null && a.wrong != null
-                                        ? `${a.correct} corecte / ${a.wrong} greșite`
-                                        : "–";
-
-                              const eid = a.examId ?? a.id;
+                                      : "–";
 
                               return (
                                  <div
-                                    key={a.id}
+                                    key={(a.id ?? eid ?? "attempt") + "-" + idx}
                                     className={`students-info__attempt students-info__attempt--${status}`}
                                     style={{
                                        position: "relative",

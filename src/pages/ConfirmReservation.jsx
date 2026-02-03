@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ReactSVG } from "react-svg";
 
 import DarkModeToggle from "../components/Header/DarkModeToggle";
-import M3Link from "../components/UI/M3Link";
+import M3Link from "../components/Common/M3Link";
 import AlertPills from "../components/Utils/AlertPills";
 
 import { confirmReservationPresence } from "../api/notificationsService";

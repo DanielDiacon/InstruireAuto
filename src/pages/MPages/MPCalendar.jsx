@@ -58,10 +58,6 @@ function MPCalendar() {
 
    return (
       <>
-         <Header links={links}>
-            <SubPopup />
-            <Popup />
-         </Header>
          <main className="main">
             <ACalendarViewOptimized />
          </main>

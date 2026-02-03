@@ -1,21 +1,18 @@
-// src/components/Students/StudentsManager.jsx
 import React, { useState, useEffect, useContext, useMemo } from "react";
-import { ReactSVG } from "react-svg";
-import addIcon from "../../assets/svg/add-s.svg";
-import arrowIcon from "../../assets/svg/arrow-s.svg";
-import searchIcon from "../../assets/svg/search.svg";
+
 import { UserContext } from "../../UserContext";
 import { useDispatch, useSelector } from "react-redux";
 import { fetchStudents } from "../../store/studentsSlice";
 import { openPopup } from "../Utils/popupStore";
+
+import StudentItem from "../Common/StudentItem";
+import SearchToggle from "../Common/SearchToggle";
 
 const PAGE_SIZE = 16;
 const PAGE_SIZE_MOBILE = 8;
 const MOBILE_BP = 768;
 
 /* ===================== Helpers ===================== */
-const escapeRegExp = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 const firstLetter = (v) =>
    String(v || "")
       .trim()
@@ -27,7 +24,6 @@ function getInitials(student) {
 
    const a = firstLetter(fn);
    const b = firstLetter(ln);
-
    if (a && b) return (a + b).toUpperCase();
 
    const two = fn.slice(0, 2);
@@ -61,32 +57,26 @@ function useIsMobile(bp = MOBILE_BP) {
 }
 
 function hashStringToUInt(str) {
-   // deterministic, fast
    let h = 0;
    for (let i = 0; i < str.length; i++) {
       h = (h * 31 + str.charCodeAt(i)) | 0;
    }
-   return h >>> 0; // make unsigned
+   return h >>> 0;
 }
 
-/**
- * Avatar colors: same hue & saturation per family, many lightness steps.
- * (pastel, în aceeași "familie" de culori)
- */
+/* Avatar palette */
 const AVATAR_HUES = [
-   { h: 70, s: 75 }, // lime
-   { h: 0, s: 100 }, // red
-   { h: 30, s: 100 }, // orange
-   { h: 54, s: 95 }, // yellow
-   { h: 130, s: 65 }, // green
-   { h: 210, s: 90 }, // blue
-   { h: 255, s: 98 }, // indigo
-   { h: 285, s: 100 }, // purple
-   { h: 330, s: 96 }, // pink
+   { h: 70, s: 75 },
+   { h: 0, s: 100 },
+   { h: 30, s: 100 },
+   { h: 54, s: 95 },
+   { h: 130, s: 65 },
+   { h: 210, s: 90 },
+   { h: 255, s: 98 },
+   { h: 285, s: 100 },
+   { h: 330, s: 96 },
 ];
-
 const AVATAR_LIGHTNESSES = [94, 92, 90, 88, 86, 84, 82, 80, 78, 76, 74];
-
 const AVATAR_COLORS = AVATAR_HUES.flatMap(({ h, s }) =>
    AVATAR_LIGHTNESSES.map((l) => `hsl(${h} ${s}% ${l}%)`),
 );
@@ -95,22 +85,13 @@ function getRandomAvatarColor() {
    return AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 }
 
-/**
- * Culoare din nume:
- * - dacă există cel puțin o literă (Unicode \p{L}), returnează o culoare deterministică
- * - dacă nu există nicio literă, returnează null (adică intră pe random)
- */
 function getAvatarColorFromName(student) {
    const fullName =
       `${student?.firstName || ""} ${student?.lastName || ""}`.trim();
-
-   // "are măcar o literă?"
    const hasLetter = /\p{L}/u.test(fullName);
    if (!hasLetter) return null;
 
-   // normalize ca să fie stabil și cu diacritice
    const normalized = fullName.normalize("NFKD");
-
    const idx = hashStringToUInt(normalized) % AVATAR_COLORS.length;
    return AVATAR_COLORS[idx];
 }
@@ -155,7 +136,6 @@ function StudentsManager() {
       );
    }, [students, query]);
 
-   // reset la pageSize când schimbi căutarea / vin date noi / se schimbă breakpoint-ul
    useEffect(() => {
       setVisibleCount(pageSize);
    }, [query, students, pageSize]);
@@ -165,47 +145,17 @@ function StudentsManager() {
       [filteredStudents, visibleCount],
    );
 
-   /**
-    * Color map:
-    * - name-based color dacă există litere
-    * - altfel random (stabil cât timp filteredStudents nu se schimbă)
-    */
    const avatarColorByKey = useMemo(() => {
       const m = new Map();
 
       filteredStudents.forEach((s, idx) => {
+         const key = String(s.id ?? s.email ?? s.phone ?? `__idx_${idx}`);
          const det = getAvatarColorFromName(s);
-         if (det) {
-            m.set(String(s.id ?? s.email ?? s.phone ?? `__idx_${idx}`), det);
-            return;
-         }
-         // no letters -> random
-         m.set(
-            String(s.id ?? s.email ?? s.phone ?? `__idx_${idx}`),
-            getRandomAvatarColor(),
-         );
+         m.set(key, det || getRandomAvatarColor());
       });
 
       return m;
    }, [filteredStudents]);
-
-   function highlightText(text, q) {
-      const qq = String(q || "").trim();
-      if (!qq) return text;
-
-      const safe = escapeRegExp(qq);
-      const parts = String(text || "").split(new RegExp(`(${safe})`, "gi"));
-
-      return parts.map((part, index) =>
-         part.toLowerCase() === qq.toLowerCase() ? (
-            <i key={index} className="highlight">
-               {part}
-            </i>
-         ) : (
-            part
-         ),
-      );
-   }
 
    const totalResults = filteredStudents.length;
    const canLoadMore = visibleCount < totalResults;
@@ -218,38 +168,33 @@ function StudentsManager() {
    const nextBatch = Math.min(pageSize, remaining);
 
    return (
-      <div className="students">
+      <div className="studentsUI">
          {/* Header */}
-         <div className={`groups__header ${search.open ? "open" : ""}`}>
-            <h2>Studenți</h2>
-            <div className="groups__right">
-               <div className="groups__search">
-                  <input
-                     type="text"
-                     placeholder="Caută student..."
-                     className="groups__input"
-                     value={search.query}
-                     onChange={(e) =>
-                        setSearch({ ...search, query: e.target.value })
-                     }
-                  />
-                  <button
-                     onClick={() =>
-                        setSearch({ ...search, open: !search.open })
-                     }
-                  >
-                     <ReactSVG
-                        className={`groups__icon ${search.open ? "rotate45" : ""}`}
-                        src={search.open ? addIcon : searchIcon}
-                     />
-                  </button>
-               </div>
+         <div className={`studentsUI__header ${search.open ? "is-open" : ""}`}>
+            <h2 className="studentsUI__title">Studenți</h2>
+
+            <div className="studentsUI__right">
+               <SearchToggle
+                  open={search.open}
+                  value={search.query}
+                  onValueChange={(val) =>
+                     setSearch((s) => ({ ...s, query: val }))
+                  }
+                  onToggle={() => setSearch((s) => ({ ...s, open: !s.open }))}
+                  placeholder="Caută student..."
+                  wrapperClassName="studentsUI__search"
+                  inputClassName="studentsUI__input"
+                  buttonClassName="studentsUI__iconBtn"
+                  iconClassName={`studentsUI__icon ${search.open ? "is-rotated" : ""}`}
+                  titleOpen="Închide căutarea"
+                  titleClosed="Caută"
+               />
             </div>
          </div>
 
          {/* Grid */}
-         <div className="students__grid-wrapper">
-            <div className="students__grid">
+         <div className="studentsUI__gridWrap">
+            <div className="studentsUI__grid">
                {loading && (
                   <p style={{ gridColumn: "1 / -1" }}>
                      Se încarcă studenții...
@@ -272,70 +217,22 @@ function StudentsManager() {
                         avatarColorByKey.get(key) || getRandomAvatarColor();
 
                      return (
-                        <div
+                        <StudentItem
                            key={student.id ?? key}
-                           className="students__item"
-                           onClick={() => handleOpenStudentPopup(student)}
-                           role="button"
-                           tabIndex={0}
-                           onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                 e.preventDefault();
-                                 handleOpenStudentPopup(student);
-                              }
-                           }}
-                        >
-                           <div
-                              className="students__avatar"
-                              aria-hidden="true"
-                              style={{
-                                 background: color,
-                                 color: "var(--black-p)",
-                              }}
-                           >
-                              <span>{getInitials(student)}</span>
-                           </div>
-
-                           <div className="students__info">
-                              <h3>
-                                 {highlightText(
-                                    `${student.firstName} ${student.lastName}`,
-                                    search.query,
-                                 )}
-                              </h3>
-                              <p>
-                                 {highlightText(
-                                    student.phone || "–",
-                                    search.query,
-                                 )}
-                              </p>
-                           </div>
-
-                           <div className="students__chev" aria-hidden="true">
-                              <ReactSVG
-                                 className="students__chev-icon"
-                                 src={arrowIcon}
-                              />
-                           </div>
-                        </div>
+                           student={student}
+                           color={color}
+                           initials={getInitials(student)}
+                           onOpen={handleOpenStudentPopup}
+                           highlightQuery={search.query}
+                           highlightClassName="studentItem__highlight"
+                        />
                      );
                   })}
 
                {/* Load more */}
                {!loading && !error && totalResults > 0 && (
-                  <div
-                     style={{
-                        gridColumn: "1 / -1",
-                        display: "flex",
-                        justifyContent: "center",
-                        padding: "10px 0 0",
-                        gap: 12,
-                        alignItems: "center",
-                        flexWrap: "wrap",
-                        color: "var(--white-s)",
-                     }}
-                  >
-                     <span style={{ opacity: 0.7 }}>
+                  <div className="studentsUI__footer">
+                     <span className="studentsUI__counter">
                         Afișate {Math.min(visibleCount, totalResults)} din{" "}
                         {totalResults}
                      </span>
@@ -343,7 +240,7 @@ function StudentsManager() {
                      {canLoadMore && (
                         <button
                            type="button"
-                           className="students__load-more"
+                           className="studentsUI__loadMore"
                            onClick={handleLoadMore}
                         >
                            Afișează încă {nextBatch}
@@ -354,15 +251,7 @@ function StudentsManager() {
 
                {/* Empty */}
                {!loading && !error && totalResults === 0 && (
-                  <p
-                     style={{
-                        gridColumn: "1 / -1",
-                        opacity: 0.7,
-                        color: "var(--white-s)",
-                     }}
-                  >
-                     Nu s-au găsit studenți.
-                  </p>
+                  <p className="studentsUI__empty">Nu s-au găsit studenți.</p>
                )}
             </div>
          </div>

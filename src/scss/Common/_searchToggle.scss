@@ -1,0 +1,43 @@
+.uiSearchToggle {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  align-items: center;
+
+  &__input {
+    transition: var(--elastic-s);
+    background: var(--black-p);
+    color: var(--white-p);
+    border-radius: 25px;
+
+    width: 0%;
+    opacity: 0;
+    padding: 12px 0;
+    margin-left: -100px;
+
+    border: 0;
+    outline: none;
+  }
+
+  &__icon {
+    div {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    &.is-rotated svg {
+      rotate: 45deg;
+    }
+  }
+
+  &.is-open {
+    .uiSearchToggle__input {
+      opacity: 1;
+      padding: 12px 20px;
+      margin-left: 0px;
+      width: 100%;
+    }
+  }
+}

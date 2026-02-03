@@ -23,7 +23,7 @@ import {
 import { getInstructors } from "../api/instructorsService";
 
 import NextLesson from "../components/SPanel/NextLesson";
-import ClockDisplay from "../components/UI/ClockDisplay";
+import ClockDisplay from "../components/Common/ClockDisplay";
 
 import accIcon from "../assets/svg/acc.svg";
 import calendarIcon from "../assets/svg/mdi--calendar-outline.svg";
@@ -284,10 +284,6 @@ function IPanel() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
-
          <main className="main">
             <section className="home__instructor">
                <TodayInfo />

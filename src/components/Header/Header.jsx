@@ -18,8 +18,9 @@ import DarkModeToggle from "./DarkModeToggle";
 import { UserContext } from "../../UserContext";
 import { getInstructors } from "../../api/instructorsService";
 
-/* ===================== helpers ===================== */
+import { getLinksForRole } from "./navLinks";
 
+/* ===================== helpers ===================== */
 function useIsMobile(bp = 992) {
    const [isMobile, setIsMobile] = useState(() => {
       if (typeof window === "undefined") return false;
@@ -44,12 +45,24 @@ function useIsMobile(bp = 992) {
    return isMobile;
 }
 
-/* ===================== component ===================== */
+const ROOT_LINKS = [
+   "/admin",
+   "/manager",
+   "/instructor",
+   "/student",
+   "/professor",
+];
+const isRootLink = (link) => ROOT_LINKS.includes(link);
 
-const Header = ({ children, links = [] }) => {
+/* ===================== component ===================== */
+const Header = ({ children }) => {
    const { user } = useContext(UserContext);
-const TABLET_BP =  992; // corespunde cu $tablet: 991.98px
-const isMobile = useIsMobile(TABLET_BP);
+
+   // ✅ links vin din Header, nu din pagini
+   const links = useMemo(() => getLinksForRole(user?.role), [user?.role]);
+
+   const TABLET_BP = 992;
+   const isMobile = useIsMobile(TABLET_BP);
    const [mobileOpen, setMobileOpen] = useState(false);
 
    const [displayName, setDisplayName] = useState({
@@ -57,7 +70,6 @@ const isMobile = useIsMobile(TABLET_BP);
       lastName: "",
    });
 
-   // role icon/label
    let iconSrc = studentIcon;
    let roleLabel = "Student";
 
@@ -75,7 +87,6 @@ const isMobile = useIsMobile(TABLET_BP);
       roleLabel = "Professor";
    }
 
-   // resolve name (instructor special case)
    useEffect(() => {
       let cancelled = false;
 
@@ -91,7 +102,9 @@ const isMobile = useIsMobile(TABLET_BP);
          if (user.role === "INSTRUCTOR") {
             try {
                const list = await getInstructors();
-               const mine = list.find((i) => i.userId === user.id);
+               const mine = list.find(
+                  (i) => String(i.userId) === String(user.id),
+               );
                if (mine) {
                   firstName = mine.firstName || firstName || "";
                   lastName = mine.lastName || lastName || "";
@@ -110,7 +123,6 @@ const isMobile = useIsMobile(TABLET_BP);
       };
    }, [user]);
 
-   // close menu when leaving mobile
    useEffect(() => {
       if (!isMobile && mobileOpen) setMobileOpen(false);
    }, [isMobile, mobileOpen]);
@@ -147,13 +159,7 @@ const isMobile = useIsMobile(TABLET_BP);
          <li key={`${item.text}-${i}`} className="menu__item">
             <RouterLink
                to={item.link || "#"}
-               end={[
-                  "/admin",
-                  "/manager",
-                  "/instructor",
-                  "/student",
-                  "/professor",
-               ].includes(item.link)}
+               end={isRootLink(item.link)}
                className={({ isActive }) =>
                   `menu__link ${isActive ? "menu__link--active" : ""}`
                }
@@ -166,7 +172,7 @@ const isMobile = useIsMobile(TABLET_BP);
       );
    };
 
-   // desktop grid rows (pt varianta desktop)
+   // desktop rows (dacă mai ai nevoie de grid)
    const cols = 4;
    const openRows = Math.max(1, Math.ceil(((links?.length || 0) + 1) / cols));
 
@@ -200,7 +206,6 @@ const isMobile = useIsMobile(TABLET_BP);
                      className={`header__menu menu ${mobileOpen ? "menu--open" : ""}`}
                   >
                      <nav className="menu__body" id="navbar">
-                        {/* ===================== MOBILE ===================== */}
                         {isMobile ? (
                            <>
                               <div
@@ -211,17 +216,14 @@ const isMobile = useIsMobile(TABLET_BP);
                                     <DarkModeToggle />
                                  </ul>
                                  <span className="menu__drawer-hr"></span>
-                                 {/* ✅ LISTA COMPLETĂ în drawer (inclusiv primele 3) */}
+
                                  {Array.isArray(links) && links.length > 0 && (
                                     <ul className="menu__drawer-list">
                                        {links.map(renderItem)}
                                     </ul>
                                  )}
-
-                                 {/* settings în drawer */}
                               </div>
 
-                              {/* bottom bar: 3 links + burger (în același UL) */}
                               <ul className="menu__bar">
                                  {primaryLinks.map(renderItem)}
 
@@ -237,6 +239,7 @@ const isMobile = useIsMobile(TABLET_BP);
                                        }
                                        aria-expanded={mobileOpen}
                                     >
+                                       {/* iconurile tale burger rămân la fel */}
                                        <svg
                                           className="menu__burger-icon menu__burger-icon--open"
                                           xmlns="http://www.w3.org/2000/svg"
@@ -267,7 +270,6 @@ const isMobile = useIsMobile(TABLET_BP);
                               </ul>
                            </>
                         ) : (
-                           /* ===================== DESKTOP ===================== */
                            <>
                               <ul
                                  className="menu__list"
@@ -276,7 +278,6 @@ const isMobile = useIsMobile(TABLET_BP);
                                  {links.map(renderItem)}
                               </ul>
 
-                              {/* settings jos pe desktop */}
                               <div className="settings__wrapper">
                                  <ul className="header__settings settings pc">
                                     <DarkModeToggle />

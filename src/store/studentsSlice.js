@@ -50,7 +50,7 @@ export const updateStudent = createAsyncThunk(
   "students/updateStudent",
   async ({ id, data }) => {
     const updatedUser = await updateUser(id, data);
-    return updatedUser;
+    return updatedUser?.data ?? updatedUser;
   }
 );
 
@@ -119,8 +119,22 @@ const studentsSlice = createSlice({
       })
       // UPDATE
       .addCase(updateStudent.fulfilled, (state, action) => {
-        const idx = state.list.findIndex((s) => s.id === action.payload.id);
-        if (idx !== -1) state.list[idx] = action.payload;
+        const u = action.payload || {};
+        const id = u.id ?? action.meta?.arg?.id;
+        if (id == null) return;
+        const idx = state.list.findIndex((s) => String(s.id) === String(id));
+        if (idx !== -1) {
+          state.list[idx] = { ...state.list[idx], ...u, id };
+        } else {
+          state.list.push({ ...u, id });
+        }
+
+        if (
+          state.currentStudent &&
+          String(state.currentStudent.id) === String(id)
+        ) {
+          state.currentStudent = { ...state.currentStudent, ...u, id };
+        }
       })
       // DELETE
       .addCase(removeStudent.fulfilled, (state, action) => {

@@ -1,0 +1,73 @@
+.uiConfirmDelete {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+
+  &.is-full {
+    width: 100%;
+  }
+
+  button {
+    border: 0;
+    outline: none;
+    cursor: pointer;
+    user-select: none;
+    transition: var(--classic-s);
+  }
+
+  &__danger {
+    width: 100%;
+    border-radius: 24px;
+    padding: 12px 20px;
+    background: var(--red-t);
+    color: var(--red-d);
+
+    &:hover {
+      transition: all var(--elastic-s), background var(--classic-s);
+      background: var(--red-l);
+      color: var(--red-d);
+      padding: 12px 24px;
+      border-radius: 24px;
+    }
+
+    &:active {
+      transition: all var(--elastic-s), background var(--classic-s);
+      transform: scale(0.97);
+      padding: 12px 24px;
+      border-radius: 24px;
+    }
+
+    &:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+  }
+
+  &__cancel {
+    width: 100%;
+    border-radius: 24px;
+    padding: 12px 20px;
+    background: var(--black-s);
+    color: var(--white-p);
+
+    &:hover {
+      transition: all var(--elastic-s), background var(--classic-s);
+      background: var(--black-s);
+      color: var(--white-p);
+      padding: 12px 24px;
+      border-radius: 24px;
+    }
+
+    &:active {
+      transition: all var(--elastic-s), background var(--classic-s);
+      transform: scale(0.97);
+      padding: 12px 24px;
+      border-radius: 24px;
+    }
+
+    &:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+  }
+}

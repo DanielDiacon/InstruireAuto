@@ -31,7 +31,7 @@ import { fetchInstructors } from "../store/instructorsSlice";
 import StudentsManager from "../components/APanel/StudentsManager";
 import GroupManager from "../components/APanel/GroupManager";
 import InstructorManager from "../components/APanel/InstructorManager";
-import ClockDisplay from "../components/UI/ClockDisplay";
+import ClockDisplay from "../components/Common/ClockDisplay";
 import ReservationHistory from "../components/APanel/ReservationHistory";
 
 import { UserContext } from "../UserContext";
@@ -116,18 +116,13 @@ function APanel() {
 
    return (
       <>
-         <Header links={links}>
-            <SubPopup />
-            <Popup />
-         </Header>
          <main className="main">
-            <section className="home__admin">
+            <section className="home-admin">
                <StudentsManager />
                <GroupManager />
                {/*<ClockDisplay />*/}
             </section>
             <PreloadAppData />
-
             <Footer />
          </main>
          {/*<main className="main">

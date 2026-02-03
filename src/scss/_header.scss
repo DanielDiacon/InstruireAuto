@@ -410,7 +410,7 @@
       gap: 3px;
 
       background: var(--black-t);
-      background: var(--bd);
+      background: var(--blur-bg);
 
       backdrop-filter: blur(20px);
       border-radius: 28px;
@@ -508,7 +508,7 @@
       z-index: 90;
 
       border-radius: 32px;
-      background: var(--bd);
+      background: var(--blur);
       backdrop-filter: blur(20px);
       overflow: hidden;
 
@@ -518,7 +518,7 @@
       flex-direction: column;
 
       // ✅ închis: împins clar în jos (în afara ecranului)
-      transform: translateY(130%) scaleX(0.1);
+      transform: translateY(145%) scaleX(0.1) scaleY(1);
       pointer-events: none;
 
       // ✅ animație vizibilă, fără “delay” ci direct

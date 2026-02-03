@@ -1,0 +1,64 @@
+.uiIconButton {
+  border: 0;
+  outline: none;
+  cursor: pointer;
+  user-select: none;
+  transition: var(--classic-s);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--white-s);
+
+  .uiIconButton__icon {
+    div {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  &--pill {
+    background: var(--black-p);
+    border-radius: 25px;
+    padding: 14px 20px;
+
+    &:hover {
+      transition: all var(--elastic-s), background var(--classic-s);
+      color: var(--accent-l);
+      border-radius: 16px;
+      padding: 14px 22px;
+    }
+
+    &:active {
+      transition: all var(--elastic-s), background var(--classic-s);
+      transform: scale(0.95);
+      padding: 14px 20px;
+      border-radius: 32px;
+    }
+  }
+
+  &--square {
+    background: var(--black-s);
+    border-radius: 24px;
+    padding: 12px;
+
+    svg {
+      height: 18px;
+      width: 18px;
+      transition: var(--elastic-s);
+    }
+
+    &:hover {
+      background: var(--black-t);
+    }
+
+    &:active {
+      transform: scale(0.9);
+    }
+  }
+}

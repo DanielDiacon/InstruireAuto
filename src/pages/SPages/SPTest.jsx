@@ -62,13 +62,13 @@ const formats = {
          return `${l.format(start, "d", culture)}–${l.format(
             end,
             "d",
-            culture
+            culture,
          )} ${shortMonth(start, l, culture)}`;
       }
       return `${l.format(start, "d", culture)} ${shortMonth(
          start,
          l,
-         culture
+         culture,
       )} – ${l.format(end, "d", culture)} ${shortMonth(end, l, culture)}`;
    },
    timeGutterFormat: "HH:mm",
@@ -107,10 +107,6 @@ function SPTest() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
-
          <main className="main">
             <section className="test page">
                <Practice />

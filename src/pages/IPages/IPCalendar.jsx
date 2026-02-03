@@ -234,9 +234,7 @@ function IPCalendar() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
+      
 
          <main className="main">
             {/* IMPORTANT: asigură înălțimea pentru rbc */}

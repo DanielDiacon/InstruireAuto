@@ -24,7 +24,7 @@ import ReservationHistory from "../../components/APanel/ReservationHistory";
 import { UserContext } from "../../UserContext";
 
 function MPHistory() {
-  const links = [
+   const links = [
       { link: "/manager", text: "Acasă", icon: homeIcon },
       { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
       { popup: "addProg", text: "Programare", icon: addIcon },
@@ -85,7 +85,7 @@ function MPHistory() {
 
       const pad2 = (n) => String(n).padStart(2, "0");
       const time = `${start.getHours()}:${pad2(
-         start.getMinutes()
+         start.getMinutes(),
       )} - ${end.getHours()}:${pad2(end.getMinutes())}`;
 
       return {
@@ -105,10 +105,6 @@ function MPHistory() {
 
    return (
       <>
-         <Header links={links}>
-            <SubPopup />
-            <Popup />
-         </Header>
          <main className="main">
             <section className="page-wrapper">
                <ReservationHistory

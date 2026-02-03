@@ -712,6 +712,13 @@
       &__list {
          grid-template-columns: 1fr;
       }
+
+      &__form-row {
+         &--spaced {
+            display: grid;
+            grid-template-columns: 1fr;
+         }
+      }
    }
 }
 

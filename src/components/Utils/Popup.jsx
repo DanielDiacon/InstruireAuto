@@ -204,7 +204,7 @@ export default function Popup() {
             pendingCloseRef.current.handler = handleTransitionEnd;
             panelRef.current.addEventListener(
                "transitionend",
-               handleTransitionEnd
+               handleTransitionEnd,
             );
 
             // ✅ fallback: dacă transitionend nu vine / vine ciudat, închidem după X ms

@@ -193,10 +193,7 @@ function SPCalendar() {
 
    return (
       <>
-         <Header links={links}>
-            <Popup />
-         </Header>
-
+        
          <main className="main">
             <section className="calendar page">
                <SCalendar
