@@ -3250,6 +3250,27 @@ export default function DayviewCanvasTrack({
 
    /* ================== canvas click/dblclick/longpress ================== */
 
+   const resolveInstructorIdForHit = useCallback(
+      (hit) => {
+         if (!hit) return hit?.instructorId ?? null;
+         const idx = hit.instIdx;
+         if (typeof idx === "number" && idx >= 0) {
+            const inst = effectiveInstructors[idx];
+            if (inst && !isGapCol(inst)) {
+               const idStr = String(inst.id ?? "");
+               if (idStr && !idStr.startsWith("__pad_")) return idStr;
+            }
+         }
+         const fallback = hit.instructorId;
+         if (!fallback) return null;
+         const fallbackStr = String(fallback);
+         if (fallbackStr.startsWith("__pad_")) return null;
+         if (fallbackStr.startsWith(GAPCOL_PREFIX)) return null;
+         return fallbackStr;
+      },
+      [effectiveInstructors],
+   );
+
    useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -3308,8 +3329,11 @@ export default function DayviewCanvasTrack({
                setTouchToolbar(null);
             }
          } else if (foundSlotItem) {
+            const resolvedInstructorId =
+               resolveInstructorIdForHit(foundSlotItem);
+            if (!resolvedInstructorId) return;
             const slotPayload = {
-               instructorId: foundSlotItem.instructorId,
+               instructorId: resolvedInstructorId,
                slotStart: foundSlotItem.slotStart,
                slotEnd: foundSlotItem.slotEnd,
             };
@@ -3339,7 +3363,7 @@ export default function DayviewCanvasTrack({
 
       canvas.addEventListener("click", handleClick);
       return () => canvas.removeEventListener("click", handleClick);
-   }, [openRangePanelFromSlot]);
+   }, [openRangePanelFromSlot, resolveInstructorIdForHit]);
 
    useEffect(() => {
       const canvas = canvasRef.current;
@@ -3380,7 +3404,7 @@ export default function DayviewCanvasTrack({
                            : (noteObj && noteObj.text) || "";
 
                      setWaitEdit({
-                        instId: item.instructorId,
+                        instId: resolveInstructorIdForHit(item),
                         slotIndex,
                         x: item.x,
                         y: item.y,
@@ -3397,8 +3421,11 @@ export default function DayviewCanvasTrack({
                   item.kind === "empty-slot" &&
                   typeof onCreateSlot === "function"
                ) {
+                  const resolvedInstructorId =
+                     resolveInstructorIdForHit(item);
+                  if (!resolvedInstructorId) return;
                   const slotPayload = {
-                     instructorId: item.instructorId,
+                     instructorId: resolvedInstructorId,
                      slotStart: item.slotStart,
                      slotEnd: item.slotEnd,
                   };
@@ -3408,7 +3435,7 @@ export default function DayviewCanvasTrack({
                   setGlobalSelection({ event: null, slot: slotPayload });
 
                   const payload = {
-                     instructorId: item.instructorId,
+                     instructorId: resolvedInstructorId,
                      start: new Date(item.slotStart),
                      end: new Date(item.slotEnd),
                   };
@@ -3428,6 +3455,7 @@ export default function DayviewCanvasTrack({
       reloadWaitNotes,
       openStudentPopup,
       openReservationPopup,
+      resolveInstructorIdForHit,
    ]);
 
    useEffect(() => {
@@ -3478,8 +3506,10 @@ export default function DayviewCanvasTrack({
          }
 
          if (hit.kind === "empty-slot" || hit.kind === "wait-slot") {
+            const resolvedInstructorId = resolveInstructorIdForHit(hit);
+            if (!resolvedInstructorId) return;
             const slotPayload = {
-               instructorId: hit.instructorId,
+               instructorId: resolvedInstructorId,
                slotStart: hit.slotStart,
                slotEnd: hit.slotEnd,
             };

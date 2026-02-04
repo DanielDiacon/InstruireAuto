@@ -272,6 +272,24 @@ function AddInstr() {
       dispatch(fetchUsers());
    }, [status, dispatch]);
 
+   const carsByInstructorId = useMemo(() => {
+      const m = new Map();
+      (cars || []).forEach((c) => {
+         const key = String(c.instructorId ?? "");
+         if (key) m.set(key, c);
+      });
+      return m;
+   }, [cars]);
+
+   const carsByPlate = useMemo(() => {
+      const m = new Map();
+      (cars || []).forEach((c) => {
+         const plate = normPlate(c.plateNumber);
+         if (plate) m.set(plate, c);
+      });
+      return m;
+   }, [cars]);
+
    const filteredInstructors = useMemo(() => {
       return instructors.filter((inst) => {
          const q = (search || "").toLowerCase();
@@ -281,9 +299,7 @@ function AddInstr() {
          const email = mergedEmail(inst).toLowerCase();
          const phone = String(inst.phone || "").toLowerCase();
          const sector = String(inst.sector || "").toLowerCase();
-         const car = cars.find(
-            (c) => String(c.instructorId) === String(inst.id),
-         );
+         const car = carsByInstructorId.get(String(inst.id));
          const plate = String(car?.plateNumber || "").toLowerCase();
          return (
             fullName.includes(q) ||
@@ -293,17 +309,37 @@ function AddInstr() {
             plate.includes(q)
          );
       });
-   }, [instructors, cars, search, mergedEmail]);
+   }, [instructors, carsByInstructorId, search, mergedEmail]);
 
    // car helpers
    const upsertCarForInstructor = async ({ instructorId, plate, gearbox }) => {
       const normalizedPlate = normPlate(plate);
-      const existing = cars.find(
-         (c) => String(c.instructorId) === String(instructorId),
-      );
+      const existing = carsByInstructorId.get(String(instructorId));
 
       if (!normalizedPlate) {
          if (existing) await dispatch(removeCar(existing.id)).unwrap();
+         return;
+      }
+
+      const dupByPlate = carsByPlate.get(normalizedPlate);
+      if (
+         dupByPlate &&
+         String(dupByPlate.instructorId) !== String(instructorId)
+      ) {
+         // reatribuie direct mașina către instructorul curent
+         await dispatch(
+            updateCar({
+               id: dupByPlate.id,
+               plateNumber: dupByPlate.plateNumber,
+               instructorId,
+               gearbox: toApiGearbox(gearbox),
+            }),
+         ).unwrap();
+
+         // dacă instructorul avea altă mașină, o ștergem
+         if (existing && String(existing.id) !== String(dupByPlate.id)) {
+            await dispatch(removeCar(existing.id)).unwrap();
+         }
          return;
       }
 
@@ -341,11 +377,7 @@ function AddInstr() {
          if (dupInUsers || dupInInstructors)
             errs.push("Emailul este deja folosit.");
       }
-      const plate = normPlate(newInstr.carPlate);
-      if (plate) {
-         const dupPlate = cars.some((c) => normPlate(c.plateNumber) === plate);
-         if (dupPlate) errs.push("Numărul de înmatriculare este deja folosit.");
-      }
+      // nu mai blocăm numărul de înmatriculare; la salvare se reatribuie
       return errs;
    };
 
@@ -373,15 +405,7 @@ function AddInstr() {
          if (dupInUsers || dupInInstructors)
             errs.push("Emailul este deja folosit de alt utilizator.");
       }
-      const plate = normPlate(editInstr.carPlate);
-      if (plate) {
-         const dupPlate = cars.some(
-            (c) =>
-               String(c.instructorId) !== String(id) &&
-               normPlate(c.plateNumber) === plate,
-         );
-         if (dupPlate) errs.push("Numărul de înmatriculare este deja folosit.");
-      }
+      // nu mai blocăm numărul de înmatriculare; la salvare se reatribuie
       return errs;
    };
 
@@ -824,9 +848,7 @@ function AddInstr() {
       if (!window.confirm("Ești sigur că vrei să ștergi acest instructor?"))
          return;
       try {
-         const existing = cars.find(
-            (c) => String(c.instructorId) === String(id),
-         );
+         const existing = carsByInstructorId.get(String(id));
          if (existing) await dispatch(removeCar(existing.id)).unwrap();
       } catch {}
       dispatch(removeInstructor(id));
@@ -961,7 +983,7 @@ function AddInstr() {
                                              </div>
 
                                              {/* rând 3 */}
-                                             <div className="instructors-popup__form-row">
+                                             {/*<div className="instructors-popup__form-row">
                                                 <input
                                                    type="text"
                                                    className="instructors-popup__input"
@@ -975,7 +997,7 @@ function AddInstr() {
                                                    }
                                                    autoComplete="off"
                                                 />
-                                             </div>
+                                             </div>*/}
                                              {/* rând 4 */}
                                              <div className="instructors-popup__form-row">
                                                 <input
@@ -1515,20 +1537,16 @@ function AddInstr() {
                                           </p>
                                           <p>
                                              {highlightText(
-                                                cars.find(
-                                                   (c) =>
-                                                      String(c.instructorId) ===
-                                                      String(inst.id),
+                                                carsByInstructorId.get(
+                                                   String(inst.id),
                                                 )?.plateNumber || "—",
                                                 search,
                                              )}
                                           </p>
                                           <p>
                                              {highlightText(
-                                                cars.find(
-                                                   (c) =>
-                                                      String(c.instructorId) ===
-                                                      String(inst.id),
+                                                carsByInstructorId.get(
+                                                   String(inst.id),
                                                 )?.gearbox || "—",
                                                 search,
                                              )}
@@ -1554,11 +1572,10 @@ function AddInstr() {
                                                    inst.userId || null,
                                                 );
 
-                                                const car = cars.find(
-                                                   (c) =>
-                                                      String(c.instructorId) ===
+                                                const car =
+                                                   carsByInstructorId.get(
                                                       String(inst.id),
-                                                );
+                                                   );
 
                                                 setEditInstr({
                                                    firstName:

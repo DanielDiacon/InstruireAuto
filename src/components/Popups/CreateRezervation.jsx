@@ -1281,7 +1281,8 @@ export default function CreateRezervation({
          }
 
          try {
-            scheduleCalendarRefresh({
+            // trimitem imediat patch-ul ca să se vadă instant în calendar
+            triggerCalendarRefresh({
                source: "popup",
                type: "blackout-slot-patch",
                instructorId: String(instructorId),
@@ -1292,12 +1293,17 @@ export default function CreateRezervation({
          } catch {}
 
          try {
-            scheduleCalendarRefresh({
-               source: "popup",
-               type: "blackouts-changed",
-               instructorId: String(instructorId),
-               forceReload: false,
-            });
+            // confirmare async (refetch cache) fără să suprascrie patch-ul
+            setTimeout(() => {
+               try {
+                  scheduleCalendarRefresh({
+                     source: "popup",
+                     type: "blackouts-changed",
+                     instructorId: String(instructorId),
+                     forceReload: false,
+                  });
+               } catch {}
+            }, 0);
          } catch {}
 
          closeSelf();

@@ -1027,6 +1027,7 @@ export function drawAll({
                      h: slotH,
                      kind: "empty-slot",
                      instructorId: instId,
+                     instIdx,
                      slotStart: slotStartDate.toISOString(),
                      slotEnd: slotEndDate.toISOString(),
                   });
@@ -1044,6 +1045,7 @@ export function drawAll({
                      h: slotH,
                      kind: "wait-slot",
                      instructorId: instId,
+                     instIdx,
                      slotIndex: globalIdx,
                      slotStart: slotStartDate.toISOString(),
                      slotEnd: slotEndDate.toISOString(),
