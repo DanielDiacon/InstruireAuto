@@ -14,7 +14,6 @@ import apiClientService from "../../api/ApiClientService";
 import { createReservationsForUser } from "../../api/reservationsService";
 
 import { fetchStudents } from "../../store/studentsSlice";
-import { fetchInstructors } from "../../store/instructorsSlice";
 
 /* ===================== config ===================== */
 
@@ -22,16 +21,16 @@ const GROUP_TOKEN_FIXED = "ABCD1234";
 const EMAIL_DOMAIN = "instrauto.com";
 const MOLDOVA_TZ = "Europe/Chisinau";
 
-/**
- * IMPORTANT:
- * - Fișierul tău nou are startTime cu "...Z", DAR ora din string e deja ora locală Moldova.
- * - Ca să NU se decaleze cu 2-3 ore, tratăm "Z" ca local (NU UTC).
- */
-const ASSUME_Z_IS_LOCAL = true;
-
 // persist map + progres (ca să poți continua)
-const LS_USER_MAP = "__MIG_FEBRUARIE_USER_MAP_V1";
-const LS_RES_INDEX = "__MIG_FEBRUARIE_RES_INDEX_V1";
+const LS_USER_MAP = "__MIG_FEBRUARIE_USER_MAP_V2";
+const LS_RES_INDEX = "__MIG_FEBRUARIE_RES_INDEX_V2";
+
+/**
+ * STRICT MODE:
+ * - dacă nu putem rezolva user / instructor / startTime => oprim importul (NU facem SKIP),
+ *   ca să nu pierzi nici o rezervare fără să observi.
+ */
+const STRICT_STOP_ON_ERROR = true;
 
 /* ===================== small helpers ===================== */
 
@@ -93,22 +92,12 @@ function normalizeNames(firstName, lastName) {
    return { firstName: fn, lastName: ln };
 }
 
-/* ===================== TZ helpers (Z-LOCAL MODE) ===================== */
-/**
- * REGULA (pentru sistemul tău actual):
- * - Noi păstrăm "Z", dar îl considerăm LOCAL (Moldova).
- * - Deci "2026-02-01T07:00:00.000Z" înseamnă "07:00 Moldova",
- *   NU "07:00 UTC".
- *
- * => Ca să nu apară -2h, la import NU facem conversii UTC/offset.
- *    Doar normalizăm formatul la: YYYY-MM-DDTHH:mm:00.000Z
- */
+/* ===================== TZ helpers ===================== */
 
 function pad2(n) {
    return String(n).padStart(2, "0");
 }
 
-// Pentru cazuri în care poate primești un string cu offset și vrei să-l reduci la "ora Moldova"
 function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
    const d = new Date(dateLike);
    if (Number.isNaN(d.getTime())) return null;
@@ -135,34 +124,57 @@ function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
    };
 }
 
-// Parse "YYYY-MM-DDTHH:mm(:ss)?" fără TZ
 function parseLocalNoTz(s) {
    const m = String(s || "")
       .trim()
       .match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/);
    if (!m) return null;
-   return {
-      Y: +m[1],
-      Mo: +m[2],
-      D: +m[3],
-      hh: +m[4],
-      mm: +m[5],
-   };
+   return { Y: +m[1], Mo: +m[2], D: +m[3], hh: +m[4], mm: +m[5] };
 }
 
 function makeZLocalIso(Y, Mo, D, hh, mm) {
    return `${Y}-${pad2(Mo)}-${pad2(D)}T${pad2(hh)}:${pad2(mm)}:00.000Z`;
 }
 
+function hourFromIsoString(s) {
+   const m = String(s || "").match(/T(\d{2}):(\d{2})/);
+   return m ? Number(m[1]) : null;
+}
+
 /**
- * Normalizează startTime pentru backend în modul "Z = local".
+ * AUTO-DETECT pentru fișierele tale:
+ * - unele au "Z" dar ora din string este LOCALĂ (ex: 07:00Z == 07:00 Moldova)
+ * - unele au "Z" dar ora din string este UTC (ex: 05:00Z == 07:00 Moldova)
  *
- * Acceptă:
- * - "2026-02-01T07:00:00.000Z"  (formatul tău nou) => păstrează 07:00, normalizează sec/ms
- * - fără TZ "2026-02-01T07:00"  => îl tratează ca local Moldova și pune Z
- * - cu offset "+02:00/+03:00"   => îl convertește la ora Moldova și pune Z-local
+ * Regula sigură pentru setul tău (ai spus că orele încep de la 07:00):
+ * - dacă în fișier găsim ore <= 06 în startTime, tratăm "Z" ca UTC (necesită shift -> Moldova)
+ * - altfel tratăm "Z" ca LOCAL (nu shift)
  */
-function normalizeStartTimeToSend(startTimeRaw) {
+function detectZIsLocal(reservations = []) {
+   const sample = (reservations || [])
+      .map((r) => String(r?.startTime || "").trim())
+      .filter((s) => s.endsWith("Z"))
+      .slice(0, 400);
+
+   if (!sample.length) return true;
+
+   let minHour = 99;
+   for (const s of sample) {
+      const h = hourFromIsoString(s);
+      if (Number.isFinite(h)) minHour = Math.min(minHour, h);
+   }
+
+   // dacă apar ore de 05/06 în fișier, e aproape sigur UTC
+   return !(minHour <= 6);
+}
+
+/**
+ * Normalizează startTime pentru backend în modul "Z = local" (la import).
+ *
+ * - Dacă fișierul e Z-LOCAL: păstrăm ora exact cum e (07 rămâne 07).
+ * - Dacă fișierul e UTC-Z: convertim în ora Moldova și apoi punem "Z" cu ora locală (05Z -> 07Z).
+ */
+function normalizeStartTimeToSend(startTimeRaw, assumeZIsLocal) {
    const s0 = String(startTimeRaw || "").trim();
    if (!s0) return null;
 
@@ -175,8 +187,8 @@ function normalizeStartTimeToSend(startTimeRaw) {
 
    // 2) se termină cu Z
    if (s0.endsWith("Z")) {
-      // dacă Z = local (cazul tău)
-      if (ASSUME_Z_IS_LOCAL) {
+      // Z-LOCAL: luăm ora din string, fără conversie
+      if (assumeZIsLocal) {
          const noZ = s0.replace(/Z$/, "");
          const noMs = noZ.replace(/\.\d{3}$/, "");
          const p = parseLocalNoTz(noMs);
@@ -184,7 +196,7 @@ function normalizeStartTimeToSend(startTimeRaw) {
          return makeZLocalIso(p.Y, p.Mo, p.D, p.hh, p.mm);
       }
 
-      // (dacă vreodată comuți pe UTC real)
+      // UTC-Z: convertim la ora Moldova și apoi o fixăm în "Z local"
       const p = partsInTZ(s0, MOLDOVA_TZ);
       if (!p) return null;
       return makeZLocalIso(p.y, p.m, p.d, p.H, p.M);
@@ -205,12 +217,13 @@ function normalizeStartTimeToSend(startTimeRaw) {
    return null;
 }
 
-/* ===================== instructor resolving (păstrat) ===================== */
+/* ===================== instructor resolving ===================== */
 
 function extractInstructorCandidatesFromField(field) {
    let s = String(field || "").trim();
    if (!s) return [];
 
+   // ex: "Rodideal Cristian / BOT" -> spargem /
    s = s.replace(/([a-zăîâșț])([A-Z]{2,4})/g, "$1 $2");
    const parts = s
       .split("/")
@@ -228,9 +241,24 @@ function extractInstructorCandidatesFromField(field) {
       .filter(Boolean);
 }
 
-function resolveInstructorIdFromReservation(res, instructors) {
+/**
+ * IMPORTANT:
+ * - Nu ne bazăm pe lista din Redux (poate fi filtrată / stale).
+ * - Folosim lista reală din GET /instructors.
+ *
+ * Logic:
+ * 1) dacă reservation are instructorId și există în DB => OK
+ * 2) dacă instructorId nu există în DB (ID vechi) => încercăm match după nume / field
+ */
+function resolveInstructorIdFromReservation(
+   res,
+   instructorsArr,
+   instructorsById,
+) {
    const direct = Number(res?.instructorId);
-   if (Number.isFinite(direct) && direct > 0) return direct;
+   if (Number.isFinite(direct) && direct > 0 && instructorsById?.[direct]) {
+      return direct;
+   }
 
    const cands = [];
    const instObj = res?.instructor || null;
@@ -248,7 +276,7 @@ function resolveInstructorIdFromReservation(res, instructors) {
       const candN = normText(cand);
       if (!candN) continue;
 
-      for (const i of instructors || []) {
+      for (const i of instructorsArr || []) {
          const a = normText(`${i?.firstName || ""} ${i?.lastName || ""}`);
          const b = normText(`${i?.lastName || ""} ${i?.firstName || ""}`);
 
@@ -264,6 +292,10 @@ function resolveInstructorIdFromReservation(res, instructors) {
       }
    }
 
+   // fallback: dacă există instructorId dar nu l-am găsit, îl întoarcem ca "ultimă șansă"
+   // (apoi la create API va da 404 dacă chiar nu există)
+   if (Number.isFinite(direct) && direct > 0) return direct;
+
    return null;
 }
 
@@ -274,15 +306,17 @@ export default function FebruarieImportTool() {
    const dispatch = useDispatch();
 
    const studentsAll = useSelector((s) => s.students?.list || []);
-   const instructors = useSelector((s) => s.instructors?.list || []);
-
    const studentsRef = useRef(studentsAll);
+
    useEffect(() => {
       studentsRef.current = studentsAll;
    }, [studentsAll]);
 
    const [fileName, setFileName] = useState("");
    const [data, setData] = useState(null); // {users:[], reservations:[]}
+   const [assumeZIsLocal, setAssumeZIsLocal] = useState(true);
+
+   const [remoteInstructors, setRemoteInstructors] = useState([]);
 
    const [userMap, setUserMap] = useState(() => {
       try {
@@ -299,7 +333,7 @@ export default function FebruarieImportTool() {
    });
 
    const [delayUsersMs, setDelayUsersMs] = useState(250);
-   const [delayResMs, setDelayResMs] = useState(1000);
+   const [delayResMs, setDelayResMs] = useState(900);
 
    const [runningUsers, setRunningUsers] = useState(false);
    const [runningRes, setRunningRes] = useState(false);
@@ -310,17 +344,35 @@ export default function FebruarieImportTool() {
       setLog((prev) =>
          [{ id: Date.now() + Math.random(), type, text }, ...prev].slice(
             0,
-            140,
+            160,
          ),
       );
    }, []);
 
-   // load base lists
    useEffect(() => {
       if (!user || user.role !== "ADMIN") return;
       dispatch(fetchStudents());
-      dispatch(fetchInstructors());
+
+      // ✅ instructors: NU folosim slice aici, luăm direct /instructors
+      (async () => {
+         try {
+            const res = await apiClientService.get("/instructors");
+            const arr = res?.ok ? await res.json() : [];
+            setRemoteInstructors(Array.isArray(arr) ? arr : []);
+         } catch {
+            // silent
+         }
+      })();
    }, [dispatch, user]);
+
+   const loadRemoteInstructors = useCallback(async () => {
+      const res = await apiClientService.get("/instructors");
+      if (!res?.ok) throw new Error("Nu pot încărca /instructors");
+      const arr = await res.json();
+      const list = Array.isArray(arr) ? arr : [];
+      setRemoteInstructors(list);
+      return list;
+   }, []);
 
    const stats = useMemo(() => {
       const users = data?.users || [];
@@ -332,7 +384,11 @@ export default function FebruarieImportTool() {
 
       let missingInstrId = 0;
       for (const r of reservationsList) {
-         if (!r?.instructorId) missingInstrId++;
+         if (
+            !r?.instructorId &&
+            !(r?.instructor?.firstName || r?.instructor?.lastName)
+         )
+            missingInstrId++;
       }
 
       return {
@@ -340,8 +396,12 @@ export default function FebruarieImportTool() {
          reservationsCount: reservationsList.length,
          missingUserPhone,
          missingInstrId,
+         remoteInstrCount: (remoteInstructors || []).length,
+         zMode: assumeZIsLocal
+            ? "Z-LOCAL (07 rămâne 07)"
+            : "UTC-Z (05 -> 07 Moldova)",
       };
-   }, [data]);
+   }, [data, remoteInstructors, assumeZIsLocal]);
 
    const onPickFile = useCallback(
       (e) => {
@@ -358,10 +418,13 @@ export default function FebruarieImportTool() {
                   ? parsed.reservations
                   : [];
 
+               const zLocal = detectZIsLocal(reservationsList);
+               setAssumeZIsLocal(zLocal);
+
                setData({ users, reservations: reservationsList });
                pushLog(
                   "info",
-                  `Fișier încărcat: ${f.name} (users=${users.length}, reservations=${reservationsList.length})`,
+                  `Fișier încărcat: ${f.name} (users=${users.length}, reservations=${reservationsList.length}, Zmode=${zLocal ? "Z-LOCAL" : "UTC-Z"})`,
                );
             } catch (err) {
                pushLog("error", `JSON invalid: ${err?.message || "Eroare"}`);
@@ -394,7 +457,6 @@ export default function FebruarieImportTool() {
       pushLog("warning", "STOP cerut (abort).");
    }, [pushLog]);
 
-   // find existing student by phone
    const findStudentIdByPhone = useCallback((digits) => {
       const d = onlyDigits(digits);
       if (!d) return "";
@@ -499,11 +561,15 @@ export default function FebruarieImportTool() {
             const phoneDigits = onlyDigits(u?.phone);
 
             if (!oldId) {
-               pushLog("warning", `User fără id la index ${i} (skip).`);
+               const msg = `User fără id la index ${i}.`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                continue;
             }
             if (!phoneDigits) {
-               pushLog("error", `User oldId=${oldId} fără telefon (skip).`);
+               const msg = `User oldId=${oldId} fără telefon.`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                continue;
             }
 
@@ -527,10 +593,9 @@ export default function FebruarieImportTool() {
             });
 
             if (!reg?.ok) {
-               pushLog(
-                  "error",
-                  `Nu am putut crea user oldId=${oldId} (tel=${phoneDigits}). ${reg?.error || ""}`,
-               );
+               const msg = `Nu am putut crea user oldId=${oldId} (tel=${phoneDigits}). ${reg?.error || ""}`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                continue;
             }
 
@@ -546,10 +611,9 @@ export default function FebruarieImportTool() {
             }
 
             if (!newId) {
-               pushLog(
-                  "error",
-                  `Creat (sau exista), dar nu găsesc ID după telefon (oldId=${oldId}, tel=${phoneDigits}).`,
-               );
+               const msg = `Creat (sau exista), dar nu găsesc ID după telefon (oldId=${oldId}, tel=${phoneDigits}).`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                continue;
             }
 
@@ -592,8 +656,25 @@ export default function FebruarieImportTool() {
 
       try {
          try {
-            await dispatch(fetchInstructors());
+            await dispatch(fetchStudents());
          } catch {}
+
+         // ✅ încărcăm mereu lista reală /instructors chiar înainte de import
+         let instrList = remoteInstructors;
+         try {
+            instrList = await loadRemoteInstructors();
+            pushLog("info", `Loaded /instructors: ${instrList.length}`);
+         } catch (e) {
+            const msg = `Nu pot încărca /instructors: ${e?.message || "error"}`;
+            pushLog("error", msg);
+            if (STRICT_STOP_ON_ERROR) throw new Error(msg);
+         }
+
+         const byId = {};
+         for (const i of instrList || []) {
+            const id = Number(i?.id);
+            if (Number.isFinite(id) && id > 0) byId[id] = i;
+         }
 
          const list = data.reservations || [];
          let idx = resIndex;
@@ -612,52 +693,71 @@ export default function FebruarieImportTool() {
             }
 
             if (!finalUserId) {
-               pushLog(
-                  "error",
-                  `RES[${idx}] nu am userId mapat (oldUserId=${oldUserId}). SKIP`,
-               );
+               const msg = `RES[${idx}] nu am userId mapat (oldUserId=${oldUserId}).`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                persistResIndex(idx + 1);
-               if (delayResMs > 0) await sleep(delayResMs);
                continue;
             }
 
-            const instrId = resolveInstructorIdFromReservation(r, instructors);
-            if (!instrId) {
-               pushLog(
-                  "error",
-                  `RES[${idx}] nu pot rezolva instructorId. SKIP`,
-               );
-               persistResIndex(idx + 1);
-               if (delayResMs > 0) await sleep(delayResMs);
-               continue;
-            }
-
-            const instrObj = (instructors || []).find(
-               (x) => Number(x?.id) === Number(instrId),
+            let instrId = resolveInstructorIdFromReservation(
+               r,
+               instrList,
+               byId,
             );
-            if (!instrObj) {
-               pushLog(
-                  "warning",
-                  `RES[${idx}] instructorId=${instrId} NU există în /instructors curent. SKIP`,
+
+            // dacă instrId nu există în byId, facem REFRESH o dată și încercăm din nou
+            if (instrId && !byId?.[Number(instrId)]) {
+               try {
+                  instrList = await loadRemoteInstructors();
+                  pushLog("info", `Refresh /instructors: ${instrList.length}`);
+               } catch {}
+               const byId2 = {};
+               for (const i of instrList || []) {
+                  const id = Number(i?.id);
+                  if (Number.isFinite(id) && id > 0) byId2[id] = i;
+               }
+               instrId = resolveInstructorIdFromReservation(
+                  r,
+                  instrList,
+                  byId2,
                );
+
+               // update local maps
+               for (const k of Object.keys(byId)) delete byId[k];
+               for (const k of Object.keys(byId2)) byId[k] = byId2[k];
+            }
+
+            if (!instrId) {
+               const msg = `RES[${idx}] nu pot rezolva instructorId (nici din id, nici din nume).`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                persistResIndex(idx + 1);
-               if (delayResMs > 0) await sleep(delayResMs);
+               continue;
+            }
+
+            const instrObj = byId?.[Number(instrId)] || null;
+            if (!instrObj) {
+               const msg = `RES[${idx}] instructorId=${instrId} NU există în DB /instructors (sau ID vechi).`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
+               persistResIndex(idx + 1);
                continue;
             }
 
             const startTimeRaw = r?.startTime;
-            const startTimeToSend = normalizeStartTimeToSend(startTimeRaw);
+            const startTimeToSend = normalizeStartTimeToSend(
+               startTimeRaw,
+               assumeZIsLocal,
+            );
             if (!startTimeToSend) {
-               pushLog(
-                  "error",
-                  `RES[${idx}] startTime invalid: "${String(startTimeRaw || "")}". SKIP`,
-               );
+               const msg = `RES[${idx}] startTime invalid: "${String(startTimeRaw || "")}".`;
+               pushLog("error", msg);
+               if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                persistResIndex(idx + 1);
-               if (delayResMs > 0) await sleep(delayResMs);
                continue;
             }
 
-            // ✅ sector din instructor (dacă e “Niciunul”, fallback)
             const sectorFromInstr = String(instrObj?.sector || "").trim();
             const sector =
                sectorFromInstr && sectorFromInstr !== "Niciunul"
@@ -674,7 +774,7 @@ export default function FebruarieImportTool() {
                instructorId: Number(instrId),
                reservations: [
                   {
-                     startTime: startTimeToSend, // ✅ Z-LOCAL (fără shift)
+                     startTime: startTimeToSend, // ✅ Z-LOCAL pentru Moldova (fără shift în UI)
                      sector,
                      gearbox,
                      privateMessage: String(r?.privateMessage || ""),
@@ -690,7 +790,7 @@ export default function FebruarieImportTool() {
                await createReservationsForUser(payload);
                pushLog(
                   "success",
-                  `OK RES[${idx}] userId=${finalUserId} instrId=${instrId} start=${startTimeRaw} -> ${startTimeToSend}`,
+                  `OK RES[${idx}] userId=${finalUserId} instrId=${instrId} start=${String(startTimeRaw)} -> ${startTimeToSend}`,
                );
             } catch (e) {
                const msg = String(e?.message || e || "");
@@ -702,10 +802,12 @@ export default function FebruarieImportTool() {
                ) {
                   pushLog(
                      "warning",
-                     `SKIP conflict RES[${idx}] instrId=${instrId} start=${startTimeToSend}`,
+                     `Conflict (already reserved) RES[${idx}] instrId=${instrId} start=${startTimeToSend}`,
                   );
+                  if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                } else {
                   pushLog("error", `FAIL RES[${idx}] ${msg || "eroare"}`);
+                  if (STRICT_STOP_ON_ERROR) throw new Error(msg);
                }
             }
 
@@ -720,13 +822,15 @@ export default function FebruarieImportTool() {
          setRunningRes(false);
       }
    }, [
+      assumeZIsLocal,
       data,
       delayResMs,
       dispatch,
       findStudentIdByPhone,
-      instructors,
+      loadRemoteInstructors,
       persistResIndex,
       pushLog,
+      remoteInstructors,
       resIndex,
       runningRes,
       runningUsers,
@@ -755,7 +859,9 @@ export default function FebruarieImportTool() {
                gap: 10,
             }}
          >
-            <h3 style={{ margin: 0 }}>Migrare: Users → Reservations</h3>
+            <h3 style={{ margin: 0 }}>
+               Migrare: Users → Reservations (Februarie)
+            </h3>
 
             <button
                type="button"
@@ -817,8 +923,11 @@ export default function FebruarieImportTool() {
                   value={Object.keys(userMap || {}).length}
                />
                <Stat label="Next reservation index" value={resIndex} />
-               <Stat label="Delay users (ms)" value={delayUsersMs} />
-               <Stat label="Delay res (ms)" value={delayResMs} />
+               <Stat
+                  label="Remote /instructors"
+                  value={stats.remoteInstrCount}
+               />
+               <Stat label="Z mode detectat" value={stats.zMode} />
             </div>
 
             <div
@@ -909,7 +1018,7 @@ export default function FebruarieImportTool() {
                <h4 style={{ margin: "8px 0" }}>Log</h4>
                <div
                   style={{
-                     maxHeight: 260,
+                     maxHeight: 280,
                      overflow: "auto",
                      display: "grid",
                      gap: 6,
