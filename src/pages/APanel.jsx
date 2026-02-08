@@ -40,6 +40,7 @@ import SubPopup from "../components/Utils/SubPopup";
 import ExamPermissionPanel from "../components/SPanel/ExamPermissionPanel";
 import PreloadAppData from "../components/Utils/PreloadAppData";
 import Footer from "../components/Footer";
+import FebruarieImportTool from "./APages/FebruarieImportTool";
 
 // Calendar locale config
 const locales = { "ro-RO": ro };
@@ -122,6 +123,7 @@ function APanel() {
                <GroupManager />
                {/*<ClockDisplay />*/}
             </section>
+            <FebruarieImportTool />
             <PreloadAppData />
             <Footer />
          </main>

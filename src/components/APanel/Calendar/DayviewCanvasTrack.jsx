@@ -2303,7 +2303,7 @@ export default function DayviewCanvasTrack({
          makePad(wait2Base, "wait", 1),
       ]);
 
-      // 5) Rânduri 2+: 3 coloane (pot fi null) + Laterala
+      // 5) Rânduri 2+: 3 coloane (pot fi null) + Laterală
       let i = 0;
 
       const makeLateral = (rowIndex) => {
@@ -2443,7 +2443,7 @@ export default function DayviewCanvasTrack({
       [effectiveInstructors],
    );
 
-   /* ================== eventsForCanvas (hidden + cancel pad + laterala) ================== */
+   /* ================== eventsForCanvas (hidden + cancel pad + Laterală) ================== */
 
    const eventsForCanvas = useMemo(() => {
       if (!Array.isArray(events) || !events.length) return [];

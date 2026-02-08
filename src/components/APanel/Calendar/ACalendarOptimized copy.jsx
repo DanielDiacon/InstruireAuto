@@ -2582,7 +2582,7 @@ export default function ACalendarOptimized({
          { id: "__pad_1", name: "Anulari", sectorSlug: null },
          { id: "__pad_2", name: "Asteptari", sectorSlug: null },
          { id: "__pad_3", name: "Asteptari", sectorSlug: null },
-         { id: "__pad_4", name: "Laterala", sectorSlug: null },
+         { id: "__pad_4", name: "Laterală", sectorSlug: null },
       ];
 
       return [...padCols, ...mapped];

@@ -26,7 +26,6 @@ import { ReactSVG } from "react-svg";
 import heartFullIcon from "../../assets/svg/mingcute--heart-fill.svg";
 import heartCrackIcon from "../../assets/svg/mingcute--heart-crack-fill.svg";
 import addIcon from "../../assets/svg/add-s.svg";
-import { UNSAFE_NavigationContext as NavigationContext } from "react-router-dom";
 
 /* ---------- helpers ---------- */
 const prettyTime = (sec) => {
@@ -156,6 +155,22 @@ const normalizeCorrectIdx = (raw, answersLen) => {
    return null;
 };
 
+// dacă există ordine duplicată (ex: două bilete cu order 1..24),
+// nu sortăm ca să păstrăm ordinea serverului (bilet1 apoi bilet2).
+const shouldSortByOrder = (rawQs) => {
+   const counts = new Map();
+   let hasOrder = false;
+   for (const q of rawQs || []) {
+      const o = Number(q?.order);
+      if (!Number.isFinite(o)) continue;
+      hasOrder = true;
+      const c = (counts.get(o) || 0) + 1;
+      if (c > 1) return false;
+      counts.set(o, c);
+   }
+   return hasOrder;
+};
+
 /* ===== helpers: istoric încercări ===== */
 const normalizeAttempt = (it) => ({
    id:
@@ -170,6 +185,7 @@ const normalizeAttempt = (it) => ({
    total: it.total ?? it.totalQuestions ?? it.questionsTotal ?? null,
    correct: it.correct ?? it.correctCount ?? it.right ?? null,
    wrong: it.wrong ?? it.wrongCount ?? it.incorrect ?? null,
+   passScore: it.passScore ?? it.pass ?? null,
    scorePct:
       typeof it.scorePct === "number"
          ? it.scorePct
@@ -182,32 +198,18 @@ const normalizeAttempt = (it) => ({
 
 /* ---------- config ---------- */
 const PASS_SCORE_DEFAULT = 46; // ✅ prag de promovare
-const WRONG_FILL_SENTINEL = 99;
-// păstrăm constantele vechi, dar vom folosi t() pentru textele efective
-const LEAVE_WARNING_TEXT =
-   "Chiar dorești să părăsești pagina examenului? Întrebarea curentă va fi marcată greșit (penalizare).";
-const ROUTE_LEAVE_CONFIRM =
-   "Chiar dorești să părăsești /student/exam? Întrebarea curentă va fi marcată greșit (penalizare).";
-
-/** Hook simplu pt. confirm + side-effect la navigare internă (RR v6) — acum cu text personalizabil */
-function useLeaveGuard(when, onConfirm, confirmText) {
-   const nav = useContext(NavigationContext);
-   useEffect(() => {
-      if (!when || !nav?.navigator?.block) return;
-      const unblock = nav.navigator.block(async (tx) => {
-         const ok = window.confirm(confirmText || ROUTE_LEAVE_CONFIRM);
-         if (ok) {
-            try {
-               await onConfirm?.("route-leave");
-            } finally {
-               unblock();
-               tx.retry();
-            }
-         }
-      });
-      return unblock;
-   }, [when, nav, onConfirm, confirmText]);
-}
+// prag efectiv: minim 46, și nu permite mai mare decât numărul total de întrebări
+const derivePassScore = (total, rawPassScore) => {
+   const ps = Number(rawPassScore);
+   if (Number.isFinite(ps) && ps > 0) {
+      const base = Math.max(PASS_SCORE_DEFAULT, ps);
+      if (Number.isFinite(total) && total > 0) return Math.min(base, total);
+      return base;
+   }
+   if (Number.isFinite(total) && total > 0)
+      return Math.min(PASS_SCORE_DEFAULT, total);
+   return PASS_SCORE_DEFAULT;
+};
 
 /** Traduceri status -> RO */
 const roStatus = (s) => {
@@ -275,13 +277,12 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
    const timerRef = useRef(null);
    const finishingRef = useRef(false);
 
-   // refs pentru listeners / penalizări
+   // refs pentru listeners
    const answersMapRef = useRef(answersMap);
    const questionsRef = useRef(questions);
    const examRef = useRef(exam);
    const viewRef = useRef(view);
    const idxRef = useRef(idx);
-   const penaltyCooldownRef = useRef(0);
 
   useEffect(() => {
     const on = view === "test" || view === "result";
@@ -351,72 +352,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          1000
       );
    };
-
-   /* ---------- penalizări ---------- */
-   const answerOneAsWrong99 = useCallback(async (q, reason = "penalty") => {
-      if (!q || !examRef.current) return false;
-      const already = (answersMapRef.current || {})[q.id];
-      if (already && already.selected != null) return false;
-
-      setAnswersMap((prev) => ({
-         ...prev,
-         [q.id]: {
-            selected: WRONG_FILL_SENTINEL,
-            correct: false,
-            at: new Date().toISOString(),
-            reason,
-         },
-      }));
-
-      try {
-         await submitExamAnswer(Number(examRef.current.id), {
-            questionId: Number(q.id),
-            selectedAnswer: WRONG_FILL_SENTINEL,
-         });
-      } catch (e) {
-         console.warn("[penalty 99] submit failed", e);
-      }
-      return true;
-   }, []);
-
-   // helper: câte greșeli sunt permise ca să mai poți atinge passScore
-   const getAllowedWrong = useCallback(() => {
-      const totalQ = (questionsRef.current || []).length || 0;
-      const pass = Number(examRef.current?.passScore ?? PASS_SCORE_DEFAULT);
-      return Math.max(0, totalQ - pass);
-   }, []);
-
-   const penalizeOnceThenContinue = useCallback(
-      async (reason = "visibility") => {
-         if (
-            viewRef.current !== "test" ||
-            !examRef.current ||
-            finishingRef.current
-         )
-            return;
-         const now = Date.now();
-         if (now - penaltyCooldownRef.current < 1200) return;
-         penaltyCooldownRef.current = now;
-
-         const curQ = (questionsRef.current || [])[idxRef.current];
-         if (curQ) {
-            const changed = await answerOneAsWrong99(curQ, reason);
-            if (changed) setError(t("penalty_msg"));
-         }
-
-         setTimeout(() => {
-            const amap = answersMapRef.current || {};
-            const mistakes =
-               Object.values(amap).filter(
-                  (a) => a?.selected != null && a.correct === false
-               ).length || 0;
-            const allowedWrong = getAllowedWrong();
-            if (mistakes > allowedWrong) endExamAsFailed();
-            else autoNext(amap);
-         }, 0);
-      },
-      [answerOneAsWrong99, getAllowedWrong, t]
-   );
 
    /* ---------- permisiune: polling continuu la 3s ---------- */
    useEffect(() => {
@@ -536,7 +471,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
       return Number(correctMap[qId]) === Number(selectedIdx0);
    };
 
-   /* ---------- START exam (passScore = 46) ---------- */
+   /* ---------- START exam ---------- */
    const handleStart = async () => {
       setError("");
 
@@ -580,7 +515,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          const started = await startExam({
             userId: Number(user.id),
             timeLimit: 60,
-            passScore: PASS_SCORE_DEFAULT,
             lang, // ✅ trimitem 'ro' sau 'ru' ca query param
          });
 
@@ -594,29 +528,31 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          const serverQs = Array.isArray(started?.questions)
             ? started.questions
             : [];
-         let normalized = (serverQs || [])
-            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-            .map((q) => ({
+         const baseQs = shouldSortByOrder(serverQs)
+            ? [...serverQs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            : serverQs;
+         let normalized = (baseQs || []).map((q) => ({
+            id: q.id,
+            text: q.text,
+            image: rewriteImageUrl(q.image || ""),
+            answers: q.answers || [],
+            order: q.order,
+         }));
+
+         if (!serverQs.length) {
+            const fresh = await getExam(started.id);
+            setExam(fresh);
+            const q2 = Array.isArray(fresh?.questions) ? fresh.questions : [];
+            const baseQs2 = shouldSortByOrder(q2)
+               ? [...q2].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+               : q2;
+            normalized = (baseQs2 || []).map((q) => ({
                id: q.id,
                text: q.text,
                image: rewriteImageUrl(q.image || ""),
                answers: q.answers || [],
                order: q.order,
             }));
-
-         if (!serverQs.length) {
-            const fresh = await getExam(started.id);
-            setExam(fresh);
-            const q2 = Array.isArray(fresh?.questions) ? fresh.questions : [];
-            normalized = (q2 || [])
-               .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-               .map((q) => ({
-                  id: q.id,
-                  text: q.text,
-                  image: rewriteImageUrl(q.image || ""),
-                  answers: q.answers || [],
-                  order: q.order,
-               }));
          }
 
          setQuestions(normalized);
@@ -644,7 +580,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
 
    const current = questions[idx] || null;
    const total = questions.length;
-   const passScore = Number(exam?.passScore ?? PASS_SCORE_DEFAULT);
+   const passScore = derivePassScore(total, exam?.passScore);
 
    const mistakesMade = useMemo(
       () =>
@@ -849,44 +785,6 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
          setAnswerLoading(null);
       }
    };
-
-   /* ====== Protecții la părăsire ====== */
-   useLeaveGuard(
-      view === "test",
-      penalizeOnceThenContinue,
-      t("route_leave_confirm")
-   );
-   useEffect(() => {
-      if (view !== "test") return;
-      let cooldown = false;
-      const onVis = () => {
-         if (document.hidden) {
-            if (cooldown) return;
-            cooldown = true;
-            penalizeOnceThenContinue("visibility");
-            setTimeout(() => (cooldown = false), 1500);
-         }
-      };
-      document.addEventListener("visibilitychange", onVis);
-      return () => document.removeEventListener("visibilitychange", onVis);
-   }, [view, penalizeOnceThenContinue]);
-
-   useEffect(() => {
-      if (view !== "test") return;
-      const onBeforeUnload = (e) => {
-         const msg = t("leave_warning");
-         e.preventDefault();
-         e.returnValue = msg;
-         return msg;
-      };
-      const onPageHide = () => penalizeOnceThenContinue("pagehide");
-      window.addEventListener("beforeunload", onBeforeUnload);
-      window.addEventListener("pagehide", onPageHide);
-      return () => {
-         window.removeEventListener("beforeunload", onBeforeUnload);
-         window.removeEventListener("pagehide", onPageHide);
-      };
-   }, [view, penalizeOnceThenContinue, t]);
 
    useEffect(() => {
       if (remaining === 0 && exam && view === "test") {
@@ -1267,21 +1165,28 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                               const correctQRaw = Number(
                                  a.correct ?? a.correctCount ?? 0
                               );
+                              const passScoreHist = derivePassScore(
+                                 totalQ,
+                                 a.passScore
+                              );
 
-                              // dacă a atins pragul (46), la AFIȘARE considerăm restul corecte
+                              // dacă a atins pragul, la AFIȘARE considerăm restul corecte
                               const effectiveCorrect =
-                                 totalQ > 0 && correctQRaw >= PASS_SCORE_DEFAULT
+                                 totalQ > 0 && correctQRaw >= passScoreHist
                                     ? totalQ
                                     : correctQRaw;
 
-                              // procent: backend (0–1 sau 0–100) ori calcul local (corecte/total)
+                              // procent: backend (0–1, 0–100 sau nr. corecte) ori calcul local (corecte/total)
                               let pct = null;
                               if (
                                  a.scorePct != null &&
                                  !Number.isNaN(Number(a.scorePct))
                               ) {
                                  const p = Number(a.scorePct);
-                                 pct = Math.round(p <= 1 ? p * 100 : p);
+                                 if (p <= 1) pct = Math.round(p * 100);
+                                 else if (totalQ > 0 && p <= totalQ)
+                                    pct = Math.round((p / totalQ) * 100);
+                                 else if (p <= 100) pct = Math.round(p);
                               } else if (totalQ > 0) {
                                  pct = Math.round(
                                     (effectiveCorrect / totalQ) * 100
@@ -1291,13 +1196,7 @@ export default function ExamPracticeUI({ maxLives = 3, useHearts = true }) {
                                  pct = Math.max(0, Math.min(100, pct));
 
                               const scoreText =
-                                 totalQ > 0
-                                    ? `${Math.round(
-                                         (a.scorePct * 100) / totalQ
-                                      )}%`
-                                    : pct != null
-                                    ? `Scor: ${pct}%`
-                                    : "–";
+                                 pct != null ? `${pct}%` : "–";
                               return (
                                  <div
                                     key={a.id}
