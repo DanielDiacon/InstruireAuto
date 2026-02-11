@@ -1840,6 +1840,9 @@ export default function DayviewCanvasTrack({
          if (slot) {
             setSelectedSlot({
                instructorId: slot.instructorId,
+               highlightInstructorId:
+                  slot.highlightInstructorId ?? slot.instructorId,
+               actionInstructorId: slot.actionInstructorId ?? null,
                slotStart: slot.slotStart,
                slotEnd: slot.slotEnd,
             });
@@ -2783,8 +2786,8 @@ export default function DayviewCanvasTrack({
 
          highlightId: selectedEventId || activeEventId || null,
          highlightSlotKey:
-            selectedSlot && selectedSlot.slotStart && selectedSlot.instructorId
-               ? `${selectedSlot.instructorId}|${selectedSlot.slotStart}`
+            selectedSlot && selectedSlot.slotStart
+               ? `${selectedSlot.highlightInstructorId ?? selectedSlot.instructorId}|${selectedSlot.slotStart}`
                : "",
          waitEditSlot:
             waitEdit && waitEdit.slotIndex != null
@@ -2832,10 +2835,16 @@ export default function DayviewCanvasTrack({
          selectedEventId || activeEventId || null;
 
       const highlightSlot =
-         selectedSlot && selectedSlot.slotStart && selectedSlot.instructorId
+         selectedSlot && selectedSlot.slotStart
             ? {
-                 instructorId: String(selectedSlot.instructorId),
+                 instructorId: String(
+                    selectedSlot.highlightInstructorId ??
+                       selectedSlot.instructorId,
+                 ),
                  slotStart: selectedSlot.slotStart,
+                 highlightInstructorId:
+                    selectedSlot.highlightInstructorId ??
+                    selectedSlot.instructorId,
               }
             : null;
 
@@ -3331,9 +3340,10 @@ export default function DayviewCanvasTrack({
          } else if (foundSlotItem) {
             const resolvedInstructorId =
                resolveInstructorIdForHit(foundSlotItem);
-            if (!resolvedInstructorId) return;
             const slotPayload = {
-               instructorId: resolvedInstructorId,
+               instructorId: resolvedInstructorId ?? foundSlotItem.instructorId,
+               actionInstructorId: resolvedInstructorId ?? null,
+               highlightInstructorId: foundSlotItem.instructorId,
                slotStart: foundSlotItem.slotStart,
                slotEnd: foundSlotItem.slotEnd,
             };
@@ -3423,9 +3433,11 @@ export default function DayviewCanvasTrack({
                ) {
                   const resolvedInstructorId =
                      resolveInstructorIdForHit(item);
-                  if (!resolvedInstructorId) return;
                   const slotPayload = {
-                     instructorId: resolvedInstructorId,
+                     instructorId:
+                        resolvedInstructorId ?? item.instructorId,
+                     actionInstructorId: resolvedInstructorId ?? null,
+                     highlightInstructorId: item.instructorId,
                      slotStart: item.slotStart,
                      slotEnd: item.slotEnd,
                   };
@@ -3435,7 +3447,8 @@ export default function DayviewCanvasTrack({
                   setGlobalSelection({ event: null, slot: slotPayload });
 
                   const payload = {
-                     instructorId: resolvedInstructorId,
+                     instructorId:
+                        resolvedInstructorId ?? item.instructorId,
                      start: new Date(item.slotStart),
                      end: new Date(item.slotEnd),
                   };
@@ -3505,11 +3518,12 @@ export default function DayviewCanvasTrack({
             return;
          }
 
-         if (hit.kind === "empty-slot" || hit.kind === "wait-slot") {
-            const resolvedInstructorId = resolveInstructorIdForHit(hit);
-            if (!resolvedInstructorId) return;
+        if (hit.kind === "empty-slot" || hit.kind === "wait-slot") {
+           const resolvedInstructorId = resolveInstructorIdForHit(hit);
             const slotPayload = {
-               instructorId: resolvedInstructorId,
+               instructorId: resolvedInstructorId ?? hit.instructorId,
+               actionInstructorId: resolvedInstructorId ?? null,
+               highlightInstructorId: hit.instructorId,
                slotStart: hit.slotStart,
                slotEnd: hit.slotEnd,
             };

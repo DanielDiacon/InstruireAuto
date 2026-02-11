@@ -116,7 +116,7 @@ function toUtcIsoFromMoldova(localDateObj, timeStrHHMM) {
       hh,
       mm,
       0,
-      0
+      0,
    );
    const offMin = tzOffsetMinutesAt(utcGuess, MOLDOVA_TZ);
    const fixedUtcMs = utcGuess - offMin * 60000;
@@ -254,7 +254,7 @@ function strictMatchBusyItem(list, wantGroup, entityId) {
          arr.find(
             (x) =>
                String(x?.groupId ?? x?.instructorsGroupId ?? "") ===
-               String(entityId)
+               String(entityId),
          ) || null
       );
    }
@@ -265,7 +265,7 @@ function strictMatchBusyItem(list, wantGroup, entityId) {
          (x) =>
             Array.isArray(x?.instructorsIds) &&
             x.instructorsIds.length === 1 &&
-            String(x.instructorsIds[0]) === String(entityId)
+            String(x.instructorsIds[0]) === String(entityId),
       ) ||
       null
    );
@@ -400,7 +400,7 @@ async function buildBlockedCountMapFromInstructorIds(
    instructorIds,
    range,
    minDay,
-   maxDay
+   maxDay,
 ) {
    const blockedSetByKey = new Map(); // key -> Set(instructorId)
 
@@ -430,7 +430,7 @@ async function buildBlockedCountMapFromInstructorIds(
          } catch {
             // ignore per instructor
          }
-      })
+      }),
    );
 
    const blockedMap = new Map();
@@ -516,8 +516,8 @@ function findDominantAnchor(resArr) {
       String(inf?.sector || "").toLowerCase() === "ciocana"
          ? "Ciocana"
          : inf?.sector
-         ? String(inf.sector)
-         : "Botanica";
+           ? String(inf.sector)
+           : "Botanica";
 
    const cutie = inf?.cutie || "manual";
 
@@ -536,7 +536,7 @@ export default function SAddProg({ onClose }) {
    const { user } = useContext(UserContext);
 
    const { busyLoading, list: rezervariExistente } = useSelector(
-      (s) => s.reservations
+      (s) => s.reservations,
    );
 
    /* Alerts */
@@ -549,7 +549,7 @@ export default function SAddProg({ onClose }) {
    }, []);
    const dismissLast = useCallback(
       () => setMessages((prev) => prev.slice(0, -1)),
-      []
+      [],
    );
 
    const safeClose = useCallback(() => {
@@ -589,10 +589,10 @@ export default function SAddProg({ onClose }) {
 
    // maps “server”
    const [serverBusyCountByKey, setServerBusyCountByKey] = useState(
-      () => new Map()
+      () => new Map(),
    );
    const [serverBlockedCountByKey, setServerBlockedCountByKey] = useState(
-      () => new Map()
+      () => new Map(),
    );
 
    // user reservations (pt 1/zi + total 30)
@@ -623,30 +623,30 @@ export default function SAddProg({ onClose }) {
 
    const minDay = useMemo(
       () => localDateStrTZ(minSelectableDate, MOLDOVA_TZ),
-      [minSelectableDate]
+      [minSelectableDate],
    );
    const maxDay = useMemo(
       () => localDateStrTZ(maxSelectableDate, MOLDOVA_TZ),
-      [maxSelectableDate]
+      [maxSelectableDate],
    );
 
    // total limit
    const hardLock30 = lectiiExistente >= MAX_TOTAL_LESSONS;
    const remainingTo30 = useMemo(
       () => Math.max(0, MAX_TOTAL_LESSONS - lectiiExistente),
-      [lectiiExistente]
+      [lectiiExistente],
    );
 
    // pachet efectiv
    const requiredSubmitCount = useMemo(
       () => Math.min(Number(numarLectii) || 0, remainingTo30),
-      [numarLectii, remainingTo30]
+      [numarLectii, remainingTo30],
    );
 
    // ✅ AUTO anchor ca în OldSAddProg
    const autoAnchor = useMemo(
       () => findDominantAnchor(userReservations),
-      [userReservations]
+      [userReservations],
    );
 
    const autoEligible = useMemo(() => {
@@ -733,7 +733,7 @@ export default function SAddProg({ onClose }) {
          serverBlockedCountByKey,
          selectedCountByKey,
          capacity,
-      ]
+      ],
    );
 
    // full-day set: dacă TOATE sloturile sunt full
@@ -857,13 +857,12 @@ export default function SAddProg({ onClose }) {
             typeof ReservationsAPI?.getBusyForInstructorsGroup === "function"
          ) {
             try {
-               const rawBusy = await ReservationsAPI.getBusyForInstructorsGroup(
-                  entityId
-               );
+               const rawBusy =
+                  await ReservationsAPI.getBusyForInstructorsGroup(entityId);
                busyItem = pickBusyItemFromDirectEndpoint(
                   rawBusy,
                   true,
-                  entityId
+                  entityId,
                );
             } catch {
                busyItem = null;
@@ -875,13 +874,12 @@ export default function SAddProg({ onClose }) {
             typeof ReservationsAPI?.getBusyForInstructor === "function"
          ) {
             try {
-               const rawBusy = await ReservationsAPI.getBusyForInstructor(
-                  entityId
-               );
+               const rawBusy =
+                  await ReservationsAPI.getBusyForInstructor(entityId);
                busyItem = pickBusyItemFromDirectEndpoint(
                   rawBusy,
                   false,
-                  entityId
+                  entityId,
                );
             } catch {
                busyItem = null;
@@ -901,14 +899,14 @@ export default function SAddProg({ onClose }) {
             busyItem = pickBusyItemFromFetchBusy(
                res?.data ?? res,
                wantGroup,
-               entityId
+               entityId,
             );
 
             if (!busyItem) {
                throw new Error(
                   wantGroup
                      ? `Anchor group ${entityId} nu apare în busy (fallback).`
-                     : `Anchor instructor ${entityId} nu apare în busy (fallback).`
+                     : `Anchor instructor ${entityId} nu apare în busy (fallback).`,
                );
             }
          }
@@ -948,7 +946,7 @@ export default function SAddProg({ onClose }) {
             }
          } else {
             ids = [Number(entityId)].filter(
-               (n) => Number.isInteger(n) && n > 0
+               (n) => Number.isInteger(n) && n > 0,
             );
          }
 
@@ -963,7 +961,7 @@ export default function SAddProg({ onClose }) {
             ids,
             range,
             minDay,
-            maxDay
+            maxDay,
          );
          setServerBlockedCountByKey(blockedMap);
 
@@ -977,7 +975,7 @@ export default function SAddProg({ onClose }) {
          maxSelectableDate,
          minDay,
          maxDay,
-      ]
+      ],
    );
 
    // ✅ AUTO START (anchor)
@@ -1016,7 +1014,7 @@ export default function SAddProg({ onClose }) {
             setStage("setup");
             notify(
                "warn",
-               "Nu am putut porni automat cu aceleași setări (anchor). Poți continua manual."
+               "Nu am putut porni automat cu aceleași setări (anchor). Poți continua manual.",
             );
             if (e?.message) notify("alert", `Detalii: ${e.message}`);
          } finally {
@@ -1046,14 +1044,13 @@ export default function SAddProg({ onClose }) {
       const list = Array.isArray(raw)
          ? raw
          : raw &&
-           (raw.groupId != null ||
-              raw.instructorId != null ||
-              Array.isArray(raw.instructorsIds))
-         ? [raw]
-         : [];
+             (raw.groupId != null ||
+                raw.instructorId != null ||
+                Array.isArray(raw.instructorsIds))
+           ? [raw]
+           : [];
 
       const wantGroup = backendWantGroup;
-
 
       const candidates = [];
       for (const item of list) {
@@ -1094,7 +1091,7 @@ export default function SAddProg({ onClose }) {
 
       if (!candidates.length) {
          throw new Error(
-            "Nu am găsit entitate (grup/instructor) pentru opțiuni."
+            "Nu am găsit entitate (grup/instructor) pentru opțiuni.",
          );
       }
 
@@ -1155,7 +1152,7 @@ export default function SAddProg({ onClose }) {
          ids,
          range,
          minDay,
-         maxDay
+         maxDay,
       );
       setServerBlockedCountByKey(blockedMap);
 
@@ -1176,7 +1173,7 @@ export default function SAddProg({ onClose }) {
       if (hardLock30 || remainingTo30 <= 0) {
          notify(
             "warn",
-            `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`
+            `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`,
          );
          return;
       }
@@ -1193,7 +1190,7 @@ export default function SAddProg({ onClose }) {
       } catch (e) {
          notify(
             "error",
-            "Nu am putut pregăti disponibilitatea (busy/blocări)."
+            "Nu am putut pregăti disponibilitatea (busy/blocări).",
          );
          if (e?.message) notify("alert", `Detalii: ${e.message}`);
       } finally {
@@ -1250,12 +1247,12 @@ export default function SAddProg({ onClose }) {
          busyItem = pickBusyItemFromFetchBusy(
             res?.data ?? res,
             type === "group",
-            chosenId
+            chosenId,
          );
 
          if (!busyItem) {
             throw new Error(
-               `Busy fallback nu conține entitatea aleasă (${type}:${chosenId}).`
+               `Busy fallback nu conține entitatea aleasă (${type}:${chosenId}).`,
             );
          }
       }
@@ -1291,7 +1288,7 @@ export default function SAddProg({ onClose }) {
          ids,
          range,
          minDay,
-         maxDay
+         maxDay,
       );
 
       return { type, chosenId, ids, cap, busyMap, blockedMap };
@@ -1344,7 +1341,7 @@ export default function SAddProg({ onClose }) {
          assignedGroupId,
          assignedInstructorId,
          notify,
-      ]
+      ],
    );
 
    //   useEffect(() => {
@@ -1414,7 +1411,7 @@ export default function SAddProg({ onClose }) {
 
          return { ok, conflicts };
       },
-      [fetchLiveMapsForAssigned]
+      [fetchLiveMapsForAssigned],
    );
 
    const mergeRejected = (prev, next) => {
@@ -1436,7 +1433,7 @@ export default function SAddProg({ onClose }) {
       if (hardLock30 || remainingTo30 <= 0) {
          notify(
             "warn",
-            `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`
+            `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`,
          );
          return;
       }
@@ -1476,7 +1473,7 @@ export default function SAddProg({ onClose }) {
       if (full) {
          notify(
             "warn",
-            `Ora nu mai este disponibilă: rez ${used}, bl ${blocked} (sum ${sum}/${total}).`
+            `Ora nu mai este disponibilă: rez ${used}, bl ${blocked} (sum ${sum}/${total}).`,
          );
          return;
       }
@@ -1484,7 +1481,7 @@ export default function SAddProg({ onClose }) {
       setSelectedDates((prev) => sortIsoAsc([...prev, iso]));
       notify(
          "success",
-         `Adăugat: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`
+         `Adăugat: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`,
       );
 
       setData(null);
@@ -1552,7 +1549,7 @@ export default function SAddProg({ onClose }) {
                   keysTaken.add(found.key);
                   tmpSelCount.set(
                      found.key,
-                     (tmpSelCount.get(found.key) || 0) + 1
+                     (tmpSelCount.get(found.key) || 0) + 1,
                   );
                }
 
@@ -1562,7 +1559,7 @@ export default function SAddProg({ onClose }) {
             if (!additions.length) {
                notify(
                   "warn",
-                  "Nu am găsit suficiente sloturi libere pentru auto-complete în interval."
+                  "Nu am găsit suficiente sloturi libere pentru auto-complete în interval.",
                );
                return;
             }
@@ -1574,7 +1571,7 @@ export default function SAddProg({ onClose }) {
             setSelectedDates((prev) => sortIsoAsc([...prev, ...additions]));
             notify(
                "success",
-               `Auto-complete: am adăugat ${additions.length} lecții.`
+               `Auto-complete: am adăugat ${additions.length} lecții.`,
             );
          } catch (e) {
             notify("error", "Auto-complete a eșuat.");
@@ -1598,7 +1595,7 @@ export default function SAddProg({ onClose }) {
          serverBlockedCountByKey,
          capacity,
          notify,
-      ]
+      ],
    );
 
    // ====== șterge ======
@@ -1625,7 +1622,7 @@ export default function SAddProg({ onClose }) {
          if (hardLock30 || remainingTo30 <= 0) {
             notify(
                "warn",
-               `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți trimite.`
+               `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți trimite.`,
             );
             return;
          }
@@ -1652,7 +1649,7 @@ export default function SAddProg({ onClose }) {
          if (mustSubmitExactly <= 0) {
             notify(
                "warn",
-               `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`
+               `Ai deja ${MAX_TOTAL_LESSONS} lecții programate. Nu mai poți adăuga.`,
             );
             resetPickState();
             setStage("setup");
@@ -1662,7 +1659,7 @@ export default function SAddProg({ onClose }) {
          if (selectedDates.length !== mustSubmitExactly) {
             notify(
                "warn",
-               `Trebuie să selectezi exact ${mustSubmitExactly} lecții înainte de trimitere.`
+               `Trebuie să selectezi exact ${mustSubmitExactly} lecții înainte de trimitere.`,
             );
             setShowList(true);
             return;
@@ -1673,7 +1670,7 @@ export default function SAddProg({ onClose }) {
          if (!chosenId) {
             notify(
                "error",
-               "Nu am entitate aleasă (grup/instructor). Reia setup."
+               "Nu am entitate aleasă (grup/instructor). Reia setup.",
             );
             resetPickState();
             setStage("setup");
@@ -1683,7 +1680,7 @@ export default function SAddProg({ onClose }) {
          // preflight live: detectează race
          const { ok, conflicts } = await preflightSelectedLive(
             selectedDates,
-            latestArr
+            latestArr,
          );
 
          if (conflicts.length) {
@@ -1696,7 +1693,7 @@ export default function SAddProg({ onClose }) {
 
             notify(
                "warn",
-               `Unele sloturi s-au ocupat între timp (${conflicts.length}). Șterge conflictele și alege altele (sau Auto-complete).`
+               `Unele sloturi s-au ocupat între timp (${conflicts.length}). Șterge conflictele și alege altele (sau Auto-complete).`,
             );
             return;
          }
@@ -1706,7 +1703,7 @@ export default function SAddProg({ onClose }) {
             setShowList(true);
             notify(
                "warn",
-               `După verificare au rămas ${ok.length}/${mustSubmitExactly}. Ajustează selecția.`
+               `După verificare au rămas ${ok.length}/${mustSubmitExactly}. Ajustează selecția.`,
             );
             return;
          }
@@ -1728,6 +1725,7 @@ export default function SAddProg({ onClose }) {
                      : isoDate,
                sector: String(sector || "Botanica"),
                gearbox: normalizedGearbox,
+               isImportant: true,
                privateMessage: "",
                color: "--black-t",
             })),
@@ -1739,19 +1737,38 @@ export default function SAddProg({ onClose }) {
             ReservationsAPI?.createReservationsForUser;
          if (typeof createFn !== "function") {
             throw new Error(
-               "createReservations nu există în reservationsService."
+               "createReservations nu există în reservationsService.",
             );
          }
 
          await createFn(payload);
 
-         // set desired instructor doar dacă lipsește și tipul e instructor
+         // set desired instructor doar dacă lipsește
          try {
             const existingDesired =
                user?.desiredInstructorId ?? user?.desiredInstructor?.id ?? null;
 
-            if (type === "instructor" && existingDesired == null) {
-               await UsersAPI.setDesiredInstructor(Number(chosenId));
+            if (existingDesired == null) {
+               let desiredId = null;
+               if (type === "instructor") {
+                  desiredId = Number(chosenId);
+               } else if (type === "group") {
+                  const ids = Array.isArray(activeInstructorIds)
+                     ? activeInstructorIds.filter(
+                          (n) => Number.isInteger(n) && n > 0,
+                       )
+                     : [];
+
+                  if (String(sector) === "Ciocana" && ids.length >= 2) {
+                     desiredId = Number(ids[1]); // al doilea instructor
+                  } else if (ids.length === 1) {
+                     desiredId = Number(ids[0]);
+                  }
+               }
+
+               if (desiredId) {
+                  await UsersAPI.setDesiredInstructor(desiredId);
+               }
             }
          } catch (e) {
             console.warn("[desired-instructor] failed:", e);
@@ -1762,7 +1779,7 @@ export default function SAddProg({ onClose }) {
          try {
             if (user?.id) {
                const updated = await dispatch(
-                  fetchUserReservations(user.id)
+                  fetchUserReservations(user.id),
                ).unwrap();
                const arr = Array.isArray(updated) ? updated : [];
                setUserReservations(arr);
@@ -1775,6 +1792,9 @@ export default function SAddProg({ onClose }) {
          setAutoFlowActive(false);
 
          safeClose();
+         setTimeout(() => {
+            window.location.reload();
+         }, 0);
       } catch (e) {
          notify("error", "A apărut o eroare la trimitere.");
          if (e?.message) notify("alert", `Detalii: ${e.message}`);
@@ -1787,7 +1807,7 @@ export default function SAddProg({ onClose }) {
                : [];
             const { ok, conflicts } = await preflightSelectedLive(
                selectedDates,
-               latestArr
+               latestArr,
             );
 
             if (conflicts.length) {
@@ -1796,7 +1816,7 @@ export default function SAddProg({ onClose }) {
                setShowList(true);
                notify(
                   "warn",
-                  `Am detectat sloturi ocupate între timp (${conflicts.length}). Le poți șterge și înlocui (sau Auto-complete).`
+                  `Am detectat sloturi ocupate între timp (${conflicts.length}). Le poți șterge și înlocui (sau Auto-complete).`,
                );
             }
          } catch {}
@@ -1974,6 +1994,7 @@ export default function SAddProg({ onClose }) {
                               value="Ciocana"
                               checked={sector === "Ciocana"}
                               onChange={(e) => setSector(e.target.value)}
+                              disabled
                            />
                            Ciocana
                         </label>
@@ -2065,7 +2086,7 @@ export default function SAddProg({ onClose }) {
 
                                     const day = localDateStrTZ(
                                        date,
-                                       MOLDOVA_TZ
+                                       MOLDOVA_TZ,
                                     );
                                     if (bookedDaySet.has(day)) return false;
                                     if (fullyBlockedDaySet.has(day))
@@ -2076,7 +2097,7 @@ export default function SAddProg({ onClose }) {
                                  dayClassName={(date) => {
                                     const day = localDateStrTZ(
                                        date,
-                                       MOLDOVA_TZ
+                                       MOLDOVA_TZ,
                                     );
                                     if (isPastOrTodayInMoldova(date))
                                        return "saddprogramari__day--inactive";
@@ -2328,7 +2349,7 @@ export default function SAddProg({ onClose }) {
                                                    <ReactSVG
                                                       onClick={() =>
                                                          setConfirmDeleteKey(
-                                                            key
+                                                            key,
                                                          )
                                                       }
                                                       role="button"
@@ -2355,7 +2376,7 @@ export default function SAddProg({ onClose }) {
                                                       className="btn btn-secondary"
                                                       onClick={() =>
                                                          setConfirmDeleteKey(
-                                                            null
+                                                            null,
                                                          )
                                                       }
                                                    >
@@ -2399,7 +2420,7 @@ export default function SAddProg({ onClose }) {
                                                    <ReactSVG
                                                       onClick={() =>
                                                          setConfirmDeleteKey(
-                                                            key
+                                                            key,
                                                          )
                                                       }
                                                       role="button"
@@ -2426,7 +2447,7 @@ export default function SAddProg({ onClose }) {
                                                       className="btn btn-secondary"
                                                       onClick={() =>
                                                          setConfirmDeleteKey(
-                                                            null
+                                                            null,
                                                          )
                                                       }
                                                    >

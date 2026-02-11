@@ -126,7 +126,7 @@ function drawPresenceBorder(
    h,
    colors,
    baseRadius = 0,
-   fontScale = 1
+   fontScale = 1,
 ) {
    if (!colors || !colors.length) return;
 
@@ -221,6 +221,54 @@ function normalizeEventColor(dbColor) {
    if (cssVar) return cssVar;
 
    return DEFAULT_EVENT_COLOR_TOKEN;
+}
+
+function getEventCreatedAtMs(ev) {
+   const raw = ev?.raw || {};
+   const createdRaw =
+      raw.createdAt ??
+      raw.created_at ??
+      raw.isCreated ??
+      raw.is_created ??
+      ev?.createdAt ??
+      ev?.created_at ??
+      null;
+
+   if (!createdRaw) return Number.POSITIVE_INFINITY;
+   const ms = new Date(createdRaw).getTime();
+   return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
+}
+
+function buildFavoriteOrderMap(events) {
+   const favs = (Array.isArray(events) ? events : [])
+      .map((ev) => {
+         const raw = ev?.raw || {};
+         const isFavorite = raw.isFavorite === true || ev?.isFavorite === true;
+         const reservationId = raw.id ?? ev?.id ?? null;
+         if (!isFavorite || reservationId == null) return null;
+         return {
+            reservationKey: String(reservationId),
+            createdAtMs: getEventCreatedAtMs(ev),
+         };
+      })
+      .filter(Boolean);
+
+   favs.sort((a, b) => {
+      if (a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
+      if (a.reservationKey !== b.reservationKey)
+         return a.reservationKey < b.reservationKey ? -1 : 1;
+      return 0;
+   });
+
+   const out = new Map();
+   let index = 1;
+   for (const fav of favs) {
+      if (!out.has(fav.reservationKey)) {
+         out.set(fav.reservationKey, index);
+         index += 1;
+      }
+   }
+   return out;
 }
 
 /* ================== CANVAS HELPERS ================== */
@@ -478,7 +526,7 @@ export function drawAll({
 
    const maxWorldHeight = effectiveRowHeights.reduce(
       (max, h) => (h > max ? h : max),
-      worldHeight
+      worldHeight,
    );
 
    const eventsWithColor = (events || []).map((ev) => {
@@ -566,7 +614,7 @@ export function drawAll({
    const slotRadius = eventRadius;
    const eventBorderRadius = Math.max(
       0,
-      eventRadius + BASE_BORDER_DELTA * fontScale
+      eventRadius + BASE_BORDER_DELTA * fontScale,
    );
 
    const hasPreGrid =
@@ -595,7 +643,7 @@ export function drawAll({
             0,
             rowTop,
             0,
-            rowTop + colHeight
+            rowTop + colHeight,
          );
          grad.addColorStop(0, baseBg);
          grad.addColorStop(0.1, baseBg);
@@ -645,7 +693,7 @@ export function drawAll({
       const rowStartIdx = row * colsPerRow;
       const colsInThisRow = Math.min(
          colsPerRow,
-         Math.max(0, colsCount - rowStartIdx)
+         Math.max(0, colsCount - rowStartIdx),
       );
 
       const slotAreaTop = rowContentTop + CONTENT_PAD_TOP;
@@ -669,13 +717,14 @@ export function drawAll({
                : `${instId}#default`;
 
          const instEvents = eventsByInst[instKey] || [];
+         const favoriteOrderMap = buildFavoriteOrderMap(instEvents);
 
          const overlapEventsForInst =
             overlapMap && instId ? overlapMap.get(instId) || [] : instEvents;
 
          const instBlockedSet = getBlockedSetForInstructor(
             blockedKeyMap,
-            instId
+            instId,
          );
 
          const instCanceledSet =
@@ -704,17 +753,17 @@ export function drawAll({
          if (isCancelPad) {
             maxSlotsForThisColumn = Math.min(
                CANCEL_SLOTS_PER_COLUMN,
-               slotGeoms.length
+               slotGeoms.length,
             );
          } else if (isLateralPad) {
             maxSlotsForThisColumn = Math.min(
                LATERAL_SLOTS_PER_COLUMN,
-               slotGeoms.length
+               slotGeoms.length,
             );
          } else if (isWaitPad) {
             maxSlotsForThisColumn = Math.min(
                WAIT_SLOTS_PER_COLUMN,
-               slotGeoms.length
+               slotGeoms.length,
             );
          } else {
             maxSlotsForThisColumn = slotGeoms.length;
@@ -744,7 +793,7 @@ export function drawAll({
             0,
             rowTop,
             0,
-            rowTop + colHeight
+            rowTop + colHeight,
          );
          grad.addColorStop(0, colBottomColor);
          grad.addColorStop(0.1, colTopColor);
@@ -877,7 +926,7 @@ export function drawAll({
                // re-folosim exact aceeași rezolvare de culori ca la EDITARE
                const draftColors = getPresenceColorsForId(
                   createDraftBySlotColors,
-                  draftKey
+                  draftKey,
                );
                const isCreatingHere =
                   Array.isArray(draftColors) && draftColors.length;
@@ -893,7 +942,7 @@ export function drawAll({
                      slotY + 1,
                      slotW - 2,
                      slotH - 2,
-                     slotRadius
+                     slotRadius,
                   );
                   ctx.fill();
 
@@ -902,12 +951,12 @@ export function drawAll({
                   ctx.textBaseline = "top";
                   ctx.font = `bold ${Math.max(
                      11,
-                     12 * fontScale
+                     12 * fontScale,
                   )}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
                   ctx.fillText(
                      "CREARE",
                      slotX + 8 * fontScale,
-                     slotY + 6 * fontScale
+                     slotY + 6 * fontScale,
                   );
 
                   // ✅ border colorat (identic ca la EDITARE)
@@ -918,7 +967,7 @@ export function drawAll({
                      slotW,
                      slotH,
                      draftColors,
-                     slotRadius
+                     slotRadius,
                   );
 
                   ctx.restore();
@@ -935,7 +984,7 @@ export function drawAll({
                   slotY + 1,
                   slotW - 2,
                   slotH - 2,
-                  Math.max(0, slotRadius - 1.5 * fontScale)
+                  Math.max(0, slotRadius - 1.5 * fontScale),
                );
                ctx.stroke();
             }
@@ -990,7 +1039,7 @@ export function drawAll({
                   ctx.fillText(
                      lines[li],
                      slotX + padX,
-                     slotY + padY + li * lineHeight
+                     slotY + padY + li * lineHeight,
                   );
                }
             }
@@ -1010,7 +1059,7 @@ export function drawAll({
                   slotY + 1,
                   slotW - 2,
                   slotH - 2,
-                  Math.max(0, slotRadius - 1.5 * fontScale)
+                  Math.max(0, slotRadius - 1.5 * fontScale),
                );
                ctx.stroke();
             }
@@ -1106,7 +1155,7 @@ export function drawAll({
             if (blockedKeyMap && evLocalKey) {
                const instSet = getBlockedSetForInstructor(
                   blockedKeyMap,
-                  instId
+                  instId,
                );
                if (instSet) {
                   if (instSet instanceof Set)
@@ -1149,9 +1198,16 @@ export function drawAll({
 
             const isFavorite = raw.isFavorite === true;
             const isImportant = raw.isImportant === true;
+            const reservationKey = String(raw.id ?? ev.id ?? "");
+            const favoriteOrderNo = reservationKey
+               ? favoriteOrderMap.get(reservationKey) || null
+               : null;
 
             let statusEmoji = "";
-            if (isFavorite) statusEmoji += "⁂";
+            if (isFavorite) {
+               statusEmoji +=
+                  favoriteOrderNo != null ? `!!${favoriteOrderNo}` : "!!";
+            }
             if (isImportant) statusEmoji += statusEmoji ? " · ‼" : "‼";
 
             // ✅ userId din rezervare
@@ -1236,7 +1292,7 @@ export function drawAll({
                   ctx,
                   bothNotes.replace(/\s+/g, " ").trim(),
                   maxTextWidth,
-                  2
+                  2,
                );
                for (const line of notesLines) {
                   ctx.fillText(line, textX, textY);
@@ -1250,7 +1306,7 @@ export function drawAll({
             const ridPresence = raw?.id ?? ev?.raw?.id ?? ev?.id ?? null;
             const presenceColors = getPresenceColorsForId(
                presenceByReservationColors,
-               ridPresence
+               ridPresence,
             );
             if (ridPresence != null) {
                // o singură dată, ca să nu-ți omoare consola
@@ -1258,7 +1314,7 @@ export function drawAll({
                   window.__presenceDbgOnce = true;
                   console.log(
                      "presenceByReservationColors sample:",
-                     presenceByReservationColors
+                     presenceByReservationColors,
                   );
                }
                //console.log(
@@ -1277,7 +1333,7 @@ export function drawAll({
                   cardW,
                   cardH,
                   presenceColors,
-                  eventRadius
+                  eventRadius,
                );
             }
 
@@ -1290,7 +1346,7 @@ export function drawAll({
                   cardY + 1,
                   cardW - 2,
                   cardH - 2,
-                  eventBorderRadius
+                  eventBorderRadius,
                );
                ctx.stroke();
             }
@@ -1304,7 +1360,7 @@ export function drawAll({
                   cardY + 1,
                   cardW - 2,
                   cardH - 2,
-                  eventBorderRadius
+                  eventBorderRadius,
                );
                ctx.stroke();
             }
@@ -1318,11 +1374,11 @@ export function drawAll({
                (presenceReservationIds instanceof Set
                   ? presenceReservationIds.has(rid)
                   : Array.isArray(presenceReservationIds)
-                  ? presenceReservationIds.includes(rid)
-                  : presenceReservationIds &&
-                    typeof presenceReservationIds === "object"
-                  ? !!presenceReservationIds[rid]
-                  : false);
+                    ? presenceReservationIds.includes(rid)
+                    : presenceReservationIds &&
+                        typeof presenceReservationIds === "object"
+                      ? !!presenceReservationIds[rid]
+                      : false);
 
             if (isEditing) {
                ctx.save();
@@ -1334,7 +1390,7 @@ export function drawAll({
                   cardY + 1,
                   cardW - 2,
                   cardH - 2,
-                  eventRadius
+                  eventRadius,
                );
                ctx.fill();
 
@@ -1342,12 +1398,12 @@ export function drawAll({
                ctx.textBaseline = "top";
                ctx.font = `bold ${Math.max(
                   11,
-                  12 * fontScale
+                  12 * fontScale,
                )}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
                ctx.fillText(
                   "EDITARE",
                   cardX + 8 * fontScale,
-                  cardY + 6 * fontScale
+                  cardY + 6 * fontScale,
                );
 
                ctx.restore();

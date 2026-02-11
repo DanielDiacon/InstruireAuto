@@ -123,7 +123,7 @@ function APanel() {
                <GroupManager />
                {/*<ClockDisplay />*/}
             </section>
-            {/*<FebruarieImportTool />*/}
+            <FebruarieImportTool />
             <PreloadAppData />
             <Footer />
          </main>
