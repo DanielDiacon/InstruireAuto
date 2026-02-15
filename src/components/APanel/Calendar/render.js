@@ -223,54 +223,6 @@ function normalizeEventColor(dbColor) {
    return DEFAULT_EVENT_COLOR_TOKEN;
 }
 
-function getEventCreatedAtMs(ev) {
-   const raw = ev?.raw || {};
-   const createdRaw =
-      raw.createdAt ??
-      raw.created_at ??
-      raw.isCreated ??
-      raw.is_created ??
-      ev?.createdAt ??
-      ev?.created_at ??
-      null;
-
-   if (!createdRaw) return Number.POSITIVE_INFINITY;
-   const ms = new Date(createdRaw).getTime();
-   return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
-}
-
-function buildFavoriteOrderMap(events) {
-   const favs = (Array.isArray(events) ? events : [])
-      .map((ev) => {
-         const raw = ev?.raw || {};
-         const isFavorite = raw.isFavorite === true || ev?.isFavorite === true;
-         const reservationId = raw.id ?? ev?.id ?? null;
-         if (!isFavorite || reservationId == null) return null;
-         return {
-            reservationKey: String(reservationId),
-            createdAtMs: getEventCreatedAtMs(ev),
-         };
-      })
-      .filter(Boolean);
-
-   favs.sort((a, b) => {
-      if (a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
-      if (a.reservationKey !== b.reservationKey)
-         return a.reservationKey < b.reservationKey ? -1 : 1;
-      return 0;
-   });
-
-   const out = new Map();
-   let index = 1;
-   for (const fav of favs) {
-      if (!out.has(fav.reservationKey)) {
-         out.set(fav.reservationKey, index);
-         index += 1;
-      }
-   }
-   return out;
-}
-
 /* ================== CANVAS HELPERS ================== */
 
 export function drawRoundRect(ctx, x, y, w, h, r) {
@@ -513,6 +465,7 @@ export function drawAll({
    presenceColorsByReservation = null,
    createDraftBySlotUsers = null,
    createDraftBySlotColors = null,
+   activeSearchEventId = null,
 }) {
    if (!ctx || !width || !height) return;
 
@@ -682,6 +635,8 @@ export function drawAll({
    }
 
    const highlightEventIdForRender = highlightEventId;
+   const activeSearchEventIdStr =
+      activeSearchEventId != null ? String(activeSearchEventId) : null;
 
    let currentRowTop = 0;
 
@@ -717,8 +672,6 @@ export function drawAll({
                : `${instId}#default`;
 
          const instEvents = eventsByInst[instKey] || [];
-         const favoriteOrderMap = buildFavoriteOrderMap(instEvents);
-
          const overlapEventsForInst =
             overlapMap && instId ? overlapMap.get(instId) || [] : instEvents;
 
@@ -1172,6 +1125,11 @@ export function drawAll({
             const isHighlighted =
                highlightEventIdForRender &&
                String(ev.id) === String(highlightEventIdForRender);
+            const eventIdStr = String(ev.id ?? "");
+            const isActiveSearchMatch =
+               !!eventIdStr &&
+               activeSearchEventIdStr != null &&
+               eventIdStr === activeSearchEventIdStr;
 
             ctx.save();
 
@@ -1198,17 +1156,10 @@ export function drawAll({
 
             const isFavorite = raw.isFavorite === true;
             const isImportant = raw.isImportant === true;
-            const reservationKey = String(raw.id ?? ev.id ?? "");
-            const favoriteOrderNo = reservationKey
-               ? favoriteOrderMap.get(reservationKey) || null
-               : null;
-
-            let statusEmoji = "";
-            if (isFavorite) {
-               statusEmoji +=
-                  favoriteOrderNo != null ? `!!${favoriteOrderNo}` : "!!";
-            }
-            if (isImportant) statusEmoji += statusEmoji ? " · ‼" : "‼";
+            const statusMarks = [];
+            if (isFavorite) statusMarks.push("⁂");
+            if (isImportant) statusMarks.push("‼");
+            const statusEmoji = statusMarks.join(" - ");
 
             // ✅ userId din rezervare
             const userIdForBadge = raw?.userId ?? null;
@@ -1353,6 +1304,20 @@ export function drawAll({
 
             if (isHighlighted) {
                ctx.lineWidth = 2;
+               ctx.strokeStyle = activeBorderColor;
+               drawRoundRect(
+                  ctx,
+                  cardX + 1,
+                  cardY + 1,
+                  cardW - 2,
+                  cardH - 2,
+                  eventBorderRadius,
+               );
+               ctx.stroke();
+            }
+
+            if (isActiveSearchMatch) {
+               ctx.lineWidth = 3;
                ctx.strokeStyle = activeBorderColor;
                drawRoundRect(
                   ctx,

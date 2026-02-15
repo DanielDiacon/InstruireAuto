@@ -1006,6 +1006,8 @@ export default function DayviewCanvasTrack({
    blockedKeyMap,
    blackoutVer = 0,
    activeEventId = null,
+   activeSearchEventId = null,
+   searchHitEventIds = null,
    onActiveEventRectChange,
    cars = [],
    instructorsFull = [],
@@ -2783,6 +2785,19 @@ export default function DayviewCanvasTrack({
          // ✅ NEW: forțează redraw când schimbi sector/ordonare instructori
          sectorSig: activeSectorFilter || "ALL",
          instructorsLayoutSig,
+         searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
+         searchHitsSig:
+            searchHitEventIds instanceof Set
+               ? [...searchHitEventIds].sort().join(",")
+               : Array.isArray(searchHitEventIds)
+                 ? [...searchHitEventIds].map(String).sort().join(",")
+                 : searchHitEventIds &&
+                       typeof searchHitEventIds === "object"
+                   ? Object.keys(searchHitEventIds)
+                        .filter((k) => !!searchHitEventIds[k])
+                        .sort()
+                        .join(",")
+                   : "",
 
          highlightId: selectedEventId || activeEventId || null,
          highlightSlotKey:
@@ -2890,6 +2905,7 @@ export default function DayviewCanvasTrack({
          presenceColorsByReservation,
          createDraftBySlotUsers,
          createDraftBySlotColors,
+         activeSearchEventId,
       });
       hitMapRef.current = hitMap;
    }, [
@@ -2929,6 +2945,8 @@ export default function DayviewCanvasTrack({
       createDraftSig,
       createDraftBySlotUsers,
       createDraftBySlotColors,
+      searchHitEventIds,
+      activeSearchEventId,
 
       // ✅ NEW
       activeSectorFilter,

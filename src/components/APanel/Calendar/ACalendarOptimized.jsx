@@ -2793,6 +2793,10 @@ export default function ACalendarOptimized({
    const searchHits = searchState.hits;
    const searchTotal = searchHits.length;
    const searchIndex = searchState.index;
+   const searchHitEventIds = useMemo(
+      () => new Set(searchHits.map((hit) => String(hit.eventId))),
+      [searchHits],
+   );
 
    const activeSearchHit =
       searchTotal && searchIndex < searchTotal ? searchHits[searchIndex] : null;
@@ -2972,6 +2976,8 @@ export default function ACalendarOptimized({
                timeMarks={timeMarks}
                handleCreateFromEmpty={handleCreateFromEmpty}
                activeEventId={effectiveActiveEventId}
+               activeSearchEventId={activeSearchEventId}
+               searchHitEventIds={searchHitEventIds}
                handleActiveEventRectChange={handleActiveEventRectChange}
                cars={cars}
                instructors={instructorsOrderedForUI}
@@ -3160,6 +3166,8 @@ const ACalendarTrack = memo(function ACalendarTrack({
    timeMarks,
    handleCreateFromEmpty,
    activeEventId,
+   activeSearchEventId,
+   searchHitEventIds,
    handleActiveEventRectChange,
    cars,
    instructors,
@@ -3348,6 +3356,8 @@ const ACalendarTrack = memo(function ACalendarTrack({
                                     }
                                     blackoutVer={blackoutVer}
                                     activeEventId={activeEventId}
+                                    activeSearchEventId={activeSearchEventId}
+                                    searchHitEventIds={searchHitEventIds}
                                     onActiveEventRectChange={
                                        handleActiveEventRectChange
                                     }
