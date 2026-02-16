@@ -995,6 +995,7 @@ const CanvasInstructorHeader = memo(
 /* ================== COMPONENTA REACT ================== */
 
 export default function DayviewCanvasTrack({
+   scrollContainerRef = null,
    dayStart,
    dayEnd,
    instructors = [],
@@ -1007,7 +1008,6 @@ export default function DayviewCanvasTrack({
    blackoutVer = 0,
    activeEventId = null,
    activeSearchEventId = null,
-   searchHitEventIds = null,
    onActiveEventRectChange,
    cars = [],
    instructorsFull = [],
@@ -1069,6 +1069,7 @@ export default function DayviewCanvasTrack({
    });
 
    const [touchToolbar, setTouchToolbar] = useState(null);
+   const activeRectResolveRef = useRef({ id: null, resolved: false });
 
    const [waitNotes, setWaitNotes] = useState({});
    const waitNotesTextMap = useMemo(() => {
@@ -1088,6 +1089,17 @@ export default function DayviewCanvasTrack({
    const [waitEdit, setWaitEdit] = useState(null);
    const waitInputRef = useRef(null);
    const waitCommitRef = useRef(false);
+   const [visibleRowRange, setVisibleRowRange] = useState({
+      start: 0,
+      end: Number.MAX_SAFE_INTEGER,
+   });
+
+   useEffect(() => {
+      const id = activeEventId != null ? String(activeEventId) : null;
+      const prev = activeRectResolveRef.current;
+      if (prev.id === id) return;
+      activeRectResolveRef.current = { id, resolved: false };
+   }, [activeEventId]);
 
    const dispatch = useDispatch();
    // ===== users index (fast lookup) =====
@@ -2417,6 +2429,110 @@ export default function DayviewCanvasTrack({
       z,
    ]);
 
+   const recomputeVisibleRowRange = useCallback(() => {
+      const rowsCount = Number(headerMetrics?.rowsCount || 0);
+      if (!rowsCount) {
+         setVisibleRowRange((prev) =>
+            prev.start === 0 && prev.end === 0 ? prev : { start: 0, end: 0 },
+         );
+         return;
+      }
+
+      const scroller = scrollContainerRef?.current || null;
+      const canvas = canvasRef.current;
+
+      if (!scroller || !canvas) {
+         const full = { start: 0, end: rowsCount - 1 };
+         setVisibleRowRange((prev) =>
+            prev.start === full.start && prev.end === full.end ? prev : full,
+         );
+         return;
+      }
+
+      let topWithinScroller = 0;
+      let node = canvas;
+      while (node && node !== scroller) {
+         topWithinScroller += node.offsetTop || 0;
+         node = node.offsetParent;
+      }
+
+      if (node !== scroller) {
+         const full = { start: 0, end: rowsCount - 1 };
+         setVisibleRowRange((prev) =>
+            prev.start === full.start && prev.end === full.end ? prev : full,
+         );
+         return;
+      }
+
+      const BUFFER_PX = 280;
+      const yTop = scroller.scrollTop - topWithinScroller - BUFFER_PX;
+      const yBottom =
+         scroller.scrollTop + scroller.clientHeight - topWithinScroller + BUFFER_PX;
+
+      const rowHeights = headerMetrics?.rowHeights || [];
+      const headerHeight = Number(headerMetrics?.headerHeight || 0);
+      const rowGap = Number(headerMetrics?.rowGap || 0);
+
+      let accTop = 0;
+      let startRow = 0;
+      let endRow = rowsCount - 1;
+      let foundStart = false;
+
+      for (let row = 0; row < rowsCount; row++) {
+         const rowH = Number(rowHeights[row] ?? 0);
+         const rowBottom = accTop + headerHeight + rowH;
+
+         if (!foundStart && rowBottom >= yTop) {
+            startRow = row;
+            foundStart = true;
+         }
+
+         if (accTop <= yBottom) {
+            endRow = row;
+         } else {
+            break;
+         }
+
+         accTop = rowBottom + rowGap;
+      }
+
+      if (!foundStart) startRow = 0;
+      if (endRow < startRow) endRow = startRow;
+
+      setVisibleRowRange((prev) =>
+         prev.start === startRow && prev.end === endRow
+            ? prev
+            : { start: startRow, end: endRow },
+      );
+   }, [headerMetrics, scrollContainerRef]);
+
+   useEffect(() => {
+      recomputeVisibleRowRange();
+
+      const scroller = scrollContainerRef?.current || null;
+      if (!scroller) return;
+
+      let rafId = null;
+      const schedule = () => {
+         if (rafId != null) return;
+         rafId = requestAnimationFrame(() => {
+            rafId = null;
+            recomputeVisibleRowRange();
+         });
+      };
+
+      scroller.addEventListener("scroll", schedule, { passive: true });
+      window.addEventListener("resize", schedule);
+      window.addEventListener("orientationchange", schedule);
+
+      return () => {
+         scroller.removeEventListener("scroll", schedule);
+         window.removeEventListener("resize", schedule);
+         window.removeEventListener("orientationchange", schedule);
+         if (rafId != null) cancelAnimationFrame(rafId);
+      };
+   }, [recomputeVisibleRowRange, scrollContainerRef]);
+
    /* ================== slot geoms ================== */
 
    const slotGeoms = useMemo(() => {
@@ -2786,18 +2902,12 @@ export default function DayviewCanvasTrack({
          sectorSig: activeSectorFilter || "ALL",
          instructorsLayoutSig,
          searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
-         searchHitsSig:
-            searchHitEventIds instanceof Set
-               ? [...searchHitEventIds].sort().join(",")
-               : Array.isArray(searchHitEventIds)
-                 ? [...searchHitEventIds].map(String).sort().join(",")
-                 : searchHitEventIds &&
-                       typeof searchHitEventIds === "object"
-                   ? Object.keys(searchHitEventIds)
-                        .filter((k) => !!searchHitEventIds[k])
-                        .sort()
-                        .join(",")
-                   : "",
+         forceFullRowsForFocus:
+            activeEventId &&
+            activeRectResolveRef.current.id === String(activeEventId) &&
+            !activeRectResolveRef.current.resolved
+               ? 1
+               : 0,
 
          highlightId: selectedEventId || activeEventId || null,
          highlightSlotKey:
@@ -2808,6 +2918,7 @@ export default function DayviewCanvasTrack({
             waitEdit && waitEdit.slotIndex != null
                ? String(waitEdit.slotIndex)
                : "",
+         visibleRows: `${visibleRowRange.start}:${visibleRowRange.end}`,
       };
 
       const sigKey = JSON.stringify(sig);
@@ -2906,6 +3017,18 @@ export default function DayviewCanvasTrack({
          createDraftBySlotUsers,
          createDraftBySlotColors,
          activeSearchEventId,
+         visibleRowStart:
+            activeEventId &&
+            activeRectResolveRef.current.id === String(activeEventId) &&
+            !activeRectResolveRef.current.resolved
+               ? 0
+               : visibleRowRange.start,
+         visibleRowEnd:
+            activeEventId &&
+            activeRectResolveRef.current.id === String(activeEventId) &&
+            !activeRectResolveRef.current.resolved
+               ? rowsCount - 1
+               : visibleRowRange.end,
       });
       hitMapRef.current = hitMap;
    }, [
@@ -2945,8 +3068,9 @@ export default function DayviewCanvasTrack({
       createDraftSig,
       createDraftBySlotUsers,
       createDraftBySlotColors,
-      searchHitEventIds,
       activeSearchEventId,
+      visibleRowRange.start,
+      visibleRowRange.end,
 
       // ✅ NEW
       activeSectorFilter,
@@ -2970,6 +3094,16 @@ export default function DayviewCanvasTrack({
             String(item.ev.id) === String(activeEventId),
       );
       if (!activeHit) return;
+
+      if (
+         activeRectResolveRef.current.id === String(activeEventId) &&
+         !activeRectResolveRef.current.resolved
+      ) {
+         activeRectResolveRef.current = {
+            id: String(activeEventId),
+            resolved: true,
+         };
+      }
 
       const canvasRect = canvas.getBoundingClientRect();
       const topY = canvasRect.top + activeHit.y;

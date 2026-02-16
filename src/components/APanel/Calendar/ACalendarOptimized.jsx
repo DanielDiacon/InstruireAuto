@@ -2501,10 +2501,17 @@ export default function ACalendarOptimized({
             (d) => startOfDayTs(d) === targetDayTs,
          );
 
-         if (targetIdx === -1) next.add(targetDayTs);
-         else
-            for (let i = 0; i <= targetIdx; i++)
+         if (targetIdx === -1) {
+            next.add(targetDayTs);
+         } else {
+            for (
+               let i = Math.max(0, targetIdx - 1);
+               i <= Math.min(loadedDays.length - 1, targetIdx + 1);
+               i++
+            ) {
                next.add(startOfDayTs(loadedDays[i]));
+            }
+         }
 
          if (next.size === prev.size) return prev;
          return next;
@@ -2793,16 +2800,10 @@ export default function ACalendarOptimized({
    const searchHits = searchState.hits;
    const searchTotal = searchHits.length;
    const searchIndex = searchState.index;
-   const searchHitEventIds = useMemo(
-      () => new Set(searchHits.map((hit) => String(hit.eventId))),
-      [searchHits],
-   );
 
    const activeSearchHit =
       searchTotal && searchIndex < searchTotal ? searchHits[searchIndex] : null;
    const activeSearchEventId = activeSearchHit ? activeSearchHit.eventId : null;
-
-   const hasSearchHits = searchTotal > 0;
 
    const effectiveActiveEventId = autoFocusEventId || activeSearchEventId;
 
@@ -2854,10 +2855,17 @@ export default function ACalendarOptimized({
             (d) => startOfDayTs(d) === targetTs,
          );
 
-         if (targetIdx === -1) next.add(targetTs);
-         else
-            for (let i = 0; i <= targetIdx; i++)
+         if (targetIdx === -1) {
+            next.add(targetTs);
+         } else {
+            for (
+               let i = Math.max(0, targetIdx - 1);
+               i <= Math.min(loadedDays.length - 1, targetIdx + 1);
+               i++
+            ) {
                next.add(startOfDayTs(loadedDays[i]));
+            }
+         }
 
          if (next.size === prev.size) return prev;
          return next;
@@ -2977,7 +2985,6 @@ export default function ACalendarOptimized({
                handleCreateFromEmpty={handleCreateFromEmpty}
                activeEventId={effectiveActiveEventId}
                activeSearchEventId={activeSearchEventId}
-               searchHitEventIds={searchHitEventIds}
                handleActiveEventRectChange={handleActiveEventRectChange}
                cars={cars}
                instructors={instructorsOrderedForUI}
@@ -2985,7 +2992,7 @@ export default function ACalendarOptimized({
                canvasInstructorsA={canvasInstructorsA}
                canvasInstructorsB={canvasInstructorsB}
                viewModel={calendarViewModel}
-               forceAllDaysVisible={hasSearchHits}
+               forceAllDaysVisible={false}
                presenceVer={presenceVer}
                onReservationJoin={joinReservationSafe}
                createDraftVer={createDraftVer}
@@ -3167,7 +3174,6 @@ const ACalendarTrack = memo(function ACalendarTrack({
    handleCreateFromEmpty,
    activeEventId,
    activeSearchEventId,
-   searchHitEventIds,
    handleActiveEventRectChange,
    cars,
    instructors,
@@ -3331,6 +3337,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                            >
                               {isVisible ? (
                                  <DayviewCanvasTrack
+                                    scrollContainerRef={scrollRef}
                                     dayStart={dayStartLocal}
                                     dayEnd={dayEndLocal}
                                     instructors={dayInstructors} // ✅ A/B pe zi
@@ -3357,7 +3364,6 @@ const ACalendarTrack = memo(function ACalendarTrack({
                                     blackoutVer={blackoutVer}
                                     activeEventId={activeEventId}
                                     activeSearchEventId={activeSearchEventId}
-                                    searchHitEventIds={searchHitEventIds}
                                     onActiveEventRectChange={
                                        handleActiveEventRectChange
                                     }

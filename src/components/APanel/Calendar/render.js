@@ -466,6 +466,8 @@ export function drawAll({
    createDraftBySlotUsers = null,
    createDraftBySlotColors = null,
    activeSearchEventId = null,
+   visibleRowStart = 0,
+   visibleRowEnd = null,
 }) {
    if (!ctx || !width || !height) return;
 
@@ -637,6 +639,10 @@ export function drawAll({
    const highlightEventIdForRender = highlightEventId;
    const activeSearchEventIdStr =
       activeSearchEventId != null ? String(activeSearchEventId) : null;
+   const drawRowStart = Math.max(0, Number(visibleRowStart || 0));
+   const drawRowEnd = Number.isFinite(visibleRowEnd)
+      ? Math.min(rowsCount - 1, Number(visibleRowEnd))
+      : rowsCount - 1;
 
    let currentRowTop = 0;
 
@@ -644,6 +650,11 @@ export function drawAll({
       const rowHeight = effectiveRowHeights[row] ?? worldHeight;
       const rowTop = currentRowTop;
       const rowContentTop = rowTop + headerHeight;
+
+      if (row < drawRowStart || row > drawRowEnd) {
+         currentRowTop += headerHeight + rowHeight + rowGap;
+         continue;
+      }
 
       const rowStartIdx = row * colsPerRow;
       const colsInThisRow = Math.min(

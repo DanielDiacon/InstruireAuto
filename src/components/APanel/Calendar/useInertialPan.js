@@ -129,6 +129,7 @@ export default function useInertialPan(
             if (Math.hypot(dx, dy) < SLOP_PX) return;
             isPanning.current = true;
             suppressClickOnce.current = true;
+            el.dispatchEvent(new CustomEvent("dvpanstart"));
             if (suspendFlagsRef?.current) {
                suspendFlagsRef.current.suspendScrollSnap = true;
                suspendFlagsRef.current.suspendAutoJump = true;
