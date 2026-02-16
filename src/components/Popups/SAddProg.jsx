@@ -1791,7 +1791,7 @@ export default function SAddProg({ onClose }) {
          setStage("setup");
          setAutoFlowActive(false);
 
-         safeClose();
+         closePopupStore();
          setTimeout(() => {
             window.location.reload();
          }, 0);

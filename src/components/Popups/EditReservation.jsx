@@ -48,39 +48,80 @@ const MOLDOVA_TZ = "Europe/Chisinau";
 const BUSY_KEYS_MODE = "local-match";
 const SEARCH_RESULTS_LIMIT = 10;
 const OUTSIDE_CLOSE_GUARD_MS = 280;
+const EMPTY_KEY_SET = new Set();
+
+const __fmtCache = new Map();
+function getFmt(locale, timeZone, mode) {
+   const key = `${locale}|${timeZone}|${mode}`;
+   let fmt = __fmtCache.get(key);
+   if (fmt) return fmt;
+
+   if (mode === "date") {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+      });
+   } else if (mode === "time") {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         hour12: false,
+         hour: "2-digit",
+         minute: "2-digit",
+      });
+   } else if (mode === "datetime-sec") {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         hour12: false,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+         hour: "2-digit",
+         minute: "2-digit",
+         second: "2-digit",
+      });
+   } else {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         hour12: false,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+         hour: "2-digit",
+         minute: "2-digit",
+      });
+   }
+
+   __fmtCache.set(key, fmt);
+   return fmt;
+}
+
+function partsObj(formatter, dateLike) {
+   const out = {};
+   const parts = formatter.formatToParts(new Date(dateLike));
+   for (const p of parts) {
+      if (p.type !== "literal") out[p.type] = p.value;
+   }
+   return out;
+}
 
 function localDateStrTZ(date, tz = MOLDOVA_TZ) {
-   const fmt = new Intl.DateTimeFormat("en-GB", {
-      timeZone: tz,
-      month: "2-digit",
-      day: "2-digit",
-      year: "numeric",
-   });
-   const parts = fmt.formatToParts(date);
-   const day = parts.find((p) => p.type === "day")?.value ?? "01";
-   const month = parts.find((p) => p.type === "month")?.value ?? "01";
-   const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+   const p = partsObj(getFmt("en-GB", tz, "date"), date);
+   const day = p.day ?? "01";
+   const month = p.month ?? "01";
+   const year = p.year ?? "1970";
    return `${year}-${month}-${day}`;
 }
 
 function tzOffsetMinutesAt(tsMs, timeZone = MOLDOVA_TZ) {
-   const fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-   });
-   const p = fmt.formatToParts(new Date(tsMs));
-   const y = +p.find((x) => x.type === "year").value;
-   const m = +p.find((x) => x.type === "month").value;
-   const d = +p.find((x) => x.type === "day").value;
-   const H = +p.find((x) => x.type === "hour").value;
-   const M = +p.find((x) => x.type === "minute").value;
-   const S = +p.find((x) => x.type === "second").value;
+   const p = partsObj(getFmt("en-GB", timeZone, "datetime-sec"), tsMs);
+   const y = Number(p.year);
+   const m = Number(p.month);
+   const d = Number(p.day);
+   const H = Number(p.hour);
+   const M = Number(p.minute);
+   const S = Number(p.second);
    const asUTC = Date.UTC(y, m - 1, d, H, M, S);
    return (asUTC - tsMs) / 60000;
 }
@@ -106,21 +147,12 @@ function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
    const shifted = new Date(base.getTime() + offMin * 60000);
 
-   const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: MOLDOVA_TZ,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-   }).formatToParts(shifted);
-
-   const Y = parts.find((p) => p.type === "year").value;
-   const Mo = parts.find((p) => p.type === "month").value;
-   const Da = parts.find((p) => p.type === "day").value;
-   const HH = parts.find((p) => p.type === "hour").value;
-   const MM = parts.find((p) => p.type === "minute").value;
+   const parts = partsObj(getFmt("en-GB", MOLDOVA_TZ, "datetime"), shifted);
+   const Y = parts.year;
+   const Mo = parts.month;
+   const Da = parts.day;
+   const HH = parts.hour;
+   const MM = parts.minute;
 
    const offMin2 = tzOffsetMinutesAt(shifted.getTime(), MOLDOVA_TZ);
    const sign = offMin2 >= 0 ? "+" : "-";
@@ -132,21 +164,12 @@ function isoForDbMatchLocalHour(isoUtcFromMoldova) {
 }
 
 function localKeyFromTs(tsMs, tz = MOLDOVA_TZ) {
-   const fmt = new Intl.DateTimeFormat("en-GB", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-   });
-   const parts = fmt.formatToParts(new Date(tsMs));
-   const Y = parts.find((p) => p.type === "year").value;
-   const Mo = parts.find((p) => p.type === "month").value;
-   const Da = parts.find((p) => p.type === "day").value;
-   const HH = parts.find((p) => p.type === "hour").value;
-   const MM = parts.find((p) => p.type === "minute").value;
+   const parts = partsObj(getFmt("en-GB", tz, "datetime"), tsMs);
+   const Y = parts.year;
+   const Mo = parts.month;
+   const Da = parts.day;
+   const HH = parts.hour;
+   const MM = parts.minute;
    return `${Y}-${Mo}-${Da}|${HH}:${MM}`;
 }
 
@@ -166,12 +189,7 @@ function busyLocalKeyFromStored(st) {
 }
 
 const nowHHMMInMoldova = () =>
-   new Intl.DateTimeFormat("en-GB", {
-      timeZone: MOLDOVA_TZ,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-   }).format(new Date());
+   getFmt("en-GB", MOLDOVA_TZ, "time").format(new Date());
 
 /* ===== Intervale ore ===== */
 const oreDisponibile = [
@@ -279,13 +297,17 @@ const nextNDays = (n, fromDate = new Date()) => {
    return out;
 };
 
-const buildFullGridISO = (daysWindow = 60) => {
+const buildFullGridSlots = (daysWindow = 60) => {
    const daysArr = nextNDays(daysWindow, new Date());
    const out = [];
    for (const dayStr of daysArr) {
       const dObj = localDateObjFromStr(dayStr);
       for (const t of oreDisponibile) {
-         out.push(toUtcIsoFromMoldova(dObj, t.oraStart));
+         const iso = toUtcIsoFromMoldova(dObj, t.oraStart);
+         out.push({
+            iso,
+            key: localKeyForIso(iso),
+         });
       }
    }
    return out;
@@ -785,49 +807,114 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    }, [instructors, qInstructor]);
 
    const [freeSlots, setFreeSlots] = useState([]);
-   const fullGrid = useMemo(() => buildFullGridISO(60), []);
+   const fullGrid = useMemo(() => buildFullGridSlots(60), []);
    const freeLocalKeySet = useMemo(
       () => new Set(freeSlots.map((iso) => localKeyForIso(iso))),
       [freeSlots],
    );
 
-   const recomputeAvailability = useCallback(() => {
+   const { busyKeysByStudentId, busyKeysByInstructorId } = useMemo(() => {
+      const byStudent = new Map();
+      const byInstructor = new Map();
+      const busyKeyCache = new Map();
+
+      const getBusyKey = (startValue) => {
+         const raw = String(startValue ?? "");
+         if (!raw) return "";
+         const cached = busyKeyCache.get(raw);
+         if (cached != null) return cached;
+         const next = busyLocalKeyFromStored(raw);
+         busyKeyCache.set(raw, next);
+         return next;
+      };
+
+      for (const r of reservations || []) {
+         if (String(r?.id ?? "") === String(reservationId)) continue;
+
+         const st = getStartFromReservation(r);
+         if (!st) continue;
+         const key = getBusyKey(st);
+         if (!key) continue;
+
+         const sid = String(r?.userId ?? r?.studentId ?? "").trim();
+         if (sid) {
+            let set = byStudent.get(sid);
+            if (!set) {
+               set = new Set();
+               byStudent.set(sid, set);
+            }
+            set.add(key);
+         }
+
+         const iid = String(r?.instructorId ?? "").trim();
+         if (iid) {
+            let set = byInstructor.get(iid);
+            if (!set) {
+               set = new Set();
+               byInstructor.set(iid, set);
+            }
+            set.add(key);
+         }
+      }
+
+      return {
+         busyKeysByStudentId: byStudent,
+         busyKeysByInstructorId: byInstructor,
+      };
+   }, [reservations, reservationId]);
+
+   useEffect(() => {
       if (!studentId || !instructorId) {
          setFreeSlots([]);
          return;
       }
 
-      const others = (reservations || []).filter(
-         (r) => String(r.id) !== String(reservationId),
-      );
+      let cancelled = false;
 
-      const busyStudent = new Set();
-      const busyInstructor = new Set();
+      const compute = () => {
+         if (cancelled) return;
 
-      for (const r of others) {
-         const st = getStartFromReservation(r);
-         if (!st) continue;
-         const key = busyLocalKeyFromStored(st);
+         const studentSet =
+            busyKeysByStudentId.get(String(studentId)) || EMPTY_KEY_SET;
+         const instructorSet =
+            busyKeysByInstructorId.get(String(instructorId)) || EMPTY_KEY_SET;
 
-         if (String(r?.userId ?? r?.studentId ?? "") === String(studentId)) {
-            busyStudent.add(key);
+         const free = [];
+         for (const slot of fullGrid) {
+            const key = slot?.key;
+            if (!key) continue;
+            if (studentSet.has(key) || instructorSet.has(key)) continue;
+            free.push(slot.iso);
          }
-         if (String(r?.instructorId ?? "") === String(instructorId)) {
-            busyInstructor.add(key);
-         }
+
+         if (!cancelled) setFreeSlots(free);
+      };
+
+      if (
+         typeof window !== "undefined" &&
+         typeof window.requestIdleCallback === "function"
+      ) {
+         const rid = window.requestIdleCallback(compute, { timeout: 120 });
+         return () => {
+            cancelled = true;
+            if (typeof window.cancelIdleCallback === "function") {
+               window.cancelIdleCallback(rid);
+            }
+         };
       }
 
-      const free = fullGrid.filter((iso) => {
-         const key = localKeyForIso(iso);
-         return !busyStudent.has(key) && !busyInstructor.has(key);
-      });
-
-      setFreeSlots(free);
-   }, [studentId, instructorId, reservations, reservationId, fullGrid]);
-
-   useEffect(() => {
-      recomputeAvailability();
-   }, [recomputeAvailability]);
+      const tid = setTimeout(compute, 0);
+      return () => {
+         cancelled = true;
+         clearTimeout(tid);
+      };
+   }, [
+      studentId,
+      instructorId,
+      fullGrid,
+      busyKeysByStudentId,
+      busyKeysByInstructorId,
+   ]);
 
    const freeByDay = useMemo(() => {
       const map = new Map();
@@ -1282,7 +1369,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                         onClick={() => {
                            setStudentId(String(s.id));
                            setView("form");
-                           setTimeout(() => recomputeAvailability(), 0);
                         }}
                      >
                         <div className="popupui__search-item-left">
@@ -1330,7 +1416,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
                         onClick={() => {
                            setInstructorId(String(i.id));
                            setView("form");
-                           setTimeout(() => recomputeAvailability(), 0);
                         }}
                      >
                         <div className="popupui__search-item-left">

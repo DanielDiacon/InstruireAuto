@@ -111,7 +111,15 @@ export default function Popup() {
       }, 0);
    };
 
+   const confirmCloseCurrentPopup = useCallback(() => {
+      if (popupState?.type !== "sAddProg") return true;
+      if (typeof window === "undefined") return true;
+      return window.confirm("Sigur doriți să ieșiți din acest popup?");
+   }, [popupState?.type]);
+
    const handleCloseClick = useCallback(() => {
+      if (!confirmCloseCurrentPopup()) return;
+
       // dacă ai subpopup (stack), îl închizi separat
       if (getCurrentSubPopup()) {
          requestCloseSubPopup();
@@ -124,7 +132,7 @@ export default function Popup() {
       // pe mobil, scoatem dummy-ul doar dacă e pe top
       const sid = sessionIdRef.current;
       maybePopPopupDummy(sid);
-   }, []);
+   }, [confirmCloseCurrentPopup]);
 
    // ✅ Back hardware / gesture: dacă popup e deschis, îl închidem
    useEffect(() => {
@@ -132,6 +140,12 @@ export default function Popup() {
          if (!isMobile()) return;
 
          if (!getCurrentPopup()) return;
+
+         if (!confirmCloseCurrentPopup()) {
+            // păstrăm popup-ul deschis dacă userul anulează close-ul
+            pushOrReplacePopupDummy(sessionIdRef.current);
+            return;
+         }
 
          if (getCurrentSubPopup()) {
             requestCloseSubPopup();
@@ -148,7 +162,7 @@ export default function Popup() {
 
       window.addEventListener("popstate", onPopState);
       return () => window.removeEventListener("popstate", onPopState);
-   }, []);
+   }, [confirmCloseCurrentPopup]);
 
    useEffect(() => {
       const unsubscribe = subscribePopup(({ detail }) => {

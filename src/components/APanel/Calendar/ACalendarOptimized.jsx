@@ -2159,6 +2159,24 @@ export default function ACalendarOptimized({
    const blackoutKeyMapRef = useRef(new Map());
    const blackoutInFlightRef = useRef(new Set());
    const [blackoutVer, setBlackoutVer] = useState(0);
+   const blackoutBumpRafRef = useRef(0);
+
+   const requestBlackoutVersionBump = useCallback(() => {
+      if (blackoutBumpRafRef.current) return;
+      blackoutBumpRafRef.current = requestAnimationFrame(() => {
+         blackoutBumpRafRef.current = 0;
+         setBlackoutVer((v) => v + 1);
+      });
+   }, []);
+
+   useEffect(() => {
+      return () => {
+         if (blackoutBumpRafRef.current) {
+            cancelAnimationFrame(blackoutBumpRafRef.current);
+            blackoutBumpRafRef.current = 0;
+         }
+      };
+   }, []);
 
    const currentMonthValue = useMemo(() => {
       const d = new Date(currentDate);
@@ -2314,17 +2332,17 @@ export default function ACalendarOptimized({
             }
 
             blackoutKeyMapRef.current.set(key, set);
-            setBlackoutVer((v) => v + 1);
+            requestBlackoutVersionBump();
          } catch (e) {
             console.error("getInstructorBlackouts error for", key, e);
 
             blackoutKeyMapRef.current.set(key, new Set());
-            setBlackoutVer((v) => v + 1);
+            requestBlackoutVersionBump();
          } finally {
             blackoutInFlightRef.current.delete(key);
          }
       },
-      [allowedKeysSet, monthRange],
+      [allowedKeysSet, monthRange, requestBlackoutVersionBump],
    );
 
    // ✅ ținem ref actual pentru bus listener

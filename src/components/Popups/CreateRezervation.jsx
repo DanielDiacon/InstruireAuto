@@ -43,6 +43,62 @@ const MOLDOVA_TZ = "Europe/Chisinau";
 const SEARCH_RESULTS_LIMIT = 10;
 const OUTSIDE_CLOSE_GUARD_MS = 280;
 
+const __fmtCache = new Map();
+function getFmt(locale, timeZone, mode) {
+   const key = `${locale}|${timeZone}|${mode}`;
+   let fmt = __fmtCache.get(key);
+   if (fmt) return fmt;
+
+   if (mode === "date") {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+      });
+   } else if (mode === "date-long") {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         day: "numeric",
+         month: "long",
+         year: "numeric",
+      });
+   } else if (mode === "datetime-sec") {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         hour12: false,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+         hour: "2-digit",
+         minute: "2-digit",
+         second: "2-digit",
+      });
+   } else {
+      fmt = new Intl.DateTimeFormat(locale, {
+         timeZone,
+         hour12: false,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit",
+         hour: "2-digit",
+         minute: "2-digit",
+      });
+   }
+
+   __fmtCache.set(key, fmt);
+   return fmt;
+}
+
+function partsObj(formatter, dateLike) {
+   const out = {};
+   const parts = formatter.formatToParts(new Date(dateLike));
+   for (const p of parts) {
+      if (p.type !== "literal") out[p.type] = p.value;
+   }
+   return out;
+}
+
 const slugify = (s) =>
    (s || "")
       .normalize("NFD")
@@ -116,17 +172,8 @@ const COLOR_HINTS = {
 
 /* ========= TZ utils ========= */
 function partsInTZ(dateLike, timeZone = MOLDOVA_TZ) {
-   const p = new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-   }).formatToParts(new Date(dateLike));
-   const get = (t) => +p.find((x) => x.type === t).value;
+   const p = partsObj(getFmt("en-GB", timeZone, "datetime-sec"), dateLike);
+   const get = (t) => Number(p[t] ?? 0);
    return {
       y: get("year"),
       m: get("month"),
@@ -171,21 +218,13 @@ function isoForDbMatchLocalHour(isoUtcFromMoldova) {
    const base = new Date(isoUtcFromMoldova);
    const offMin = tzOffsetMinutesAt(base.getTime(), MOLDOVA_TZ);
    const shifted = new Date(base.getTime() + offMin * 60000);
-   const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: MOLDOVA_TZ,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-   }).formatToParts(shifted);
+   const parts = partsObj(getFmt("en-GB", MOLDOVA_TZ, "datetime"), shifted);
 
-   const Y = parts.find((p) => p.type === "year").value;
-   const Mo = parts.find((p) => p.type === "month").value;
-   const Da = parts.find((p) => p.type === "day").value;
-   const HH = parts.find((p) => p.type === "hour").value;
-   const MM = parts.find((p) => p.type === "minute").value;
+   const Y = parts.year;
+   const Mo = parts.month;
+   const Da = parts.day;
+   const HH = parts.hour;
+   const MM = parts.minute;
 
    const offMin2 = tzOffsetMinutesAt(shifted.getTime(), MOLDOVA_TZ);
    const sign = offMin2 >= 0 ? "+" : "-";
@@ -237,12 +276,7 @@ function highlightText(text, query) {
 const formatDateRO = (iso) => {
    if (!iso) return "";
    const d = new Date(iso);
-   const fmt = new Intl.DateTimeFormat("ro-RO", {
-      timeZone: MOLDOVA_TZ,
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-   }).format(d);
+   const fmt = getFmt("ro-RO", MOLDOVA_TZ, "date-long").format(d);
    return fmt.replace(/\b([a-zăîâșț])/u, (m) => m.toUpperCase());
 };
 

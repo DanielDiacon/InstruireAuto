@@ -1057,6 +1057,25 @@ export default function DayviewCanvasTrack({
 
    const [themeTick, setThemeTick] = useState(0);
    const [refreshTick, setRefreshTick] = useState(0);
+   const refreshRafRef = useRef(0);
+
+   const requestRedrawFromBus = useCallback(() => {
+      if (refreshRafRef.current) return;
+      refreshRafRef.current = requestAnimationFrame(() => {
+         refreshRafRef.current = 0;
+         lastDrawSigRef.current = null;
+         setRefreshTick((t) => t + 1);
+      });
+   }, []);
+
+   useEffect(() => {
+      return () => {
+         if (refreshRafRef.current) {
+            cancelAnimationFrame(refreshRafRef.current);
+            refreshRafRef.current = 0;
+         }
+      };
+   }, []);
 
    const [selectedEventId, setSelectedEventId] = useState(
       getSelectedEvent()?.id ?? null,
@@ -1319,10 +1338,12 @@ export default function DayviewCanvasTrack({
          const reservationId = ev.raw?.id ?? ev.id;
          if (!reservationId) return;
 
-         // ✅ JOIN înainte de popup
-         joinReservationSafe(reservationId);
-
          openPopup("reservationEdit", { reservationId });
+
+         // Deschidem popup-ul imediat; presence/join se propagă după frame-ul curent.
+         const doJoin = () => joinReservationSafe(reservationId);
+         if (typeof queueMicrotask === "function") queueMicrotask(doJoin);
+         else setTimeout(doJoin, 0);
       },
       [joinReservationSafe],
    );
@@ -1846,13 +1867,10 @@ export default function DayviewCanvasTrack({
       if (typeof listenCalendarRefresh !== "function") return;
 
       // când cineva apelează triggerCalendarRefresh(), invalidăm semnătura + forțăm redraw
-      const unsubscribe = listenCalendarRefresh(() => {
-         lastDrawSigRef.current = null;
-         setRefreshTick((t) => t + 1);
-      });
+      const unsubscribe = listenCalendarRefresh(requestRedrawFromBus);
 
       return unsubscribe;
-   }, []);
+   }, [requestRedrawFromBus]);
 
    /* ================== selection + hidden listeners ================== */
 
