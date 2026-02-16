@@ -54,6 +54,9 @@ const LS_DV_ZOOM_KEY = "__DV_CALENDAR_ZOOM_PCT"; // ex: "50","75","100","125","1
 const LS_DV_SCROLL_STATE_KEY = "__DV_CALENDAR_SCROLL_STATE_V1";
 // JSON: { [monthKey]: { x:number, y:number, t:number } }
 const DV_SCROLL_KEEP = 12;
+const VISIBLE_DAYS_SCROLL_THRESHOLD_PX = 48;
+const TRACK_DAY_GAP_PX = 24;
+const VISIBLE_DAYS_OVERSCAN = 2;
 
 function safeReadScrollStateMap() {
    if (typeof window === "undefined") return {};
@@ -389,6 +392,17 @@ function closestZoomPercentFromZoom(zoomVal) {
 }
 
 const EMPTY_EVENTS = [];
+const EMPTY_SLOTS = [];
+
+function setsEqual(a, b) {
+   if (a === b) return true;
+   if (!a || !b) return false;
+   if (a.size !== b.size) return false;
+   for (const v of a) {
+      if (!b.has(v)) return false;
+   }
+   return true;
+}
 
 const MOLDOVA_TZ_ID = "Europe/Chisinau";
 const DEBUG_CANVAS_EMPTY = false;
@@ -499,6 +513,7 @@ export default function ACalendarOptimized({
    const scrollRef = useRef(null);
    const dayRefs = useRef(new Map());
    const scrollLazyRafRef = useRef(null);
+   const lastVisibleDaysScrollLeftRef = useRef(-1);
 
    const [visibleDays, setVisibleDays] = useState(() => new Set());
    const visibleDaysCount = visibleDays.size;
@@ -2054,26 +2069,36 @@ export default function ACalendarOptimized({
    }, [currentDate]);
 
    const loadedDays = allAllowedDays;
+   const dayWidthForTrack = useMemo(
+      () => maxColsPerGroup * px(COL_W) * zoom,
+      [maxColsPerGroup, zoom],
+   );
+   const dayStrideForTrack = dayWidthForTrack + TRACK_DAY_GAP_PX;
 
    const recomputeVisibleDays = useCallback(() => {
       const scroller = scrollRef.current;
       if (!scroller) return;
 
-      const viewLeft = scroller.scrollLeft;
-      const viewRight = viewLeft + scroller.clientWidth;
-      const MARGIN = 600;
+      const total = loadedDays.length;
+      if (!total) {
+         setVisibleDays((prev) => (prev.size ? new Set() : prev));
+         return;
+      }
+
+      const stride = dayStrideForTrack > 0 ? dayStrideForTrack : 1;
+      const viewLeft = Math.max(0, scroller.scrollLeft || 0);
+      const viewRight = viewLeft + Math.max(0, scroller.clientWidth || 0);
+
+      const rawStart = Math.floor(viewLeft / stride) - VISIBLE_DAYS_OVERSCAN;
+      const rawEnd = Math.ceil(viewRight / stride) + VISIBLE_DAYS_OVERSCAN;
+      const startIdx = Math.max(0, rawStart);
+      const endIdx = Math.min(total - 1, rawEnd);
 
       setVisibleDays((prev) => {
-         const next = new Set(prev);
-
-         dayRefs.current.forEach((el, ts) => {
-            if (!el) return;
-            const left = el.offsetLeft;
-            const right = left + el.offsetWidth;
-            const inRange =
-               right >= viewLeft - MARGIN && left <= viewRight + MARGIN;
-            if (inRange) next.add(Number(ts));
-         });
+         const next = new Set();
+         for (let i = startIdx; i <= endIdx; i++) {
+            next.add(startOfDayTs(loadedDays[i]));
+         }
 
          if (!next.size && loadedDays.length) {
             const maxInit = 7;
@@ -2082,10 +2107,44 @@ export default function ACalendarOptimized({
             }
          }
 
-         if (next.size === prev.size) return prev;
+         if (setsEqual(next, prev)) return prev;
          return next;
       });
-   }, [loadedDays]);
+   }, [loadedDays, dayStrideForTrack]);
+
+   const centerDayTsInScroller = useCallback(
+      (targetDayTs) => {
+         const scroller = scrollRef.current;
+         if (!scroller || targetDayTs == null) return;
+
+         const targetTsNum = Number(targetDayTs);
+         const targetIdx = loadedDays.findIndex(
+            (d) => startOfDayTs(d) === targetTsNum,
+         );
+         if (targetIdx < 0) return;
+
+         const dayEl = dayRefs.current.get(targetTsNum);
+         const scrollerWidth = scroller.clientWidth || 0;
+         const scrollWidth = scroller.scrollWidth || 0;
+
+         const dayWidth = dayEl?.offsetWidth || dayWidthForTrack || 0;
+         const dayLeft =
+            dayEl?.offsetLeft ||
+            Math.max(0, targetIdx * Math.max(1, dayStrideForTrack));
+
+         let nextLeft = dayLeft - (scrollerWidth - dayWidth) / 2;
+         if (nextLeft < 0) nextLeft = 0;
+
+         const maxLeft =
+            scrollWidth > scrollerWidth ? scrollWidth - scrollerWidth : 0;
+         if (nextLeft > maxLeft) nextLeft = maxLeft;
+
+         if (Math.abs(nextLeft - scroller.scrollLeft) > 1) {
+            scroller.scrollLeft = nextLeft;
+         }
+      },
+      [loadedDays, dayStrideForTrack, dayWidthForTrack],
+   );
 
    const allowedKeysSet = useMemo(() => {
       const set = new Set();
@@ -2519,26 +2578,7 @@ export default function ACalendarOptimized({
 
       setAutoFocusEventId(targetId);
 
-      const doScrollX = () => {
-         const scroller = scrollRef.current;
-         const dayEl = dayRefs.current.get(targetDayTs);
-         if (!scroller || !dayEl) return;
-
-         const scrollerWidth = scroller.clientWidth;
-         const scrollWidth = scroller.scrollWidth || 0;
-         const dayLeft = dayEl.offsetLeft;
-         const dayWidth = dayEl.offsetWidth || scrollerWidth;
-
-         let nextLeft = dayLeft - (scrollerWidth - dayWidth) / 2;
-         if (nextLeft < 0) nextLeft = 0;
-
-         const maxLeft =
-            scrollWidth > scrollerWidth ? scrollWidth - scrollerWidth : 0;
-         if (nextLeft > maxLeft) nextLeft = maxLeft;
-
-         if (Math.abs(nextLeft - scroller.scrollLeft) > 1)
-            scroller.scrollLeft = nextLeft;
-      };
+      const doScrollX = () => centerDayTsInScroller(targetDayTs);
 
       if (typeof window !== "undefined") {
          window.requestAnimationFrame(() =>
@@ -2551,6 +2591,7 @@ export default function ACalendarOptimized({
       loadedDays,
       currentMonthValue,
       armAutoScrollYOnce,
+      centerDayTsInScroller,
    ]);
 
    const handleMonthChange = useCallback(
@@ -2844,8 +2885,7 @@ export default function ACalendarOptimized({
       armAutoScrollYOnce(hit.eventId, `search:${searchState.query}:${idx}`);
 
       const scroller = scrollRef.current;
-      const dayEl = dayRefs.current.get(hit.dayTs);
-      if (!scroller || !dayEl) return;
+      if (!scroller) return;
 
       setVisibleDays((prev) => {
          const next = new Set(prev);
@@ -2871,28 +2911,14 @@ export default function ACalendarOptimized({
          return next;
       });
 
-      try {
-         const scrollerWidth = scroller.clientWidth;
-         const scrollWidth = scroller.scrollWidth || 0;
-         const dayLeft = dayEl.offsetLeft;
-         const dayWidth = dayEl.offsetWidth || scrollerWidth;
-
-         let nextLeft = dayLeft - (scrollerWidth - dayWidth) / 2;
-         if (nextLeft < 0) nextLeft = 0;
-
-         const maxLeft =
-            scrollWidth > scrollerWidth ? scrollWidth - scrollerWidth : 0;
-         if (nextLeft > maxLeft) nextLeft = maxLeft;
-
-         if (Math.abs(nextLeft - scroller.scrollLeft) > 1)
-            scroller.scrollLeft = nextLeft;
-      } catch {}
+      centerDayTsInScroller(hit.dayTs);
    }, [
       searchHits,
       searchState.index,
       loadedDays,
       armAutoScrollYOnce,
       searchState.query,
+      centerDayTsInScroller,
    ]);
 
    useEffect(() => {
@@ -2917,11 +2943,21 @@ export default function ACalendarOptimized({
       const onScroll = () => {
          const el = scroller;
          // ✅ memorează poziția curentă
-         schedulePersistScroll(el.scrollLeft || 0, el.scrollTop || 0);
+         const left = el.scrollLeft || 0;
+         const top = el.scrollTop || 0;
+         schedulePersistScroll(left, top);
 
          if (scrollLazyRafRef.current) return;
          scrollLazyRafRef.current = requestAnimationFrame(() => {
             scrollLazyRafRef.current = null;
+            const prevLeft = lastVisibleDaysScrollLeftRef.current;
+            if (
+               prevLeft >= 0 &&
+               Math.abs(left - prevLeft) < VISIBLE_DAYS_SCROLL_THRESHOLD_PX
+            ) {
+               return;
+            }
+            lastVisibleDaysScrollLeftRef.current = left;
             recomputeVisibleDays();
          });
       };
@@ -3200,11 +3236,51 @@ const ACalendarTrack = memo(function ACalendarTrack({
    const standardSlotsByDay = viewModel?.standardSlotsByDay || new Map();
    const blackoutKeyMap = viewModel?.blackoutKeyMap || null;
    const blackoutVer = viewModel?.blackoutVer ?? 0;
+   const labelFormatter = useMemo(
+      () =>
+         new Intl.DateTimeFormat("ro-RO", {
+            weekday: "short",
+            day: "2-digit",
+            month: "short",
+         }),
+      [],
+   );
+   const canvasLayout = useMemo(
+      () => ({
+         colWidth: baseMetrics.colw,
+         colGap: 12 * zoom,
+         headerHeight: 100 * zoom,
+         slotHeight: 125 * zoom,
+         colsPerRow: maxColsPerGroup,
+         rowGap: 24 * zoom,
+         dayWidth: baseMetrics.dayWidth,
+      }),
+      [baseMetrics.colw, baseMetrics.dayWidth, zoom, maxColsPerGroup],
+   );
 
    const isGroupAForDate = useCallback((dateObj) => {
       const dow = dateObj.getDay(); // 0=Sun,1=Mon,...6=Sat
       return dow === 0 || dow === 2 || dow === 4; // ✅ Dum + Mar + Joi
    }, []);
+
+   const dayEntries = useMemo(
+      () =>
+         loadedDays.map((d) => {
+            const ts = startOfDayTs(d);
+            const dayStartLocal = new Date(d);
+            dayStartLocal.setHours(7, 0, 0, 0);
+            const dayEndLocal = new Date(d);
+            dayEndLocal.setHours(21, 0, 0, 0);
+            return {
+               ts,
+               label: labelFormatter.format(d).replace(",", ""),
+               dayStartTs: dayStartLocal.getTime(),
+               dayEndTs: dayEndLocal.getTime(),
+               isGroupA: isGroupAForDate(d),
+            };
+         }),
+      [loadedDays, isGroupAForDate, labelFormatter],
+   );
 
    return (
       <div
@@ -3261,48 +3337,37 @@ const ACalendarTrack = memo(function ACalendarTrack({
                   style={{
                      display: "flex",
                      alignItems: "stretch",
-                     gap: "24px",
-                     paddingRight: "24px",
+                     gap: `${TRACK_DAY_GAP_PX}px`,
+                     paddingRight: `${TRACK_DAY_GAP_PX}px`,
                      height: "100%",
                   }}
                >
-                  {loadedDays.map((d) => {
-                     const ts = startOfDayTs(d);
+                  {dayEntries.map((entry) => {
+                     const { ts, label, dayStartTs, dayEndTs, isGroupA } =
+                        entry;
                      const isVisible =
                         forceAllDaysVisible || visibleDays.has(ts);
-
-                     // ✅ selectează lista de instructori pe zi
-                     const dayInstructors = isGroupAForDate(d)
+                     const dayInstructors = isGroupA
                         ? canvasInstructorsA
                         : canvasInstructorsB;
+                     let evs = EMPTY_EVENTS;
+                     let slots = EMPTY_SLOTS;
 
-                     let evs = isDummyMode
-                        ? EMPTY_EVENTS
-                        : eventsByDay.get(ts) || EMPTY_EVENTS;
+                     if (isVisible) {
+                        evs = isDummyMode
+                           ? EMPTY_EVENTS
+                           : eventsByDay.get(ts) || EMPTY_EVENTS;
 
-                     if (allowedInstBySector && evs !== EMPTY_EVENTS) {
-                        evs = evs.filter((ev) =>
-                           allowedInstBySector.has(
-                              String(ev.instructorId ?? "__unknown"),
-                           ),
-                        );
+                        if (allowedInstBySector && evs !== EMPTY_EVENTS) {
+                           evs = evs.filter((ev) =>
+                              allowedInstBySector.has(
+                                 String(ev.instructorId ?? "__unknown"),
+                              ),
+                           );
+                        }
+
+                        slots = standardSlotsByDay.get(ts) || EMPTY_SLOTS;
                      }
-
-                     const label = new Intl.DateTimeFormat("ro-RO", {
-                        weekday: "short",
-                        day: "2-digit",
-                        month: "short",
-                     })
-                        .format(d)
-                        .replace(",", "");
-
-                     const dayStartLocal = new Date(d);
-                     dayStartLocal.setHours(7, 0, 0, 0);
-
-                     const dayEndLocal = new Date(d);
-                     dayEndLocal.setHours(21, 0, 0, 0);
-
-                     const slots = standardSlotsByDay.get(ts) || [];
 
                      return (
                         <section
@@ -3321,6 +3386,8 @@ const ACalendarTrack = memo(function ACalendarTrack({
                            data-day-ts={ts}
                            style={{
                               flex: "0 0 auto",
+                              width: `${baseMetrics.dayWidth}px`,
+                              minWidth: `${baseMetrics.dayWidth}px`,
                               display: "flex",
                               flexDirection: "column",
                            }}
@@ -3338,20 +3405,12 @@ const ACalendarTrack = memo(function ACalendarTrack({
                               {isVisible ? (
                                  <DayviewCanvasTrack
                                     scrollContainerRef={scrollRef}
-                                    dayStart={dayStartLocal}
-                                    dayEnd={dayEndLocal}
+                                    dayStart={dayStartTs}
+                                    dayEnd={dayEndTs}
                                     instructors={dayInstructors} // ✅ A/B pe zi
                                     events={DEBUG_CANVAS_EMPTY ? [] : evs}
                                     slots={slots}
-                                    layout={{
-                                       colWidth: baseMetrics.colw,
-                                       colGap: 12 * zoom,
-                                       headerHeight: 100 * zoom,
-                                       slotHeight: 125 * zoom,
-                                       colsPerRow: maxColsPerGroup,
-                                       rowGap: 24 * zoom,
-                                       dayWidth: baseMetrics.dayWidth,
-                                    }}
+                                    layout={canvasLayout}
                                     timeMarks={timeMarks}
                                     onCreateSlot={handleCreateFromEmpty}
                                     blockedKeyMap={

@@ -26,6 +26,17 @@ export const NO_COLOR_TOKEN = "--black-t";
 
 let COLOR_ROOT = null;
 let COLOR_CACHE = new Map();
+let LAST_EVENTS_REF = null;
+let LAST_EVENTS_WITH_COLOR = [];
+let LAST_EVENTS_BY_INST = {};
+let LAST_OVERLAP_SOURCE_REF = null;
+let LAST_OVERLAP_MAP = null;
+let LAST_SLOT_GEOMS_REF = null;
+let LAST_SLOT_INDEX_BY_LABEL = null;
+let EVENTS_SIGNATURE_CACHE = new WeakMap();
+let SLOTS_SIGNATURE_CACHE = new WeakMap();
+let WAIT_NOTES_SIGNATURE_CACHE = new WeakMap();
+let BLOCKED_SIGNATURE_CACHE = new WeakMap();
 
 export function getColorRoot() {
    if (typeof document === "undefined") return null;
@@ -43,6 +54,17 @@ export function getColorRoot() {
 
 export function clearColorCache() {
    COLOR_CACHE.clear();
+   LAST_EVENTS_REF = null;
+   LAST_EVENTS_WITH_COLOR = [];
+   LAST_EVENTS_BY_INST = {};
+   LAST_OVERLAP_SOURCE_REF = null;
+   LAST_OVERLAP_MAP = null;
+   LAST_SLOT_GEOMS_REF = null;
+   LAST_SLOT_INDEX_BY_LABEL = null;
+   EVENTS_SIGNATURE_CACHE = new WeakMap();
+   SLOTS_SIGNATURE_CACHE = new WeakMap();
+   WAIT_NOTES_SIGNATURE_CACHE = new WeakMap();
+   BLOCKED_SIGNATURE_CACHE = new WeakMap();
 }
 
 function resolveColor(color) {
@@ -346,6 +368,8 @@ export function computeWorldHeight(slotsCount, slotHeight, slotGap) {
 
 export function buildEventsSignatureForDay(events) {
    if (!Array.isArray(events) || !events.length) return "0";
+   const cached = EVENTS_SIGNATURE_CACHE.get(events);
+   if (cached) return cached;
 
    const simplified = events.map((ev) => {
       const id = ev?.id ?? ev?.raw?.id ?? "";
@@ -374,19 +398,33 @@ export function buildEventsSignatureForDay(events) {
    for (const ev of simplified) {
       out += `${ev.instId}:${ev.id}:${ev.s}-${ev.e}:${ev.color};`;
    }
+   EVENTS_SIGNATURE_CACHE.set(events, out);
    return out;
 }
 
 export function buildSlotsSignature(slotGeoms) {
    if (!Array.isArray(slotGeoms) || !slotGeoms.length) return "0";
+   const cached = SLOTS_SIGNATURE_CACHE.get(slotGeoms);
+   if (cached) return cached;
    let out = "";
    for (const sg of slotGeoms) out += `${sg.index}:${sg.startMs}-${sg.endMs};`;
+   SLOTS_SIGNATURE_CACHE.set(slotGeoms, out);
    return out;
 }
 
 export function buildBlockedSignature(blockedKeyMap, instructors) {
    if (!blockedKeyMap || !Array.isArray(instructors) || !instructors.length)
       return "0";
+
+   const blockedIsObject =
+      typeof blockedKeyMap === "object" && blockedKeyMap !== null;
+   if (blockedIsObject) {
+      const cachedByInstructors = BLOCKED_SIGNATURE_CACHE.get(blockedKeyMap);
+      if (cachedByInstructors) {
+         const cached = cachedByInstructors.get(instructors);
+         if (cached) return cached;
+      }
+   }
 
    const ids = instructors
       .map((inst) => (inst && inst.id != null ? String(inst.id) : ""))
@@ -411,11 +449,24 @@ export function buildBlockedSignature(blockedKeyMap, instructors) {
       parts.push(`${id}:${arr.join(",")}`);
    }
 
-   return parts.join("|") || "0";
+   const out = parts.join("|") || "0";
+
+   if (blockedIsObject) {
+      let cachedByInstructors = BLOCKED_SIGNATURE_CACHE.get(blockedKeyMap);
+      if (!cachedByInstructors) {
+         cachedByInstructors = new WeakMap();
+         BLOCKED_SIGNATURE_CACHE.set(blockedKeyMap, cachedByInstructors);
+      }
+      cachedByInstructors.set(instructors, out);
+   }
+
+   return out;
 }
 
 export function buildWaitNotesSignature(waitNotes) {
    if (!waitNotes || typeof waitNotes !== "object") return "0";
+   const cached = WAIT_NOTES_SIGNATURE_CACHE.get(waitNotes);
+   if (cached) return cached;
    const keys = Object.keys(waitNotes);
    if (!keys.length) return "0";
    keys.sort();
@@ -425,6 +476,7 @@ export function buildWaitNotesSignature(waitNotes) {
       const text = typeof val === "string" ? val : (val && val.text) || "";
       out += `${k}:${text};`;
    }
+   WAIT_NOTES_SIGNATURE_CACHE.set(waitNotes, out);
    return out;
 }
 
@@ -484,36 +536,47 @@ export function drawAll({
       worldHeight,
    );
 
-   const eventsWithColor = (events || []).map((ev) => {
-      const token = normalizeEventColor(ev.color);
-      const resolved = resolveColor(token);
-      return {
-         ...ev,
-         _colorToken: token,
-         _resolvedColor: resolved,
-      };
-   });
+   let eventsWithColor = LAST_EVENTS_WITH_COLOR;
+   let eventsByInst = LAST_EVENTS_BY_INST;
+   if (LAST_EVENTS_REF !== events) {
+      eventsWithColor = (events || []).map((ev) => {
+         const token = normalizeEventColor(ev.color);
+         const resolved = resolveColor(token);
+         return {
+            ...ev,
+            _colorToken: token,
+            _resolvedColor: resolved,
+         };
+      });
 
-   // grupare după instructor + pad column index
-   const eventsByInst = {};
-   eventsWithColor.forEach((ev) => {
-      let iid = "";
-      if (ev.instructorId != null) iid = String(ev.instructorId);
-      else if (ev.raw?.instructorId != null) iid = String(ev.raw.instructorId);
-      else if (ev.raw?.instructor_id != null)
-         iid = String(ev.raw.instructor_id);
+      // grupare după instructor + pad column index
+      eventsByInst = {};
+      eventsWithColor.forEach((ev) => {
+         let iid = "";
+         if (ev.instructorId != null) iid = String(ev.instructorId);
+         else if (ev.raw?.instructorId != null)
+            iid = String(ev.raw.instructorId);
+         else if (ev.raw?.instructor_id != null)
+            iid = String(ev.raw.instructor_id);
 
-      const padIndex =
-         typeof ev._padColumnIndex === "number" ? ev._padColumnIndex : -1;
-      const key = padIndex >= 0 ? `${iid}#${padIndex}` : `${iid}#default`;
-      if (!eventsByInst[key]) eventsByInst[key] = [];
-      eventsByInst[key].push(ev);
-   });
+         const padIndex =
+            typeof ev._padColumnIndex === "number" ? ev._padColumnIndex : -1;
+         const key = padIndex >= 0 ? `${iid}#${padIndex}` : `${iid}#default`;
+         if (!eventsByInst[key]) eventsByInst[key] = [];
+         eventsByInst[key].push(ev);
+      });
+
+      LAST_EVENTS_REF = events;
+      LAST_EVENTS_WITH_COLOR = eventsWithColor;
+      LAST_EVENTS_BY_INST = eventsByInst;
+   }
 
    // hartă ocupare reală pe instructor (Map instId -> [{start,end}])
    let overlapMap;
    if (overlapEventsByInst && overlapEventsByInst instanceof Map) {
       overlapMap = overlapEventsByInst;
+   } else if (LAST_OVERLAP_SOURCE_REF === events) {
+      overlapMap = LAST_OVERLAP_MAP || new Map();
    } else {
       overlapMap = new Map();
       eventsWithColor.forEach((ev) => {
@@ -532,12 +595,19 @@ export function drawAll({
             end: ev.end instanceof Date ? ev.end : new Date(ev.end || 0),
          });
       });
+      LAST_OVERLAP_SOURCE_REF = events;
+      LAST_OVERLAP_MAP = overlapMap;
    }
 
-   const slotIndexByLabel = new Map();
-   slotGeoms.forEach((sg, idx) => {
-      if (sg.label) slotIndexByLabel.set(sg.label, idx);
-   });
+   let slotIndexByLabel = LAST_SLOT_INDEX_BY_LABEL;
+   if (LAST_SLOT_GEOMS_REF !== slotGeoms || !slotIndexByLabel) {
+      slotIndexByLabel = new Map();
+      slotGeoms.forEach((sg, idx) => {
+         if (sg.label) slotIndexByLabel.set(sg.label, idx);
+      });
+      LAST_SLOT_GEOMS_REF = slotGeoms;
+      LAST_SLOT_INDEX_BY_LABEL = slotIndexByLabel;
+   }
 
    const baseBg = resolveColor("--black-p");
    const emptySlotBgPads = resolveColor(NO_COLOR_TOKEN);

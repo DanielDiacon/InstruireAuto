@@ -103,8 +103,11 @@ const DPR_LIMIT = 2;
 
 const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
+const STRICT_DBLCLICK_WINDOW_MS = 420;
 
 const RANGE_MINUTES = 90; // ✅ 90 min window
+const VISIBLE_ROWS_PAN_MIN_INTERVAL_MS = 90;
+const VISIBLE_ROWS_PAN_SCROLL_DELTA_PX = 96;
 /* ================== STRONG SIGNATURE HELPERS (REDRAW FIX) ================== */
 const MAX_GAPS_AFTER = 40;
 const GAPCOL_PREFIX = "__gapcol_";
@@ -1033,6 +1036,8 @@ export default function DayviewCanvasTrack({
    const longPressTargetRef = useRef(null);
    const ignoreClickUntilRef = useRef(0);
    const lastPointerTypeRef = useRef("mouse");
+   const strictDblClickRef = useRef({ key: "", at: 0 });
+   const dblClickArmedRef = useRef({ key: "", until: 0 });
 
    const preGridCols =
       !preGrid || preGrid.enabled === false
@@ -1072,6 +1077,7 @@ export default function DayviewCanvasTrack({
    const activeRectResolveRef = useRef({ id: null, resolved: false });
 
    const [waitNotes, setWaitNotes] = useState({});
+   const waitNotesRef = useRef(waitNotes);
    const waitNotesTextMap = useMemo(() => {
       const res = {};
       if (!waitNotes || typeof waitNotes !== "object") return res;
@@ -1084,6 +1090,10 @@ export default function DayviewCanvasTrack({
       return res;
    }, [waitNotes]);
 
+   useEffect(() => {
+      waitNotesRef.current = waitNotes;
+   }, [waitNotes]);
+
    const [hiddenVersion, setHiddenVersion] = useState(getHiddenVersion());
 
    const [waitEdit, setWaitEdit] = useState(null);
@@ -1093,6 +1103,8 @@ export default function DayviewCanvasTrack({
       start: 0,
       end: Number.MAX_SAFE_INTEGER,
    });
+   const lastVisibleRowCalcAtRef = useRef(0);
+   const lastVisibleRowScrollTopRef = useRef(null);
 
    useEffect(() => {
       const id = activeEventId != null ? String(activeEventId) : null;
@@ -2449,6 +2461,24 @@ export default function DayviewCanvasTrack({
          return;
       }
 
+      const isPanningNow = scroller.classList?.contains?.("is-panning");
+      if (isPanningNow) {
+         const now = performance.now();
+         const dt = now - (lastVisibleRowCalcAtRef.current || 0);
+         if (dt < VISIBLE_ROWS_PAN_MIN_INTERVAL_MS) return;
+         lastVisibleRowCalcAtRef.current = now;
+      }
+
+      const currentTop = scroller.scrollTop || 0;
+      if (isPanningNow && lastVisibleRowScrollTopRef.current != null) {
+         const dy = Math.abs(currentTop - lastVisibleRowScrollTopRef.current);
+         if (dy < VISIBLE_ROWS_PAN_SCROLL_DELTA_PX) return;
+      }
+      if (lastVisibleRowScrollTopRef.current === currentTop) {
+         return;
+      }
+      lastVisibleRowScrollTopRef.current = currentTop;
+
       let topWithinScroller = 0;
       let node = canvas;
       while (node && node !== scroller) {
@@ -2465,9 +2495,9 @@ export default function DayviewCanvasTrack({
       }
 
       const BUFFER_PX = 280;
-      const yTop = scroller.scrollTop - topWithinScroller - BUFFER_PX;
+      const yTop = currentTop - topWithinScroller - BUFFER_PX;
       const yBottom =
-         scroller.scrollTop + scroller.clientHeight - topWithinScroller + BUFFER_PX;
+         currentTop + scroller.clientHeight - topWithinScroller + BUFFER_PX;
 
       const rowHeights = headerMetrics?.rowHeights || [];
       const headerHeight = Number(headerMetrics?.headerHeight || 0);
@@ -2505,6 +2535,10 @@ export default function DayviewCanvasTrack({
             : { start: startRow, end: endRow },
       );
    }, [headerMetrics, scrollContainerRef]);
+
+   useEffect(() => {
+      lastVisibleRowScrollTopRef.current = null;
+   }, [headerMetrics]);
 
    useEffect(() => {
       recomputeVisibleRowRange();
@@ -3471,11 +3505,27 @@ export default function DayviewCanvasTrack({
          const isTouchLike =
             lastPointerTypeRef.current === "touch" ||
             lastPointerTypeRef.current === "pen";
+         const now = Date.now();
+         const isStrictSecondClick = (key) => {
+            const prev = strictDblClickRef.current;
+            const ok =
+               prev.key === key && now - Number(prev.at || 0) <= STRICT_DBLCLICK_WINDOW_MS;
+            strictDblClickRef.current = { key, at: now };
+            if (ok) {
+               dblClickArmedRef.current = {
+                  key,
+                  until: now + STRICT_DBLCLICK_WINDOW_MS,
+               };
+            }
+            return ok;
+         };
 
          if (foundEvent && foundEvent.id != null) {
             setSelectedEventId(foundEvent.id);
             setSelectedSlot(null);
             setGlobalSelection({ event: foundEvent, slot: null });
+            const actionKey = `event:${String(foundEvent.id)}`;
+            isStrictSecondClick(actionKey);
 
             if (isTouchLike && foundEventItem) {
                setTouchToolbar({
@@ -3502,6 +3552,8 @@ export default function DayviewCanvasTrack({
             setSelectedEventId(null);
             setSelectedSlot(slotPayload);
             setGlobalSelection({ event: null, slot: slotPayload });
+            const slotKey = `slot:${String(slotPayload.instructorId ?? "")}|${String(slotPayload.slotStart ?? "")}`;
+            isStrictSecondClick(slotKey);
 
             if (isTouchLike && getCopyBuffer()) {
                setTouchToolbar({
@@ -3520,12 +3572,14 @@ export default function DayviewCanvasTrack({
             setSelectedSlot(null);
             setGlobalSelection({ event: null, slot: null });
             setTouchToolbar(null);
+            strictDblClickRef.current = { key: "", at: 0 };
+            dblClickArmedRef.current = { key: "", until: 0 };
          }
       };
 
       canvas.addEventListener("click", handleClick);
       return () => canvas.removeEventListener("click", handleClick);
-   }, [openRangePanelFromSlot, resolveInstructorIdForHit]);
+   }, [resolveInstructorIdForHit]);
 
    useEffect(() => {
       const canvas = canvasRef.current;
@@ -3556,7 +3610,7 @@ export default function DayviewCanvasTrack({
 
                   (async () => {
                      const latest = await reloadWaitNotes();
-                     const map = latest || waitNotes;
+                     const map = latest || waitNotesRef.current || {};
 
                      const key = String(slotIndex);
                      const noteObj = map[key] || map[slotIndex];
@@ -3578,6 +3632,12 @@ export default function DayviewCanvasTrack({
                } else if (item.kind === "student") {
                   requestAnimationFrame(() => openStudentPopup(item.ev));
                } else if (item.kind === "reservation") {
+                  const reservationId = item.ev?.id;
+                  const key = `event:${String(reservationId ?? "")}`;
+                  const arm = dblClickArmedRef.current;
+                  const isArmed =
+                     arm.key === key && Date.now() <= Number(arm.until || 0);
+                  if (!isArmed) break;
                   requestAnimationFrame(() => openReservationPopup(item.ev));
                } else if (
                   item.kind === "empty-slot" &&
@@ -3604,6 +3664,11 @@ export default function DayviewCanvasTrack({
                      start: new Date(item.slotStart),
                      end: new Date(item.slotEnd),
                   };
+                  const key = `slot:${String(slotPayload.instructorId ?? "")}|${String(slotPayload.slotStart ?? "")}`;
+                  const arm = dblClickArmedRef.current;
+                  const isArmed =
+                     arm.key === key && Date.now() <= Number(arm.until || 0);
+                  if (!isArmed) break;
 
                   requestAnimationFrame(() => onCreateSlot(payload));
                }
@@ -3616,7 +3681,6 @@ export default function DayviewCanvasTrack({
       return () => canvas.removeEventListener("dblclick", handleDblClick);
    }, [
       onCreateSlot,
-      waitNotes,
       reloadWaitNotes,
       openStudentPopup,
       openReservationPopup,
@@ -3795,7 +3859,7 @@ export default function DayviewCanvasTrack({
          canvas.removeEventListener("pointerleave", handlePointerLeave);
          canvas.removeEventListener("pointercancel", handlePointerCancel);
       };
-   }, [reloadWaitNotes, waitNotes, openStudentPopup]);
+   }, [openStudentPopup, resolveInstructorIdForHit]);
 
    /* ================== UI overlay ================== */
 
@@ -3824,7 +3888,11 @@ export default function DayviewCanvasTrack({
                <CanvasInstructorHeader
                   key={`${String(inst.id)}:${idx}`}
                   inst={inst}
-                  dayDate={dayStart instanceof Date ? dayStart : new Date()}
+                  dayDate={
+                     dayStart instanceof Date
+                        ? dayStart
+                        : new Date(dayStart || Date.now())
+                  }
                   sectorClassName=""
                   style={{ left, top, width: colWidth, height: headerHeight }}
                   cars={cars}

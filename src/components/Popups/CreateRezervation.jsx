@@ -40,6 +40,8 @@ import {
 const GROUP_TOKEN_FIXED = "ABCD1234";
 const EMAIL_DOMAIN = "instrauto.com";
 const MOLDOVA_TZ = "Europe/Chisinau";
+const SEARCH_RESULTS_LIMIT = 10;
+const OUTSIDE_CLOSE_GUARD_MS = 280;
 
 const slugify = (s) =>
    (s || "")
@@ -342,6 +344,7 @@ export default function CreateRezervation({
 
    const closingRef = useRef(false);
    const openArmedRef = useRef(false);
+   const openedAtRef = useRef(0);
 
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
@@ -529,22 +532,23 @@ export default function CreateRezervation({
 
    const filteredInstructors = useMemo(() => {
       const q = (qInstructor || "").trim().toLowerCase();
-      if (!q) return instructors;
+      if (!q) return (instructors || []).slice(0, SEARCH_RESULTS_LIMIT);
       return (instructors || []).filter((i) => {
          const full = `${i.firstName || ""} ${i.lastName || ""}`.toLowerCase();
          const phone = (i.phone || "").toLowerCase();
          return full.includes(q) || phone.includes(q);
-      });
+      }).slice(0, SEARCH_RESULTS_LIMIT);
    }, [instructors, qInstructor]);
 
    const studentsForSearchList = useMemo(() => {
-      if (!highlightedStudentId) return filteredStudents;
+      const base = Array.isArray(filteredStudents) ? filteredStudents : [];
+      if (!highlightedStudentId) return base.slice(0, SEARCH_RESULTS_LIMIT);
       const idStr = String(highlightedStudentId);
-      const idx = filteredStudents.findIndex((s) => String(s.id) === idStr);
-      if (idx === -1) return filteredStudents;
-      const arr = [...filteredStudents];
+      const idx = base.findIndex((s) => String(s.id) === idStr);
+      if (idx === -1) return base.slice(0, SEARCH_RESULTS_LIMIT);
+      const arr = [...base];
       const [match] = arr.splice(idx, 1);
-      return [match, ...arr];
+      return [match, ...arr].slice(0, SEARCH_RESULTS_LIMIT);
    }, [filteredStudents, highlightedStudentId]);
 
    const studentDisplay = selectedStudent
@@ -694,6 +698,7 @@ export default function CreateRezervation({
    useEffect(() => {
       closingRef.current = false;
       openArmedRef.current = false;
+      openedAtRef.current = performance.now();
 
       let raf1 = 0;
       let raf2 = 0;
@@ -718,6 +723,8 @@ export default function CreateRezervation({
 
       const onPointerDown = (e) => {
          if (!openArmedRef.current) return;
+         if (performance.now() - openedAtRef.current < OUTSIDE_CLOSE_GUARD_MS)
+            return;
          if (typeof e.button === "number" && e.button !== 0) return;
 
          if (isInside(e)) return;

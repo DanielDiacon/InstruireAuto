@@ -46,6 +46,8 @@ registerLocale("ro", ro);
 /* ================== TZ & chei locale (Moldova) ================== */
 const MOLDOVA_TZ = "Europe/Chisinau";
 const BUSY_KEYS_MODE = "local-match";
+const SEARCH_RESULTS_LIMIT = 10;
+const OUTSIDE_CLOSE_GUARD_MS = 280;
 
 function localDateStrTZ(date, tz = MOLDOVA_TZ) {
    const fmt = new Intl.DateTimeFormat("en-GB", {
@@ -493,6 +495,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    // ✅ FIX: guard anti-close dublu + armare click-away după open
    const closingRef = useRef(false);
    const openArmedRef = useRef(false);
+   const openedAtRef = useRef(0);
 
    // ✅ pentru hydratare
    const didHydrate = useRef(false);
@@ -503,6 +506,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       openArmedRef.current = false;
       didHydrate.current = false;
       leftOnceRef.current = false;
+      openedAtRef.current = performance.now();
    }, [reservationId]);
 
    const joinReservation = useCallback(() => {
@@ -572,6 +576,8 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
       const onPointerDown = (e) => {
          if (!openArmedRef.current) return;
+         if (performance.now() - openedAtRef.current < OUTSIDE_CLOSE_GUARD_MS)
+            return;
          if (typeof e.button === "number" && e.button !== 0) return;
 
          if (isInside(e)) return; // click în interior -> nu închidem
@@ -636,9 +642,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
 
    useEffect(() => {
       if (!reservations?.length) dispatch(fetchReservationsDelta());
-      if (!studentsAll?.length) dispatch(fetchStudents());
-      if (!instructors?.length) dispatch(fetchInstructors());
-   }, [dispatch]); // eslint-disable-line
+   }, [dispatch, reservations?.length]);
 
    const existing = useMemo(
       () => reservations.find((r) => String(r.id) === String(reservationId)),
@@ -750,28 +754,38 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const [qStudent, setQStudent] = useState("");
    const [qInstructor, setQInstructor] = useState("");
 
+   useEffect(() => {
+      if (view === "studentSearch" && !studentsAll?.length) {
+         dispatch(fetchStudents());
+      }
+      if (view === "instructorSearch" && !instructors?.length) {
+         dispatch(fetchInstructors());
+      }
+   }, [view, studentsAll?.length, instructors?.length, dispatch]);
+
    const filteredStudents = useMemo(() => {
       const q = (qStudent || "").trim().toLowerCase();
-      if (!q) return students;
+      if (!q) return (students || []).slice(0, SEARCH_RESULTS_LIMIT);
       return (students || []).filter((s) => {
          const full = `${s.firstName || ""} ${s.lastName || ""}`.toLowerCase();
          const phone = (s.phone || "").toLowerCase();
          const email = (s.email || "").toLowerCase();
          return full.includes(q) || phone.includes(q) || email.includes(q);
-      });
+      }).slice(0, SEARCH_RESULTS_LIMIT);
    }, [students, qStudent]);
 
    const filteredInstructors = useMemo(() => {
       const q = (qInstructor || "").trim().toLowerCase();
-      if (!q) return instructors;
+      if (!q) return (instructors || []).slice(0, SEARCH_RESULTS_LIMIT);
       return (instructors || []).filter((i) => {
          const full = `${i.firstName || ""} ${i.lastName || ""}`.toLowerCase();
          const phone = (i.phone || "").toLowerCase();
          return full.includes(q) || phone.includes(q);
-      });
+      }).slice(0, SEARCH_RESULTS_LIMIT);
    }, [instructors, qInstructor]);
 
    const [freeSlots, setFreeSlots] = useState([]);
+   const fullGrid = useMemo(() => buildFullGridISO(60), []);
    const freeLocalKeySet = useMemo(
       () => new Set(freeSlots.map((iso) => localKeyForIso(iso))),
       [freeSlots],
@@ -783,7 +797,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          return;
       }
 
-      const fullGrid = buildFullGridISO(60);
       const others = (reservations || []).filter(
          (r) => String(r.id) !== String(reservationId),
       );
@@ -810,7 +823,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       });
 
       setFreeSlots(free);
-   }, [studentId, instructorId, reservations, reservationId]);
+   }, [studentId, instructorId, reservations, reservationId, fullGrid]);
 
    useEffect(() => {
       recomputeAvailability();
