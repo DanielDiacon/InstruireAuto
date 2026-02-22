@@ -90,7 +90,6 @@ import {
    computeWorldHeight,
    getColorRoot,
    clearColorCache,
-   buildEventsSignatureForDay,
    buildSlotsSignature,
    buildBlockedSignature,
    buildWaitNotesSignature,
@@ -99,15 +98,59 @@ import {
 } from "./render";
 
 const BUSY_KEYS_MODE = "local-match";
+const IS_LOW_SPEC_DEVICE =
+   typeof navigator !== "undefined" &&
+   ((Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 4) ||
+      (Number(navigator.hardwareConcurrency) > 0 &&
+         Number(navigator.hardwareConcurrency) <= 4));
 const DPR_LIMIT = 2;
+// În CRA dev + react-refresh, module workers pot arunca importScripts chunk errors.
+// Worker-ul rămâne activ în production unde avem nevoie de performanță maximă.
+const ENABLE_CANVAS_WORKER = process.env.NODE_ENV === "production";
+const WORKER_COLOR_TOKENS_BASE = [
+   "--black-p",
+   "--black-t",
+   "--white-p",
+   "--white-s",
+   "--event-default",
+   "--event-red",
+   "--event-orange",
+   "--event-yellow",
+   "--event-green",
+   "--event-blue",
+   "--event-indigo",
+   "--event-purple",
+   "--event-pink",
+];
 
 const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
-const STRICT_DBLCLICK_WINDOW_MS = 420;
+const CLICK_COMMIT_DELAY_MS = 90;
+const DAY_OFFSCREEN_MARGIN_BASE_PX = 320;
+
+function extractCssTokenFromColor(color) {
+   const value = String(color || "").trim();
+   if (!value) return null;
+   if (value.startsWith("--")) return value;
+   if (value.startsWith("var(") && value.endsWith(")"))
+      return value.slice(4, -1).trim();
+   if (/^event-/i.test(value)) return `--${value.toLowerCase()}`;
+   return null;
+}
+
+function shallowEqualPlainObject(a, b) {
+   if (a === b) return true;
+   if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+   const keysA = Object.keys(a);
+   const keysB = Object.keys(b);
+   if (keysA.length !== keysB.length) return false;
+   for (const key of keysA) {
+      if (a[key] !== b[key]) return false;
+   }
+   return true;
+}
 
 const RANGE_MINUTES = 90; // ✅ 90 min window
-const VISIBLE_ROWS_PAN_MIN_INTERVAL_MS = 90;
-const VISIBLE_ROWS_PAN_SCROLL_DELTA_PX = 96;
 /* ================== STRONG SIGNATURE HELPERS (REDRAW FIX) ================== */
 const MAX_GAPS_AFTER = 40;
 const GAPCOL_PREFIX = "__gapcol_";
@@ -208,6 +251,8 @@ function hasAnyPresence(v) {
    return false;
 }
 
+const CANVAS_EVENTS_SIGNATURE_CACHE = new WeakMap();
+
 /**
  * Semnătură robustă pentru canvas:
  * include câmpurile care îți schimbă UI-ul desenat (confirmare, note, favorite, important, etc.)
@@ -215,6 +260,8 @@ function hasAnyPresence(v) {
  */
 function buildCanvasEventsSignature(events) {
    if (!Array.isArray(events) || !events.length) return "0";
+   const cached = CANVAS_EVENTS_SIGNATURE_CACHE.get(events);
+   if (cached) return cached;
 
    const parts = [];
 
@@ -307,7 +354,9 @@ function buildCanvasEventsSignature(events) {
    }
 
    parts.sort();
-   return parts.join(";");
+   const sig = parts.join(";");
+   CANVAS_EVENTS_SIGNATURE_CACHE.set(events, sig);
+   return sig;
 }
 
 /* ================== SECTOR FILTER HELPERS (NEW) ================== */
@@ -689,20 +738,21 @@ const CanvasInstructorHeader = memo(
       dayDate,
       sectorClassName,
       style,
-      cars,
-      instructorsFull,
-      users,
+      carsByInstructorId,
+      instructorsFullById,
+      usersById,
+      instructorUsersByNormName,
       zoom = 1,
    }) {
       const dispatch = useDispatch();
 
-      const instrFull = useMemo(
-         () =>
-            instructorsFull.find((x) => String(x.id) === String(inst?.id)) ||
-            inst ||
-            null,
-         [instructorsFull, inst],
-      );
+      const instrFull = useMemo(() => {
+         const iid = inst?.id != null ? String(inst.id) : "";
+         if (iid && instructorsFullById?.has(iid)) {
+            return instructorsFullById.get(iid);
+         }
+         return inst || null;
+      }, [instructorsFullById, inst]);
 
       const instructorUser = useMemo(() => {
          if (!instrFull) return null;
@@ -714,31 +764,25 @@ const CanvasInstructorHeader = memo(
             String(u.role ?? "").toUpperCase() === "INSTRUCTOR";
 
          if (directUid != null) {
-            const byId = users.find(
-               (u) => String(u.id) === String(directUid) && roleInstr(u),
-            );
-            if (byId) return byId;
+            const byId = usersById?.get?.(String(directUid));
+            if (byId && roleInstr(byId)) return byId;
          }
 
          // fallback doar după nume (fără telefon)
          const nameKey = norm(
             `${instrFull.firstName ?? ""} ${instrFull.lastName ?? ""}`,
          );
+         if (!nameKey) return null;
 
-         return (
-            users.find(
-               (u) =>
-                  roleInstr(u) &&
-                  norm(`${u.firstName ?? ""} ${u.lastName ?? ""}`) === nameKey,
-            ) || null
-         );
-      }, [instrFull, users]);
+         const byName = instructorUsersByNormName?.get?.(nameKey) || null;
+         return byName && roleInstr(byName) ? byName : null;
+      }, [instrFull, usersById, instructorUsersByNormName]);
 
       const carForInst = useMemo(() => {
          const iid = String(inst?.id ?? "");
          if (!iid) return null;
-         return cars.find((c) => String(c.instructorId ?? "") === iid) || null;
-      }, [cars, inst]);
+         return carsByInstructorId?.get?.(iid) || null;
+      }, [carsByInstructorId, inst]);
 
       const displayName = useMemo(() => {
          if (!instrFull && !inst) return "–";
@@ -987,9 +1031,10 @@ const CanvasInstructorHeader = memo(
          prev.style.top === next.style.top &&
          prev.style.width === next.style.width &&
          prev.style.height === next.style.height &&
-         prev.cars === next.cars &&
-         prev.instructorsFull === next.instructorsFull &&
-         prev.users === next.users &&
+         prev.carsByInstructorId === next.carsByInstructorId &&
+         prev.instructorsFullById === next.instructorsFullById &&
+         prev.usersById === next.usersById &&
+         prev.instructorUsersByNormName === next.instructorUsersByNormName &&
          prev.zoom === next.zoom
       );
    },
@@ -997,13 +1042,17 @@ const CanvasInstructorHeader = memo(
 
 /* ================== COMPONENTA REACT ================== */
 
-export default function DayviewCanvasTrack({
-   scrollContainerRef = null,
+function DayviewCanvasTrack({
    dayStart,
    dayEnd,
    instructors = [],
    events = [],
    slots = [],
+   dayOffsetLeft = 0,
+   viewportScrollLeft = 0,
+   viewportScrollTop = 0,
+   viewportWidth = 0,
+   viewportHeight = 0,
    layout = {},
    timeMarks = DEFAULT_TIME_MARKS,
    onCreateSlot,
@@ -1018,17 +1067,29 @@ export default function DayviewCanvasTrack({
    zoom = 1,
    preGrid,
    onManualSelection,
-   onReservationJoin,
    presenceByReservationUsers = null,
    presenceByReservationColors,
    createDraftBySlotUsers = null,
    createDraftBySlotColors = null,
+   isPanInteracting = false,
    // ✅ NEW (optional): poți pasa direct din parent, dar merge și dacă îl pui în layout.*
    sectorFilter: sectorFilterProp = null,
 }) {
    const canvasRef = useRef(null);
+   const drawBufferRef = useRef(null);
    const hitMapRef = useRef([]);
    const lastDrawSigRef = useRef(null);
+   const workerRef = useRef(null);
+   const workerReadyRef = useRef(false);
+   const workerEnabledRef = useRef(false);
+   const workerSceneSigRef = useRef("");
+   const workerDrawSeqRef = useRef(0);
+   const workerAppliedDrawSeqRef = useRef(0);
+   const workerDrawInFlightRef = useRef(false);
+   const workerPendingDrawPayloadRef = useRef(null);
+   const workerDisabledRef = useRef(false);
+   const canvasTransferredRef = useRef(false);
+   const activeEventIdRef = useRef(activeEventId);
    //console.log(users);
 
    const longPressStartRef = useRef(null);
@@ -1036,8 +1097,10 @@ export default function DayviewCanvasTrack({
    const longPressTargetRef = useRef(null);
    const ignoreClickUntilRef = useRef(0);
    const lastPointerTypeRef = useRef("mouse");
-   const strictDblClickRef = useRef({ key: "", at: 0 });
-   const dblClickArmedRef = useRef({ key: "", until: 0 });
+   const pendingClickCommitRef = useRef(0);
+   const pendingWaitNotesRef = useRef(null);
+   const waitNotesApplyRafRef = useRef(0);
+   const isPanInteractingRef = useRef(!!isPanInteracting);
 
    const preGridCols =
       !preGrid || preGrid.enabled === false
@@ -1057,7 +1120,93 @@ export default function DayviewCanvasTrack({
 
    const [themeTick, setThemeTick] = useState(0);
    const [refreshTick, setRefreshTick] = useState(0);
+   const [canvasEpoch, setCanvasEpoch] = useState(0);
+   const [hitMapVersion, setHitMapVersion] = useState(0);
+   const [workerRuntimeReady, setWorkerRuntimeReady] = useState(false);
    const refreshRafRef = useRef(0);
+
+   const ensureDrawBuffer = useCallback((pixelW, pixelH) => {
+      let buffer = drawBufferRef.current;
+
+      if (!buffer) {
+         if (typeof OffscreenCanvas !== "undefined") {
+            buffer = new OffscreenCanvas(pixelW, pixelH);
+         } else if (typeof document !== "undefined") {
+            buffer = document.createElement("canvas");
+         } else {
+            return null;
+         }
+         drawBufferRef.current = buffer;
+      }
+
+      if (buffer.width !== pixelW) buffer.width = pixelW;
+      if (buffer.height !== pixelH) buffer.height = pixelH;
+
+      return buffer;
+   }, []);
+
+   const notifyHitMapUpdated = useCallback(() => {
+      if (activeEventIdRef.current == null) return;
+      setHitMapVersion((v) => v + 1);
+   }, []);
+
+   const teardownWorker = useCallback(() => {
+      const worker = workerRef.current;
+      if (worker) {
+         try {
+            worker.terminate();
+         } catch (_) {}
+      }
+      workerRef.current = null;
+      workerReadyRef.current = false;
+      workerEnabledRef.current = false;
+      workerSceneSigRef.current = "";
+      workerDrawSeqRef.current = 0;
+      workerAppliedDrawSeqRef.current = 0;
+      workerDrawInFlightRef.current = false;
+      workerPendingDrawPayloadRef.current = null;
+      setWorkerRuntimeReady(false);
+   }, []);
+
+   const markWorkerFatal = useCallback(
+      (reason) => {
+         console.error("Dayview canvas worker disabled:", reason);
+         teardownWorker();
+         workerDisabledRef.current = true;
+         setCanvasEpoch((v) => v + 1);
+         lastDrawSigRef.current = null;
+         setRefreshTick((t) => t + 1);
+      },
+      [teardownWorker],
+   );
+
+   const postWorkerDraw = useCallback((payload) => {
+      const worker = workerRef.current;
+      if (
+         !worker ||
+         !workerEnabledRef.current ||
+         !workerReadyRef.current ||
+         !payload
+      ) {
+         return false;
+      }
+
+      const drawId = workerDrawSeqRef.current + 1;
+      workerDrawSeqRef.current = drawId;
+      workerDrawInFlightRef.current = true;
+
+      try {
+         worker.postMessage({
+            type: "draw",
+            drawId,
+            ...payload,
+         });
+         return true;
+      } catch (error) {
+         workerDrawInFlightRef.current = false;
+         throw error;
+      }
+   }, []);
 
    const requestRedrawFromBus = useCallback(() => {
       if (refreshRafRef.current) return;
@@ -1074,8 +1223,18 @@ export default function DayviewCanvasTrack({
             cancelAnimationFrame(refreshRafRef.current);
             refreshRafRef.current = 0;
          }
+         if (pendingClickCommitRef.current) {
+            clearTimeout(pendingClickCommitRef.current);
+            pendingClickCommitRef.current = 0;
+         }
+         if (waitNotesApplyRafRef.current) {
+            cancelAnimationFrame(waitNotesApplyRafRef.current);
+            waitNotesApplyRafRef.current = 0;
+         }
+         teardownWorker();
+         drawBufferRef.current = null;
       };
-   }, []);
+   }, [teardownWorker]);
 
    const [selectedEventId, setSelectedEventId] = useState(
       getSelectedEvent()?.id ?? null,
@@ -1113,23 +1272,69 @@ export default function DayviewCanvasTrack({
       waitNotesRef.current = waitNotes;
    }, [waitNotes]);
 
+   useEffect(() => {
+      isPanInteractingRef.current = !!isPanInteracting;
+      if (!isPanInteracting && pendingWaitNotesRef.current) {
+         const pending = pendingWaitNotesRef.current;
+         pendingWaitNotesRef.current = null;
+         setWaitNotes((prev) =>
+            shallowEqualPlainObject(prev, pending) ? prev : pending,
+         );
+      }
+   }, [isPanInteracting]);
+
+   const applyWaitNotes = useCallback((nextWaitNotes, options = {}) => {
+      const urgent = !!options.urgent;
+      const deferDuringPan = !!options.deferDuringPan;
+      const normalized =
+         nextWaitNotes && typeof nextWaitNotes === "object" ? nextWaitNotes : {};
+
+      if (!urgent && deferDuringPan && isPanInteractingRef.current) {
+         pendingWaitNotesRef.current = normalized;
+         return;
+      }
+
+      if (!urgent) {
+         pendingWaitNotesRef.current = normalized;
+         if (!waitNotesApplyRafRef.current) {
+            waitNotesApplyRafRef.current = requestAnimationFrame(() => {
+               waitNotesApplyRafRef.current = 0;
+               const pending = pendingWaitNotesRef.current;
+               if (!pending) return;
+               pendingWaitNotesRef.current = null;
+               setWaitNotes((prev) =>
+                  shallowEqualPlainObject(prev, pending) ? prev : pending,
+               );
+            });
+         }
+         return;
+      }
+
+      pendingWaitNotesRef.current = null;
+      if (waitNotesApplyRafRef.current) {
+         cancelAnimationFrame(waitNotesApplyRafRef.current);
+         waitNotesApplyRafRef.current = 0;
+      }
+      setWaitNotes((prev) =>
+         shallowEqualPlainObject(prev, normalized) ? prev : normalized,
+      );
+   }, []);
+
    const [hiddenVersion, setHiddenVersion] = useState(getHiddenVersion());
 
    const [waitEdit, setWaitEdit] = useState(null);
    const waitInputRef = useRef(null);
    const waitCommitRef = useRef(false);
-   const [visibleRowRange, setVisibleRowRange] = useState({
-      start: 0,
-      end: Number.MAX_SAFE_INTEGER,
-   });
-   const lastVisibleRowCalcAtRef = useRef(0);
-   const lastVisibleRowScrollTopRef = useRef(null);
 
    useEffect(() => {
       const id = activeEventId != null ? String(activeEventId) : null;
       const prev = activeRectResolveRef.current;
       if (prev.id === id) return;
       activeRectResolveRef.current = { id, resolved: false };
+   }, [activeEventId]);
+
+   useEffect(() => {
+      activeEventIdRef.current = activeEventId;
    }, [activeEventId]);
 
    const dispatch = useDispatch();
@@ -1157,6 +1362,46 @@ export default function DayviewCanvasTrack({
       return m;
    }, [users]);
 
+   const usersByNormName = useMemo(() => {
+      const m = new Map();
+      (users || []).forEach((u) => {
+         const key = norm(`${u?.firstName ?? ""} ${u?.lastName ?? ""}`);
+         if (!key || m.has(key)) return;
+         m.set(key, u);
+      });
+      return m;
+   }, [users]);
+
+   const instructorsFullById = useMemo(() => {
+      const m = new Map();
+      (instructorsFull || []).forEach((inst) => {
+         if (inst?.id == null) return;
+         m.set(String(inst.id), inst);
+      });
+      return m;
+   }, [instructorsFull]);
+
+   const carsByInstructorId = useMemo(() => {
+      const m = new Map();
+      (cars || []).forEach((car) => {
+         const iid = car?.instructorId ?? car?.instructor_id ?? null;
+         if (iid == null) return;
+         m.set(String(iid), car);
+      });
+      return m;
+   }, [cars]);
+
+   const instructorUsersByNormName = useMemo(() => {
+      const m = new Map();
+      (users || []).forEach((u) => {
+         if (String(u?.role ?? "").toUpperCase() !== "INSTRUCTOR") return;
+         const key = norm(`${u?.firstName ?? ""} ${u?.lastName ?? ""}`);
+         if (!key || m.has(key)) return;
+         m.set(key, u);
+      });
+      return m;
+   }, [users]);
+
    const pickUserFromStore = useCallback(
       (userIdRaw, phoneRaw, firstNameSeed, lastNameSeed) => {
          const uid = userIdRaw != null ? String(userIdRaw) : "";
@@ -1168,17 +1413,13 @@ export default function DayviewCanvasTrack({
          // fallback final: match după nume (riscant, dar mai bine decât nimic)
          const key = norm(`${firstNameSeed || ""} ${lastNameSeed || ""}`);
          if (key) {
-            const u =
-               (users || []).find(
-                  (x) =>
-                     norm(`${x?.firstName || ""} ${x?.lastName || ""}`) === key,
-               ) || null;
+            const u = usersByNormName.get(key) || null;
             if (u) return u;
          }
 
          return null;
       },
-      [usersById, usersByPhone, users],
+      [usersById, usersByPhone, usersByNormName],
    );
 
    // ✅ NEW: sector activ (din prop sau din layout.*) + invalidare cache redraw
@@ -1319,18 +1560,12 @@ export default function DayviewCanvasTrack({
       return parts.join("|");
    }, [createDraftBySlotColors]);
 
-   const joinReservationSafe = useCallback(
-      (reservationId) => {
-         const rid = String(reservationId ?? "").trim();
-         if (!rid) return;
-         try {
-            if (typeof onReservationJoin === "function") onReservationJoin(rid);
-         } catch (e) {
-            console.warn("onReservationJoin error:", e);
-         }
-      },
-      [onReservationJoin],
-   );
+   const cancelInertiaAndMomentum = useCallback(() => {
+      if (typeof window === "undefined") return;
+      try {
+         window.dispatchEvent(new CustomEvent("dvcancelinertia-all"));
+      } catch {}
+   }, []);
 
    const openReservationPopup = useCallback(
       (ev) => {
@@ -1338,19 +1573,16 @@ export default function DayviewCanvasTrack({
          const reservationId = ev.raw?.id ?? ev.id;
          if (!reservationId) return;
 
+         cancelInertiaAndMomentum();
          openPopup("reservationEdit", { reservationId });
-
-         // Deschidem popup-ul imediat; presence/join se propagă după frame-ul curent.
-         const doJoin = () => joinReservationSafe(reservationId);
-         if (typeof queueMicrotask === "function") queueMicrotask(doJoin);
-         else setTimeout(doJoin, 0);
       },
-      [joinReservationSafe],
+      [cancelInertiaAndMomentum],
    );
 
    const openStudentPopup = useCallback(
       (ev) => {
          if (!ev) return;
+         cancelInertiaAndMomentum();
          const raw = ev.raw || {};
 
          const fallbackName =
@@ -1439,7 +1671,7 @@ export default function DayviewCanvasTrack({
             openReservationPopup(ev);
          }
       },
-      [openReservationPopup, pickUserFromStore],
+      [cancelInertiaAndMomentum, openReservationPopup, pickUserFromStore],
    );
 
    /* ================== HISTORY + RANGE PANEL (COMUN) ================== */
@@ -1979,6 +2211,152 @@ export default function DayviewCanvasTrack({
    }, []);
 
    useEffect(() => {
+      canvasTransferredRef.current = false;
+   }, [canvasEpoch]);
+
+   useEffect(() => {
+      if (!ENABLE_CANVAS_WORKER) {
+         setWorkerRuntimeReady(false);
+         return;
+      }
+      if (workerDisabledRef.current) {
+         setWorkerRuntimeReady(false);
+         return;
+      }
+
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const canUseWorker =
+         typeof window !== "undefined" &&
+         typeof Worker !== "undefined" &&
+         typeof OffscreenCanvas !== "undefined" &&
+         typeof canvas.transferControlToOffscreen === "function";
+
+      if (!canUseWorker) {
+         workerEnabledRef.current = false;
+         setWorkerRuntimeReady(false);
+         return;
+      }
+
+      if (canvasTransferredRef.current) {
+         markWorkerFatal("Canvas was already transferred to OffscreenCanvas");
+         return;
+      }
+
+      let worker;
+      try {
+         worker = new Worker(
+            new URL("./DayviewCanvasRenderWorker.js", import.meta.url),
+            { type: "module" },
+         );
+      } catch (error) {
+         console.warn("Dayview worker init failed, fallback to main thread:", error);
+         workerEnabledRef.current = false;
+         setWorkerRuntimeReady(false);
+         return;
+      }
+
+      let offscreenCanvas;
+      try {
+         offscreenCanvas = canvas.transferControlToOffscreen();
+         canvasTransferredRef.current = true;
+      } catch (error) {
+         console.warn(
+            "OffscreenCanvas transfer failed, fallback to main thread:",
+            error,
+         );
+         workerEnabledRef.current = false;
+         setWorkerRuntimeReady(false);
+         try {
+            worker.terminate();
+         } catch (_) {}
+         return;
+      }
+
+      workerRef.current = worker;
+      workerReadyRef.current = false;
+      workerEnabledRef.current = true;
+      setWorkerRuntimeReady(false);
+      workerSceneSigRef.current = "";
+      workerDrawSeqRef.current = 0;
+      workerAppliedDrawSeqRef.current = 0;
+      workerDrawInFlightRef.current = false;
+      workerPendingDrawPayloadRef.current = null;
+
+      worker.onmessage = (evt) => {
+         const data = evt?.data || {};
+         if (data.type === "init-complete") {
+            workerReadyRef.current = true;
+            setWorkerRuntimeReady(true);
+            lastDrawSigRef.current = null;
+            setRefreshTick((t) => t + 1);
+            return;
+         }
+
+         if (data.type === "draw-complete") {
+            workerDrawInFlightRef.current = false;
+            const drawId = Number(data.drawId) || 0;
+            if (drawId >= workerAppliedDrawSeqRef.current) {
+               workerAppliedDrawSeqRef.current = drawId;
+               const hitMapIncluded = data.hitMapIncluded !== false;
+               if (hitMapIncluded) {
+                  hitMapRef.current = Array.isArray(data.hitMap) ? data.hitMap : [];
+                  notifyHitMapUpdated();
+               }
+            }
+
+            const pendingDrawPayload = workerPendingDrawPayloadRef.current;
+            if (pendingDrawPayload) {
+               workerPendingDrawPayloadRef.current = null;
+               try {
+                  postWorkerDraw(pendingDrawPayload);
+               } catch (error) {
+                  markWorkerFatal(error?.message || error);
+               }
+            }
+            return;
+         }
+
+         if (data.type === "draw-error") {
+            markWorkerFatal(data.message || "Worker draw error");
+         }
+      };
+
+      worker.onerror = (err) => {
+         if (typeof err?.preventDefault === "function") err.preventDefault();
+         markWorkerFatal(err?.message || "Worker runtime error");
+      };
+
+      worker.onmessageerror = (err) => {
+         if (typeof err?.preventDefault === "function") err.preventDefault();
+         markWorkerFatal(err?.message || "Worker message error");
+      };
+
+      try {
+         worker.postMessage(
+            {
+               type: "init",
+               canvas: offscreenCanvas,
+            },
+            [offscreenCanvas],
+         );
+      } catch (error) {
+         markWorkerFatal(error?.message || error);
+      }
+
+      return () => {
+         teardownWorker();
+      };
+   }, [
+      canvasEpoch,
+      markWorkerFatal,
+      notifyHitMapUpdated,
+      postWorkerDraw,
+      teardownWorker,
+   ]);
+
+   useEffect(() => {
       if (waitEdit && waitInputRef.current) waitInputRef.current.focus();
    }, [!!waitEdit]);
 
@@ -1989,7 +2367,7 @@ export default function DayviewCanvasTrack({
 
    const reloadWaitNotes = useCallback(async () => {
       if (dayStartMs == null) {
-         setWaitNotes({});
+         applyWaitNotes({}, { urgent: true });
          return {};
       }
 
@@ -2017,14 +2395,14 @@ export default function DayviewCanvasTrack({
          cacheEntry.promise = null;
          WAIT_NOTES_CACHE.set(cacheKey, cacheEntry);
 
-         setWaitNotes(normalized);
+         applyWaitNotes(normalized);
          return normalized;
       } catch (err) {
          console.error("fetchWaitNotesRange (reload) error:", err);
-         setWaitNotes({});
+         applyWaitNotes({}, { urgent: true });
          return null;
       }
-   }, [dayStartMs, dayEndMs]);
+   }, [dayStartMs, dayEndMs, applyWaitNotes]);
 
    const waitRangeKey = useMemo(() => {
       if (dayStartMs == null) return null;
@@ -2040,7 +2418,7 @@ export default function DayviewCanvasTrack({
 
    useEffect(() => {
       if (!waitRangeKey) {
-         setWaitNotes({});
+         applyWaitNotes({}, { urgent: true });
          return;
       }
 
@@ -2056,47 +2434,47 @@ export default function DayviewCanvasTrack({
       let entry = WAIT_NOTES_CACHE.get(cacheKey);
 
       if (entry && entry.data) {
-         setWaitNotes(entry.data);
-      } else {
-         if (!entry) {
-            entry = { data: null, error: null, promise: null };
-            WAIT_NOTES_CACHE.set(cacheKey, entry);
-         }
+         applyWaitNotes(entry.data, { deferDuringPan: true });
+      }
 
-         if (!entry.promise) {
-            entry.promise = fetchWaitNotesRange({ from, to, type: "wait-slot" })
-               .then((raw) => {
-                  const normalized = normalizeWaitNotesInput(raw, from);
-                  entry.data = normalized;
-                  entry.error = null;
-                  return normalized;
-               })
-               .catch((err) => {
-                  entry.error = err;
-                  throw err;
-               });
-         }
+      if (!entry) {
+         entry = { data: null, error: null, promise: null };
+         WAIT_NOTES_CACHE.set(cacheKey, entry);
+      }
 
-         entry.promise
-            .then((normalized) => {
-               if (!isActive) return;
-               setWaitNotes(normalized);
+      if (!entry.promise) {
+         entry.promise = fetchWaitNotesRange({ from, to, type: "wait-slot" })
+            .then((raw) => {
+               const normalized = normalizeWaitNotesInput(raw, from);
+               entry.data = normalized;
+               entry.error = null;
+               return normalized;
             })
             .catch((err) => {
-               if (!isActive) return;
-               console.error(
-                  "fetchWaitNotesRange error pentru ziua:",
-                  fromStr,
-                  err,
-               );
-               setWaitNotes({});
+               entry.error = err;
+               throw err;
             });
       }
+
+      entry.promise
+         .then((normalized) => {
+            if (!isActive) return;
+            applyWaitNotes(normalized, { deferDuringPan: true });
+         })
+         .catch((err) => {
+            if (!isActive) return;
+            console.error(
+               "fetchWaitNotesRange error pentru ziua:",
+               fromStr,
+               err,
+            );
+            applyWaitNotes({}, { deferDuringPan: true });
+         });
 
       return () => {
          isActive = false;
       };
-   }, [waitRangeKey]);
+   }, [waitRangeKey, applyWaitNotes, isPanInteracting]);
 
    /* ================== layout metrics ================== */
 
@@ -2140,35 +2518,6 @@ export default function DayviewCanvasTrack({
             showBuiucani = wd === 2 || wd === 4 || wd === 0;
          }
       }
-
-      // ✅ order reader: 12 / "12" / "12XXX" / "3X7" / "3X7XX"
-      const readOrderNumber = (v) => {
-         const t = parseOrderToken(v);
-         const n = showBuiucani ? t.pos : (t.posAlt ?? t.pos);
-         return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
-      };
-
-      // helper: ia order din inst sau din instructorsFull (fallback)
-      const readOrder = (inst) => {
-         const pick = (obj) =>
-            obj?.order ??
-            obj?.uiOrder ??
-            obj?.sortOrder ??
-            obj?.position ??
-            obj?.sort_index ??
-            null;
-
-         let v = pick(inst);
-
-         if (v == null && Array.isArray(instructorsFull) && inst?.id != null) {
-            const full = instructorsFull.find(
-               (x) => String(x?.id) === String(inst.id),
-            );
-            if (full) v = pick(full);
-         }
-
-         return readOrderNumber(v);
-      };
 
       // 1) Separăm PAD-urile vs reali
       for (let srcIndex = 0; srcIndex < base.length; srcIndex++) {
@@ -2232,13 +2581,15 @@ export default function DayviewCanvasTrack({
          obj?.sort_index ??
          null;
 
+      const orderMetaCache = new Map();
       const readOrderMeta = (inst) => {
+         const cacheKey = String(inst?.id ?? inst?.__srcIndex ?? "");
+         if (orderMetaCache.has(cacheKey)) return orderMetaCache.get(cacheKey);
+
          let v = pickOrderVal(inst);
 
-         if (v == null && Array.isArray(instructorsFull) && inst?.id != null) {
-            const full = instructorsFull.find(
-               (x) => String(x?.id) === String(inst.id),
-            );
+         if (v == null && inst?.id != null) {
+            const full = instructorsFullById.get(String(inst.id));
             if (full) v = pickOrderVal(full);
          }
 
@@ -2255,7 +2606,9 @@ export default function DayviewCanvasTrack({
             Math.min(MAX_GAPS_AFTER, t.gapsAfter || 0),
          );
 
-         return { pos, gapsAfter };
+         const meta = { pos, gapsAfter };
+         orderMetaCache.set(cacheKey, meta);
+         return meta;
       };
 
       // sort (stabil)
@@ -2376,7 +2729,7 @@ export default function DayviewCanvasTrack({
       return rows.flat();
    }, [
       instructors,
-      instructorsFull,
+      instructorsFullById,
       dayStart,
       activeSectorFilter, // ✅ IMPORTANT (fiindcă filtrăm acum efectiv)
    ]);
@@ -2459,131 +2812,189 @@ export default function DayviewCanvasTrack({
       z,
    ]);
 
-   const recomputeVisibleRowRange = useCallback(() => {
+   const workerSceneCacheEnabled =
+      ENABLE_CANVAS_WORKER &&
+      workerRuntimeReady &&
+      workerEnabledRef.current &&
+      !!workerRef.current;
+
+   const dayWorldWidth = useMemo(() => {
+      const colsPerRow = Math.max(1, Number(headerMetrics?.colsPerRow || 0));
+      const colsCount = Math.max(0, Number(headerMetrics?.colsCount || 0));
+      const colWidth = Math.max(0, Number(headerMetrics?.colWidth || 0));
+      const colGap = Math.max(0, Number(headerMetrics?.colGap || 0));
+
+      const effectiveCols = Math.min(colsPerRow, colsCount);
+      const baseWorldWidth =
+         effectiveCols * colWidth + Math.max(0, effectiveCols - 1) * colGap;
+
+      const preGridWidthLocal =
+         hasPreGrid && preGridCols > 0 && colWidth > 0
+            ? preGridCols * colWidth + Math.max(0, preGridCols - 1) * colGap
+            : 0;
+
+      return Math.max(0, preGridWidthLocal + baseWorldWidth);
+   }, [
+      headerMetrics?.colsPerRow,
+      headerMetrics?.colsCount,
+      headerMetrics?.colWidth,
+      headerMetrics?.colGap,
+      hasPreGrid,
+      preGridCols,
+   ]);
+
+   const isDayNearViewport = useMemo(() => {
+      const viewWidth = Math.max(0, Number(viewportWidth) || 0);
+      if (viewWidth <= 0) return true;
+
+      const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+      const viewRight = viewLeft + viewWidth;
+
+      const dayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
+      const dayRight = dayLeft + Math.max(0, Number(dayWorldWidth) || 0);
+      if (dayRight <= dayLeft) return true;
+
+      const margin = Math.max(
+         DAY_OFFSCREEN_MARGIN_BASE_PX,
+         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.25 : 0.4)),
+      );
+
+      return !(dayRight < viewLeft - margin || dayLeft > viewRight + margin);
+   }, [viewportWidth, viewportScrollLeft, dayOffsetLeft, dayWorldWidth]);
+
+   const rowRenderRange = useMemo(() => {
       const rowsCount = Number(headerMetrics?.rowsCount || 0);
-      if (!rowsCount) {
-         setVisibleRowRange((prev) =>
-            prev.start === 0 && prev.end === 0 ? prev : { start: 0, end: 0 },
-         );
-         return;
-      }
+      if (!rowsCount) return { start: 0, end: 0 };
 
-      const scroller = scrollContainerRef?.current || null;
-      const canvas = canvasRef.current;
+      const viewH = Number(viewportHeight) || 0;
+      if (viewH <= 0) return { start: 0, end: rowsCount - 1 };
 
-      if (!scroller || !canvas) {
-         const full = { start: 0, end: rowsCount - 1 };
-         setVisibleRowRange((prev) =>
-            prev.start === full.start && prev.end === full.end ? prev : full,
-         );
-         return;
-      }
-
-      const isPanningNow = scroller.classList?.contains?.("is-panning");
-      if (isPanningNow) {
-         const now = performance.now();
-         const dt = now - (lastVisibleRowCalcAtRef.current || 0);
-         if (dt < VISIBLE_ROWS_PAN_MIN_INTERVAL_MS) return;
-         lastVisibleRowCalcAtRef.current = now;
-      }
-
-      const currentTop = scroller.scrollTop || 0;
-      if (isPanningNow && lastVisibleRowScrollTopRef.current != null) {
-         const dy = Math.abs(currentTop - lastVisibleRowScrollTopRef.current);
-         if (dy < VISIBLE_ROWS_PAN_SCROLL_DELTA_PX) return;
-      }
-      if (lastVisibleRowScrollTopRef.current === currentTop) {
-         return;
-      }
-      lastVisibleRowScrollTopRef.current = currentTop;
-
-      let topWithinScroller = 0;
-      let node = canvas;
-      while (node && node !== scroller) {
-         topWithinScroller += node.offsetTop || 0;
-         node = node.offsetParent;
-      }
-
-      if (node !== scroller) {
-         const full = { start: 0, end: rowsCount - 1 };
-         setVisibleRowRange((prev) =>
-            prev.start === full.start && prev.end === full.end ? prev : full,
-         );
-         return;
-      }
-
-      const BUFFER_PX = 280;
-      const yTop = currentTop - topWithinScroller - BUFFER_PX;
-      const yBottom =
-         currentTop + scroller.clientHeight - topWithinScroller + BUFFER_PX;
-
+      const rowTops = headerMetrics?.rowTops || [];
       const rowHeights = headerMetrics?.rowHeights || [];
-      const headerHeight = Number(headerMetrics?.headerHeight || 0);
-      const rowGap = Number(headerMetrics?.rowGap || 0);
+      const headerH = Number(headerMetrics?.headerHeight || 0);
+      const fallbackWorldHeight = Number(headerMetrics?.worldHeight || 0);
+      const overscanPx = Math.max(120, Math.round(viewH * 0.25));
 
-      let accTop = 0;
-      let startRow = 0;
-      let endRow = rowsCount - 1;
-      let foundStart = false;
+      const viewTop = Math.max(0, Number(viewportScrollTop) || 0);
+      const viewBottom = viewTop + viewH;
 
-      for (let row = 0; row < rowsCount; row++) {
-         const rowH = Number(rowHeights[row] ?? 0);
-         const rowBottom = accTop + headerHeight + rowH;
+      let start = 0;
+      let end = rowsCount - 1;
 
-         if (!foundStart && rowBottom >= yTop) {
-            startRow = row;
-            foundStart = true;
-         }
-
-         if (accTop <= yBottom) {
-            endRow = row;
-         } else {
+      for (let r = 0; r < rowsCount; r++) {
+         const rowTop = Number(rowTops[r] || 0);
+         const rowBodyHeight = Number(rowHeights[r] || fallbackWorldHeight);
+         const rowBottom = rowTop + headerH + rowBodyHeight;
+         if (rowBottom >= viewTop - overscanPx) {
+            start = r;
             break;
          }
-
-         accTop = rowBottom + rowGap;
       }
 
-      if (!foundStart) startRow = 0;
-      if (endRow < startRow) endRow = startRow;
+      for (let r = rowsCount - 1; r >= 0; r--) {
+         const rowTop = Number(rowTops[r] || 0);
+         if (rowTop <= viewBottom + overscanPx) {
+            end = r;
+            break;
+         }
+      }
 
-      setVisibleRowRange((prev) =>
-         prev.start === startRow && prev.end === endRow
-            ? prev
-            : { start: startRow, end: endRow },
+      if (end < start) return { start: 0, end: rowsCount - 1 };
+      return { start, end };
+   }, [
+      headerMetrics?.rowsCount,
+      headerMetrics?.rowTops,
+      headerMetrics?.rowHeights,
+      headerMetrics?.headerHeight,
+      headerMetrics?.worldHeight,
+      viewportScrollTop,
+      viewportHeight,
+   ]);
+
+   const colRenderRange = useMemo(() => {
+      const colsPerRow = Math.max(1, Number(headerMetrics?.colsPerRow || 0));
+      if (!colsPerRow) return { start: 0, end: 0 };
+
+      const viewW = Number(viewportWidth) || 0;
+      if (viewW <= 0) return { start: 0, end: colsPerRow - 1 };
+
+      const colWidth = Number(headerMetrics?.colWidth || 0);
+      const colGap = Number(headerMetrics?.colGap || 0);
+      if (colWidth <= 0) return { start: 0, end: colsPerRow - 1 };
+
+      const preGridWidth =
+         hasPreGrid && preGridCols > 0
+            ? preGridCols * colWidth + Math.max(0, preGridCols - 1) * colGap
+            : 0;
+
+      const stride = Math.max(1, colWidth + colGap);
+      const overscanPx = Math.max(180, Math.round(colWidth * 1.5));
+
+      const globalViewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+      const localDayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
+      const localViewLeft = Math.max(0, globalViewLeft - localDayLeft);
+      const localViewRight = localViewLeft + viewW;
+
+      const scanStart = localViewLeft - preGridWidth - overscanPx;
+      const scanEnd = localViewRight - preGridWidth + overscanPx;
+
+      const start = Math.max(0, Math.floor(scanStart / stride));
+      const end = Math.min(colsPerRow - 1, Math.ceil(scanEnd / stride));
+
+      if (end < start) return { start: 0, end: -1 };
+      return { start, end };
+   }, [
+      headerMetrics?.colsPerRow,
+      headerMetrics?.colWidth,
+      headerMetrics?.colGap,
+      viewportWidth,
+      viewportScrollLeft,
+      dayOffsetLeft,
+      hasPreGrid,
+      preGridCols,
+   ]);
+
+   const rowRenderStartDep = rowRenderRange.start;
+   const rowRenderEndDep = rowRenderRange.end;
+   const colRenderStartDep = colRenderRange.start;
+   const colRenderEndDep = colRenderRange.end;
+
+   useEffect(() => {
+      if (!workerSceneCacheEnabled) return;
+      if (!isDayNearViewport) return;
+      const worker = workerRef.current;
+      if (!worker) return;
+
+      const localViewportLeft = Math.max(
+         0,
+         (Number(viewportScrollLeft) || 0) - (Number(dayOffsetLeft) || 0),
       );
-   }, [headerMetrics, scrollContainerRef]);
+      const localViewportTop = Math.max(0, Number(viewportScrollTop) || 0);
+      const localViewportWidth = Math.max(0, Number(viewportWidth) || 0);
+      const localViewportHeight = Math.max(0, Number(viewportHeight) || 0);
 
-   useEffect(() => {
-      lastVisibleRowScrollTopRef.current = null;
-   }, [headerMetrics]);
-
-   useEffect(() => {
-      recomputeVisibleRowRange();
-
-      const scroller = scrollContainerRef?.current || null;
-      if (!scroller) return;
-
-      let rafId = null;
-      const schedule = () => {
-         if (rafId != null) return;
-         rafId = requestAnimationFrame(() => {
-            rafId = null;
-            recomputeVisibleRowRange();
+      try {
+         worker.postMessage({
+            type: "camera",
+            camera: {
+               x: localViewportLeft,
+               y: localViewportTop,
+               width: localViewportWidth,
+               height: localViewportHeight,
+               zoom: Number(zoom) || 1,
+            },
          });
-      };
-
-      scroller.addEventListener("scroll", schedule, { passive: true });
-      window.addEventListener("resize", schedule);
-      window.addEventListener("orientationchange", schedule);
-
-      return () => {
-         scroller.removeEventListener("scroll", schedule);
-         window.removeEventListener("resize", schedule);
-         window.removeEventListener("orientationchange", schedule);
-         if (rafId != null) cancelAnimationFrame(rafId);
-      };
-   }, [recomputeVisibleRowRange, scrollContainerRef]);
+      } catch {}
+   }, [
+      workerSceneCacheEnabled,
+      viewportScrollLeft,
+      dayOffsetLeft,
+      viewportScrollTop,
+      viewportWidth,
+      viewportHeight,
+      zoom,
+      isDayNearViewport,
+   ]);
 
    /* ================== slot geoms ================== */
 
@@ -2763,6 +3174,61 @@ export default function DayviewCanvasTrack({
       refreshTick,
    ]);
 
+   const eventsByReservationId = useMemo(() => {
+      const map = new Map();
+      if (!Array.isArray(eventsForCanvas) || !eventsForCanvas.length) return map;
+      for (const ev of eventsForCanvas) {
+         if (!ev) continue;
+         const rid = ev?.raw?.id ?? ev?.id;
+         if (rid == null) continue;
+         const key = String(rid);
+         if (!map.has(key)) map.set(key, ev);
+      }
+      return map;
+   }, [eventsForCanvas]);
+
+   const workerColorOverrides = useMemo(() => {
+      void themeTick;
+      if (typeof document === "undefined" || typeof getComputedStyle !== "function")
+         return null;
+      const root = getColorRoot();
+      if (!root) return null;
+
+      const tokens = new Set(WORKER_COLOR_TOKENS_BASE);
+      if (Array.isArray(eventsForCanvas)) {
+         for (const ev of eventsForCanvas) {
+            const token = extractCssTokenFromColor(ev?.color ?? ev?.raw?.color);
+            if (token) tokens.add(token);
+         }
+      }
+
+      const styles = getComputedStyle(root);
+      const output = {};
+      for (const token of tokens) {
+         const val = String(styles.getPropertyValue(token) || "").trim();
+         if (val) output[token] = val;
+      }
+
+      return Object.keys(output).length ? output : null;
+   }, [eventsForCanvas, themeTick]);
+
+   // Când densitatea e foarte mare, folosim desen compact ca să păstrăm fluiditatea.
+   const dynamicDenseRenderMode = useMemo(() => {
+      const eventCount = Array.isArray(eventsForCanvas) ? eventsForCanvas.length : 0;
+      const instructorCount = Array.isArray(effectiveInstructors)
+         ? effectiveInstructors.length
+         : 0;
+      return eventCount >= 260 || instructorCount >= 72;
+   }, [eventsForCanvas, effectiveInstructors]);
+   const stableDenseRenderModeRef = useRef(dynamicDenseRenderMode);
+   useEffect(() => {
+      if (isPanInteracting) return;
+      stableDenseRenderModeRef.current = dynamicDenseRenderMode;
+   }, [dynamicDenseRenderMode, isPanInteracting]);
+   const denseRenderMode = isPanInteracting
+      ? stableDenseRenderModeRef.current
+      : dynamicDenseRenderMode;
+
    /* ================== blocked normalize + canceled slots per inst ================== */
 
    const { blockedKeyMapForSlots, canceledSlotKeysByInst } = useMemo(() => {
@@ -2924,8 +3390,53 @@ export default function DayviewCanvasTrack({
             : 1;
 
       const eventsSafe = Array.isArray(eventsForCanvas) ? eventsForCanvas : [];
+      const shouldBuildHitMap = !isPanInteracting;
+      const dayHasActiveEvent =
+         activeEventId != null &&
+         eventsByReservationId.has(String(activeEventId));
+      const forceFullSceneForFocus = !!(
+         dayHasActiveEvent &&
+         activeEventId &&
+         activeRectResolveRef.current.id === String(activeEventId) &&
+         !activeRectResolveRef.current.resolved
+      );
+      const visibleRowStartForDraw = forceFullSceneForFocus
+         ? 0
+         : rowRenderStartDep;
+      const visibleRowEndForDraw = forceFullSceneForFocus
+         ? rowsCount - 1
+         : rowRenderEndDep;
+      const visibleColStartForDraw = forceFullSceneForFocus
+         ? 0
+         : colRenderStartDep;
+      const visibleColEndForDraw = forceFullSceneForFocus
+         ? Math.max(0, colsPerRow - 1)
+         : colRenderEndDep;
+      const highlightEventIdForRender =
+         selectedEventId || activeEventId || null;
 
-      const sig = {
+      const highlightSlot =
+         selectedSlot && selectedSlot.slotStart
+            ? {
+                 instructorId: String(
+                    selectedSlot.highlightInstructorId ??
+                       selectedSlot.instructorId,
+                 ),
+                 slotStart: selectedSlot.slotStart,
+                 highlightInstructorId:
+                    selectedSlot.highlightInstructorId ??
+                    selectedSlot.instructorId,
+              }
+            : null;
+
+      const editingWaitForRender = waitEdit
+         ? {
+              instId: String(waitEdit.instId),
+              slotIndex: Number(waitEdit.slotIndex || 0),
+           }
+         : null;
+
+      const sceneSig = {
          dayStart: dayStart ? ymdStrInTZ(dayStart) : "0",
          dayEnd: dayEnd ? ymdStrInTZ(dayEnd) : "0",
          colsCount,
@@ -2949,31 +3460,30 @@ export default function DayviewCanvasTrack({
          presenceSig,
          desiredBadgeSig,
          createDraftSig,
+         denseRenderMode: denseRenderMode ? 1 : 0,
+         hitMapMode: shouldBuildHitMap ? 1 : 0,
 
          // ✅ NEW: forțează redraw când schimbi sector/ordonare instructori
          sectorSig: activeSectorFilter || "ALL",
          instructorsLayoutSig,
-         searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
-         forceFullRowsForFocus:
-            activeEventId &&
-            activeRectResolveRef.current.id === String(activeEventId) &&
-            !activeRectResolveRef.current.resolved
-               ? 1
-               : 0,
-
-         highlightId: selectedEventId || activeEventId || null,
-         highlightSlotKey:
-            selectedSlot && selectedSlot.slotStart
-               ? `${selectedSlot.highlightInstructorId ?? selectedSlot.instructorId}|${selectedSlot.slotStart}`
-               : "",
-         waitEditSlot:
-            waitEdit && waitEdit.slotIndex != null
-               ? String(waitEdit.slotIndex)
-               : "",
-         visibleRows: `${visibleRowRange.start}:${visibleRowRange.end}`,
       };
 
-      const sigKey = JSON.stringify(sig);
+      const sceneKey = JSON.stringify(sceneSig);
+      const sigKey = JSON.stringify({
+         sceneKey,
+         searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
+         forceFullSceneForFocus: forceFullSceneForFocus ? 1 : 0,
+         visibleRows: `${visibleRowStartForDraw}:${visibleRowEndForDraw}`,
+         visibleCols: `${visibleColStartForDraw}:${visibleColEndForDraw}`,
+         highlightId: highlightEventIdForRender,
+         highlightSlotKey: highlightSlot
+            ? `${highlightSlot.instructorId}|${highlightSlot.slotStart}`
+            : "",
+         waitEditSlot:
+            editingWaitForRender && editingWaitForRender.slotIndex != null
+               ? String(editingWaitForRender.slotIndex)
+               : "",
+      });
 
       const noSkip =
          typeof window !== "undefined" && window.__DV_NO_SKIP === true;
@@ -2994,8 +3504,13 @@ export default function DayviewCanvasTrack({
       width = Math.max(width, effectiveCols * colWidth);
       height = Math.max(height, headerHeight + 200);
 
-      canvas.width = Math.max(1, Math.floor(width * dpr));
-      canvas.height = Math.max(1, Math.floor(height * dpr));
+      const workerOwnsCanvas =
+         canvasTransferredRef.current ||
+         (ENABLE_CANVAS_WORKER && workerEnabledRef.current);
+      if (!workerOwnsCanvas) {
+         canvas.width = Math.max(1, Math.floor(width * dpr));
+         canvas.height = Math.max(1, Math.floor(height * dpr));
+      }
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
 
@@ -3003,31 +3518,115 @@ export default function DayviewCanvasTrack({
          prev.w === width && prev.h === height ? prev : { w: width, h: height },
       );
 
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+      const workerCanRender = workerSceneCacheEnabled;
+      if (!isDayNearViewport && !forceFullSceneForFocus) {
+         if (!workerCanRender) {
+            const frontCtx = canvas.getContext("2d");
+            if (frontCtx) {
+               frontCtx.setTransform(1, 0, 0, 1, 0, 0);
+               frontCtx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+         }
+         return;
+      }
 
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (workerCanRender) {
+         const worker = workerRef.current;
+         if (!worker) return;
 
-      const hitMap = [];
-      const highlightEventIdForRender =
-         selectedEventId || activeEventId || null;
+         if (workerSceneSigRef.current !== sceneKey) {
+            workerSceneSigRef.current = sceneKey;
+            try {
+               worker.postMessage({
+                  type: "scene",
+                  colorOverrides: workerColorOverrides,
+                  scene: {
+                     hoursColWidth,
+                     headerHeight,
+                     colWidth,
+                     colGap,
+                     colsCount,
+                     colsPerRow,
+                     rowsCount,
+                     rowGap,
+                     rowHeights,
+                     instructors: effectiveInstructors,
+                     events: eventsSafe,
+                     slotGeoms,
+                     slotHeight,
+                     slotGap,
+                     blockedKeyMap: blockedKeyMapForSlots || null,
+                     zoom,
+                     preGrid: hasPreGrid
+                        ? { columns: preGridCols, rows: preGridRows }
+                        : null,
+                     preGridWidth,
+                     waitNotesMap: waitNotesTextMap,
+                     overlapEventsByInst,
+                     canceledSlotKeysByInst,
+                     presenceByReservationColors: presenceColorsByReservation,
+                     presenceReservationIds: effectivePresenceReservationIds,
+                     desiredInstructorBadgeByUserId,
+                     createDraftBySlotUsers,
+                     createDraftBySlotColors,
+                     denseMode: denseRenderMode,
+                  },
+               });
+            } catch (error) {
+               markWorkerFatal(error?.message || error);
+               return;
+            }
+         }
 
-      const highlightSlot =
-         selectedSlot && selectedSlot.slotStart
-            ? {
-                 instructorId: String(
-                    selectedSlot.highlightInstructorId ??
-                       selectedSlot.instructorId,
-                 ),
-                 slotStart: selectedSlot.slotStart,
-                 highlightInstructorId:
-                    selectedSlot.highlightInstructorId ??
-                    selectedSlot.instructorId,
-              }
-            : null;
+         const drawPayload = {
+            width,
+            height,
+            dpr,
+            draw: {
+               buildHitMap: shouldBuildHitMap,
+               highlightEventId: highlightEventIdForRender,
+               highlightSlot,
+               editingWait: editingWaitForRender,
+               activeSearchEventId,
+               visibleRowStart: visibleRowStartForDraw,
+               visibleRowEnd: visibleRowEndForDraw,
+               visibleColStart: visibleColStartForDraw,
+               visibleColEnd: visibleColEndForDraw,
+            },
+         };
+
+         if (workerDrawInFlightRef.current) {
+            workerPendingDrawPayloadRef.current = drawPayload;
+            return;
+         }
+
+         try {
+            postWorkerDraw(drawPayload);
+         } catch (error) {
+            markWorkerFatal(error?.message || error);
+         }
+         return;
+      }
+
+      if (canvasTransferredRef.current) return;
+      if (ENABLE_CANVAS_WORKER && workerEnabledRef.current) return;
+
+      const frontCtx = canvas.getContext("2d");
+      if (!frontCtx) return;
+
+      const pixelW = canvas.width;
+      const pixelH = canvas.height;
+
+      const drawBuffer = ensureDrawBuffer(pixelW, pixelH);
+      const drawCtx = drawBuffer?.getContext?.("2d");
+      if (!drawCtx) return;
+
+      drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const hitMap = shouldBuildHitMap ? [] : null;
 
       drawAll({
-         ctx,
+         ctx: drawCtx,
          width,
          height,
          hoursColWidth,
@@ -3054,35 +3653,31 @@ export default function DayviewCanvasTrack({
             : null,
          preGridWidth,
          waitNotesMap: waitNotesTextMap,
-         editingWait: waitEdit
-            ? {
-                 instId: String(waitEdit.instId),
-                 slotIndex: Number(waitEdit.slotIndex || 0),
-              }
-            : null,
+         editingWait: editingWaitForRender,
          overlapEventsByInst,
          canceledSlotKeysByInst,
-         presenceByReservationColors,
+         presenceByReservationColors: presenceColorsByReservation,
          presenceReservationIds: effectivePresenceReservationIds,
          desiredInstructorBadgeByUserId,
-         presenceColorsByReservation,
          createDraftBySlotUsers,
          createDraftBySlotColors,
          activeSearchEventId,
-         visibleRowStart:
-            activeEventId &&
-            activeRectResolveRef.current.id === String(activeEventId) &&
-            !activeRectResolveRef.current.resolved
-               ? 0
-               : visibleRowRange.start,
-         visibleRowEnd:
-            activeEventId &&
-            activeRectResolveRef.current.id === String(activeEventId) &&
-            !activeRectResolveRef.current.resolved
-               ? rowsCount - 1
-               : visibleRowRange.end,
+         denseMode: denseRenderMode,
+         visibleRowStart: visibleRowStartForDraw,
+         visibleRowEnd: visibleRowEndForDraw,
+         visibleColStart: visibleColStartForDraw,
+         visibleColEnd: visibleColEndForDraw,
       });
-      hitMapRef.current = hitMap;
+
+      // Double-buffer present: desenul se compune în buffer și apoi se blitează pe canvas.
+      frontCtx.setTransform(1, 0, 0, 1, 0, 0);
+      frontCtx.clearRect(0, 0, pixelW, pixelH);
+      frontCtx.drawImage(drawBuffer, 0, 0);
+
+      if (shouldBuildHitMap) {
+         hitMapRef.current = hitMap;
+         notifyHitMapUpdated();
+      }
    }, [
       dayStart,
       dayEnd,
@@ -3115,18 +3710,31 @@ export default function DayviewCanvasTrack({
       presenceReservationIds,
       presenceSig,
       presenceColorsByReservation,
-      presenceByReservationColors,
+      effectivePresenceReservationIds,
+      desiredBadgeSig,
       desiredInstructorBadgeByUserId,
       createDraftSig,
       createDraftBySlotUsers,
       createDraftBySlotColors,
       activeSearchEventId,
-      visibleRowRange.start,
-      visibleRowRange.end,
+      isPanInteracting,
+      denseRenderMode,
+      rowRenderStartDep,
+      rowRenderEndDep,
+      colRenderStartDep,
+      colRenderEndDep,
+      workerSceneCacheEnabled,
+      ensureDrawBuffer,
+      workerColorOverrides,
+      postWorkerDraw,
+      markWorkerFatal,
+      notifyHitMapUpdated,
 
       // ✅ NEW
       activeSectorFilter,
       instructorsLayoutSig,
+      isDayNearViewport,
+      eventsByReservationId,
    ]);
 
    /* ================== active rect callback ================== */
@@ -3142,8 +3750,8 @@ export default function DayviewCanvasTrack({
       const activeHit = hitMap.find(
          (item) =>
             item.kind === "reservation" &&
-            item.ev &&
-            String(item.ev.id) === String(activeEventId),
+            String(item.reservationId ?? item.ev?.raw?.id ?? item.ev?.id) ===
+               String(activeEventId),
       );
       if (!activeHit) return;
 
@@ -3169,7 +3777,7 @@ export default function DayviewCanvasTrack({
          item: activeHit,
          canvasRect,
       });
-   }, [activeEventId, onActiveEventRectChange]);
+   }, [activeEventId, onActiveEventRectChange, hitMapVersion]);
 
    /* ================== delete (Ctrl+X) ================== */
 
@@ -3484,6 +4092,86 @@ export default function DayviewCanvasTrack({
       [effectiveInstructors],
    );
 
+   const resolveEventFromHit = useCallback(
+      (hit) => {
+         if (!hit) return null;
+         if (hit.ev) return hit.ev;
+         const rid = hit.reservationId;
+         if (rid == null) return null;
+         const found = eventsByReservationId.get(String(rid));
+         if (found) return found;
+         return { id: rid, raw: { id: rid } };
+      },
+      [eventsByReservationId],
+   );
+
+   const clearPendingClickCommit = useCallback(() => {
+      if (!pendingClickCommitRef.current) return;
+      clearTimeout(pendingClickCommitRef.current);
+      pendingClickCommitRef.current = 0;
+   }, []);
+
+   const commitSelectionFromHit = useCallback(
+      ({ eventHit = null, slotHit = null, touchLike = false } = {}) => {
+         if (eventHit?.ev && eventHit.ev.id != null) {
+            const foundEvent = eventHit.ev;
+            const foundEventItem = eventHit.item;
+            setSelectedEventId(foundEvent.id);
+            setSelectedSlot(null);
+            setGlobalSelection({ event: foundEvent, slot: null });
+
+            if (touchLike && foundEventItem) {
+               setTouchToolbar({
+                  type: "event",
+                  ev: foundEvent,
+                  x: foundEventItem.x,
+                  y: foundEventItem.y,
+                  w: foundEventItem.w,
+                  h: foundEventItem.h,
+               });
+            } else {
+               setTouchToolbar(null);
+            }
+            return;
+         }
+
+         if (slotHit?.item) {
+            const foundSlotItem = slotHit.item;
+            const resolvedInstructorId = resolveInstructorIdForHit(foundSlotItem);
+            const slotPayload = {
+               instructorId: resolvedInstructorId ?? foundSlotItem.instructorId,
+               actionInstructorId: resolvedInstructorId ?? null,
+               highlightInstructorId: foundSlotItem.instructorId,
+               slotStart: foundSlotItem.slotStart,
+               slotEnd: foundSlotItem.slotEnd,
+            };
+            setSelectedEventId(null);
+            setSelectedSlot(slotPayload);
+            setGlobalSelection({ event: null, slot: slotPayload });
+
+            if (touchLike && getCopyBuffer()) {
+               setTouchToolbar({
+                  type: "slot",
+                  slot: slotPayload,
+                  x: foundSlotItem.x,
+                  y: foundSlotItem.y,
+                  w: foundSlotItem.w,
+                  h: foundSlotItem.h,
+               });
+            } else {
+               setTouchToolbar(null);
+            }
+            return;
+         }
+
+         setSelectedEventId(null);
+         setSelectedSlot(null);
+         setGlobalSelection({ event: null, slot: null });
+         setTouchToolbar(null);
+      },
+      [resolveInstructorIdForHit],
+   );
+
    useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -3509,7 +4197,7 @@ export default function DayviewCanvasTrack({
                y <= item.y + item.h
             ) {
                if (item.kind === "reservation" || item.kind === "student") {
-                  foundEvent = item.ev;
+                  foundEvent = resolveEventFromHit(item);
                   foundEventItem = item;
                   break;
                }
@@ -3523,81 +4211,37 @@ export default function DayviewCanvasTrack({
          const isTouchLike =
             lastPointerTypeRef.current === "touch" ||
             lastPointerTypeRef.current === "pen";
-         const now = Date.now();
-         const isStrictSecondClick = (key) => {
-            const prev = strictDblClickRef.current;
-            const ok =
-               prev.key === key && now - Number(prev.at || 0) <= STRICT_DBLCLICK_WINDOW_MS;
-            strictDblClickRef.current = { key, at: now };
-            if (ok) {
-               dblClickArmedRef.current = {
-                  key,
-                  until: now + STRICT_DBLCLICK_WINDOW_MS,
-               };
-            }
-            return ok;
-         };
+         const eventHit =
+            foundEvent && foundEvent.id != null
+               ? { ev: foundEvent, item: foundEventItem }
+               : null;
+         const slotHit = foundSlotItem ? { item: foundSlotItem } : null;
 
-         if (foundEvent && foundEvent.id != null) {
-            setSelectedEventId(foundEvent.id);
-            setSelectedSlot(null);
-            setGlobalSelection({ event: foundEvent, slot: null });
-            const actionKey = `event:${String(foundEvent.id)}`;
-            isStrictSecondClick(actionKey);
+         clearPendingClickCommit();
 
-            if (isTouchLike && foundEventItem) {
-               setTouchToolbar({
-                  type: "event",
-                  ev: foundEvent,
-                  x: foundEventItem.x,
-                  y: foundEventItem.y,
-                  w: foundEventItem.w,
-                  h: foundEventItem.h,
+         // Pentru mouse amânăm puțin selecția ca dblclick să deschidă instant popup-ul
+         if (!isTouchLike) {
+            pendingClickCommitRef.current = window.setTimeout(() => {
+               pendingClickCommitRef.current = 0;
+               commitSelectionFromHit({
+                  eventHit,
+                  slotHit,
+                  touchLike: false,
                });
-            } else {
-               setTouchToolbar(null);
-            }
-         } else if (foundSlotItem) {
-            const resolvedInstructorId =
-               resolveInstructorIdForHit(foundSlotItem);
-            const slotPayload = {
-               instructorId: resolvedInstructorId ?? foundSlotItem.instructorId,
-               actionInstructorId: resolvedInstructorId ?? null,
-               highlightInstructorId: foundSlotItem.instructorId,
-               slotStart: foundSlotItem.slotStart,
-               slotEnd: foundSlotItem.slotEnd,
-            };
-            setSelectedEventId(null);
-            setSelectedSlot(slotPayload);
-            setGlobalSelection({ event: null, slot: slotPayload });
-            const slotKey = `slot:${String(slotPayload.instructorId ?? "")}|${String(slotPayload.slotStart ?? "")}`;
-            isStrictSecondClick(slotKey);
-
-            if (isTouchLike && getCopyBuffer()) {
-               setTouchToolbar({
-                  type: "slot",
-                  slot: slotPayload,
-                  x: foundSlotItem.x,
-                  y: foundSlotItem.y,
-                  w: foundSlotItem.w,
-                  h: foundSlotItem.h,
-               });
-            } else {
-               setTouchToolbar(null);
-            }
-         } else {
-            setSelectedEventId(null);
-            setSelectedSlot(null);
-            setGlobalSelection({ event: null, slot: null });
-            setTouchToolbar(null);
-            strictDblClickRef.current = { key: "", at: 0 };
-            dblClickArmedRef.current = { key: "", until: 0 };
+            }, CLICK_COMMIT_DELAY_MS);
+            return;
          }
+
+         commitSelectionFromHit({
+            eventHit,
+            slotHit,
+            touchLike: true,
+         });
       };
 
       canvas.addEventListener("click", handleClick);
       return () => canvas.removeEventListener("click", handleClick);
-   }, [resolveInstructorIdForHit]);
+   }, [clearPendingClickCommit, commitSelectionFromHit, resolveEventFromHit]);
 
    useEffect(() => {
       const canvas = canvasRef.current;
@@ -3605,6 +4249,7 @@ export default function DayviewCanvasTrack({
 
       const handleDblClick = (e) => {
          if (Date.now() < ignoreClickUntilRef.current) return;
+         clearPendingClickCommit();
 
          const rect = canvas.getBoundingClientRect();
          const x = e.clientX - rect.left;
@@ -3648,15 +4293,12 @@ export default function DayviewCanvasTrack({
                      });
                   })();
                } else if (item.kind === "student") {
-                  requestAnimationFrame(() => openStudentPopup(item.ev));
+                  const ev = resolveEventFromHit(item);
+                  if (!ev) break;
+                  openStudentPopup(ev);
                } else if (item.kind === "reservation") {
-                  const reservationId = item.ev?.id;
-                  const key = `event:${String(reservationId ?? "")}`;
-                  const arm = dblClickArmedRef.current;
-                  const isArmed =
-                     arm.key === key && Date.now() <= Number(arm.until || 0);
-                  if (!isArmed) break;
-                  requestAnimationFrame(() => openReservationPopup(item.ev));
+                  const ev = resolveEventFromHit(item);
+                  if (ev) openReservationPopup(ev);
                } else if (
                   item.kind === "empty-slot" &&
                   typeof onCreateSlot === "function"
@@ -3682,13 +4324,8 @@ export default function DayviewCanvasTrack({
                      start: new Date(item.slotStart),
                      end: new Date(item.slotEnd),
                   };
-                  const key = `slot:${String(slotPayload.instructorId ?? "")}|${String(slotPayload.slotStart ?? "")}`;
-                  const arm = dblClickArmedRef.current;
-                  const isArmed =
-                     arm.key === key && Date.now() <= Number(arm.until || 0);
-                  if (!isArmed) break;
 
-                  requestAnimationFrame(() => onCreateSlot(payload));
+                  onCreateSlot(payload);
                }
                break;
             }
@@ -3703,6 +4340,8 @@ export default function DayviewCanvasTrack({
       openStudentPopup,
       openReservationPopup,
       resolveInstructorIdForHit,
+      resolveEventFromHit,
+      clearPendingClickCommit,
    ]);
 
    useEffect(() => {
@@ -3735,7 +4374,7 @@ export default function DayviewCanvasTrack({
          }
 
          if (hit.kind === "reservation" || hit.kind === "student") {
-            const ev = hit.ev;
+            const ev = resolveEventFromHit(hit);
             if (ev && ev.id != null) {
                setSelectedEventId(ev.id);
                setSelectedSlot(null);
@@ -3798,7 +4437,7 @@ export default function DayviewCanvasTrack({
          ignoreClickUntilRef.current = Date.now() + 600;
 
          if (hit.kind === "reservation" || hit.kind === "student") {
-            const ev = hit.ev;
+            const ev = resolveEventFromHit(hit);
             if (!ev) return;
 
             if (ev.id != null) {
@@ -3813,6 +4452,7 @@ export default function DayviewCanvasTrack({
       };
 
       const handlePointerDown = (e) => {
+         clearPendingClickCommit();
          if (e.pointerType) lastPointerTypeRef.current = e.pointerType;
          if (e.button !== 0 && e.button !== undefined) return;
 
@@ -3877,7 +4517,12 @@ export default function DayviewCanvasTrack({
          canvas.removeEventListener("pointerleave", handlePointerLeave);
          canvas.removeEventListener("pointercancel", handlePointerCancel);
       };
-   }, [openStudentPopup, resolveInstructorIdForHit]);
+   }, [
+      openStudentPopup,
+      resolveInstructorIdForHit,
+      resolveEventFromHit,
+      clearPendingClickCommit,
+   ]);
 
    /* ================== UI overlay ================== */
 
@@ -3889,9 +4534,15 @@ export default function DayviewCanvasTrack({
          ? preGridCols * colWidth + Math.max(0, preGridCols - 1) * colGap
          : 0;
 
+   const dayDateForHeaders = useMemo(() => {
+      if (dayStart instanceof Date) return dayStart;
+      const d = new Date(dayStart);
+      return Number.isFinite(d.getTime()) ? d : new Date();
+   }, [dayStart]);
+
    return (
       <div style={{ position: "relative", flex: "0 0 auto" }}>
-         <canvas ref={canvasRef} />
+         <canvas key={canvasEpoch} ref={canvasRef} />
 
          {effectiveInstructors.map((inst, idx) => {
             if (!inst) return null; // ✅ deja
@@ -3906,16 +4557,13 @@ export default function DayviewCanvasTrack({
                <CanvasInstructorHeader
                   key={`${String(inst.id)}:${idx}`}
                   inst={inst}
-                  dayDate={
-                     dayStart instanceof Date
-                        ? dayStart
-                        : new Date(dayStart || Date.now())
-                  }
+                  dayDate={dayDateForHeaders}
                   sectorClassName=""
                   style={{ left, top, width: colWidth, height: headerHeight }}
-                  cars={cars}
-                  instructorsFull={instructorsFull}
-                  users={users}
+                  carsByInstructorId={carsByInstructorId}
+                  instructorsFullById={instructorsFullById}
+                  usersById={usersById}
+                  instructorUsersByNormName={instructorUsersByNormName}
                   zoom={z}
                />
             );
@@ -4195,3 +4843,5 @@ export default function DayviewCanvasTrack({
       </div>
    );
 }
+
+export default memo(DayviewCanvasTrack);

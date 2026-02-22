@@ -49,6 +49,13 @@ const BUSY_KEYS_MODE = "local-match";
 const SEARCH_RESULTS_LIMIT = 10;
 const OUTSIDE_CLOSE_GUARD_MS = 280;
 const EMPTY_KEY_SET = new Set();
+const EMPTY_RESERVATIONS = [];
+const EMPTY_USERS = [];
+const AVAILABILITY_CACHE_MAX = 80;
+const AVAILABILITY_BY_RESERVATIONS_REF = new WeakMap();
+const BUSY_LOCAL_KEY_CACHE = new Map();
+const USER_BY_ID_CACHE = new WeakMap();
+const RESERVATION_BY_ID_CACHE = new WeakMap();
 
 const __fmtCache = new Map();
 function getFmt(locale, timeZone, mode) {
@@ -188,6 +195,80 @@ function busyLocalKeyFromStored(st) {
    return localKeyFromTs(d.getTime(), MOLDOVA_TZ);
 }
 
+function getCachedBusyLocalKey(startValue) {
+   const raw = String(startValue ?? "");
+   if (!raw) return "";
+
+   const cached = BUSY_LOCAL_KEY_CACHE.get(raw);
+   if (cached != null) return cached;
+
+   const next = busyLocalKeyFromStored(raw);
+   BUSY_LOCAL_KEY_CACHE.set(raw, next);
+   return next;
+}
+
+function getUserByIdMap(usersList) {
+   if (!Array.isArray(usersList)) return new Map();
+   const cached = USER_BY_ID_CACHE.get(usersList);
+   if (cached) return cached;
+
+   const map = new Map();
+   for (const user of usersList) {
+      const id = user?.id;
+      if (id == null) continue;
+      map.set(String(id), user);
+   }
+
+   USER_BY_ID_CACHE.set(usersList, map);
+   return map;
+}
+
+function getReservationById(reservationsList, reservationId) {
+   if (!Array.isArray(reservationsList)) return null;
+   const targetId = String(reservationId ?? "");
+   if (!targetId) return null;
+
+   let byId = RESERVATION_BY_ID_CACHE.get(reservationsList);
+   if (!byId) {
+      byId = new Map();
+      for (const r of reservationsList) {
+         if (r?.id == null) continue;
+         byId.set(String(r.id), r);
+      }
+      RESERVATION_BY_ID_CACHE.set(reservationsList, byId);
+   }
+   return byId.get(targetId) || null;
+}
+
+function readPairAvailabilityCache(reservationsRef, pairKey) {
+   if (!reservationsRef || !pairKey) return null;
+   const byPair = AVAILABILITY_BY_RESERVATIONS_REF.get(reservationsRef);
+   if (!byPair) return null;
+   return byPair.get(pairKey) || null;
+}
+
+function writePairAvailabilityCache(
+   reservationsRef,
+   pairKey,
+   studentBusySet,
+   instructorBusySet,
+) {
+   if (!reservationsRef || !pairKey) return;
+   let byPair = AVAILABILITY_BY_RESERVATIONS_REF.get(reservationsRef);
+   if (!byPair) {
+      byPair = new Map();
+      AVAILABILITY_BY_RESERVATIONS_REF.set(reservationsRef, byPair);
+   }
+   if (byPair.size >= AVAILABILITY_CACHE_MAX) {
+      const firstKey = byPair.keys().next().value;
+      if (firstKey != null) byPair.delete(firstKey);
+   }
+   byPair.set(pairKey, {
+      studentBusySet,
+      instructorBusySet,
+   });
+}
+
 const nowHHMMInMoldova = () =>
    getFmt("en-GB", MOLDOVA_TZ, "time").format(new Date());
 
@@ -313,6 +394,17 @@ const buildFullGridSlots = (daysWindow = 60) => {
    return out;
 };
 
+function buildFreeSlotsFromBusySets(fullGrid, studentSet, instructorSet) {
+   const out = [];
+   for (const slot of fullGrid || []) {
+      const key = slot?.key;
+      if (!key) continue;
+      if (studentSet.has(key) || instructorSet.has(key)) continue;
+      out.push(slot.iso);
+   }
+   return out;
+}
+
 const hasInstructorConflict = (
    reservations,
    instructorId,
@@ -327,7 +419,7 @@ const hasInstructorConflict = (
       .some((r) => {
          const st = getStartFromReservation(r);
          if (!st) return false;
-         const rKey = busyLocalKeyFromStored(st);
+         const rKey = getCachedBusyLocalKey(st);
          return rKey === key;
       });
 };
@@ -348,7 +440,7 @@ const hasStudentConflict = (
       .some((r) => {
          const st = getStartFromReservation(r);
          if (!st) return false;
-         const rKey = busyLocalKeyFromStored(st);
+         const rKey = getCachedBusyLocalKey(st);
          return rKey === key;
       });
 };
@@ -661,13 +753,14 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const reservations = useSelector((s) => s.reservations?.list || []);
    const studentsAll = useSelector((s) => s.students?.list || []);
    const instructors = useSelector((s) => s.instructors?.list || []);
+   const usersById = useMemo(() => getUserByIdMap(studentsAll), [studentsAll]);
 
    useEffect(() => {
       if (!reservations?.length) dispatch(fetchReservationsDelta());
    }, [dispatch, reservations?.length]);
 
    const existing = useMemo(
-      () => reservations.find((r) => String(r.id) === String(reservationId)),
+      () => getReservationById(reservations, reservationId),
       [reservations, reservationId],
    );
 
@@ -681,11 +774,6 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          : [];
       return roles.includes("USER");
    };
-
-   const students = useMemo(
-      () => (studentsAll || []).filter(hasUserRole),
-      [studentsAll],
-   );
 
    const [selectedDate, setSelectedDate] = useState(() => {
       const d = new Date();
@@ -775,6 +863,24 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    const [view, setView] = useState("form"); // "form" | "studentSearch" | "instructorSearch" | "history"
    const [qStudent, setQStudent] = useState("");
    const [qInstructor, setQInstructor] = useState("");
+   const [calendarReady, setCalendarReady] = useState(false);
+   const [availabilityEditorOpen, setAvailabilityEditorOpen] = useState(false);
+   const [availabilityRecalcTick, setAvailabilityRecalcTick] = useState(0);
+
+   const students = useMemo(() => {
+      if (view !== "studentSearch") return EMPTY_USERS;
+      return (studentsAll || []).filter(hasUserRole);
+   }, [studentsAll, view]);
+
+   useEffect(() => {
+      let raf = 0;
+      raf = requestAnimationFrame(() => {
+         setCalendarReady(true);
+      });
+      return () => {
+         if (raf) cancelAnimationFrame(raf);
+      };
+   }, []);
 
    useEffect(() => {
       if (view === "studentSearch" && !studentsAll?.length) {
@@ -786,6 +892,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    }, [view, studentsAll?.length, instructors?.length, dispatch]);
 
    const filteredStudents = useMemo(() => {
+      if (view !== "studentSearch") return EMPTY_USERS;
       const q = (qStudent || "").trim().toLowerCase();
       if (!q) return (students || []).slice(0, SEARCH_RESULTS_LIMIT);
       return (students || []).filter((s) => {
@@ -794,7 +901,7 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          const email = (s.email || "").toLowerCase();
          return full.includes(q) || phone.includes(q) || email.includes(q);
       }).slice(0, SEARCH_RESULTS_LIMIT);
-   }, [students, qStudent]);
+   }, [students, qStudent, view]);
 
    const filteredInstructors = useMemo(() => {
       const q = (qInstructor || "").trim().toLowerCase();
@@ -807,113 +914,153 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    }, [instructors, qInstructor]);
 
    const [freeSlots, setFreeSlots] = useState([]);
+   const [freeSlotsLoading, setFreeSlotsLoading] = useState(false);
    const fullGrid = useMemo(() => buildFullGridSlots(60), []);
    const freeLocalKeySet = useMemo(
       () => new Set(freeSlots.map((iso) => localKeyForIso(iso))),
       [freeSlots],
    );
-
-   const { busyKeysByStudentId, busyKeysByInstructorId } = useMemo(() => {
-      const byStudent = new Map();
-      const byInstructor = new Map();
-      const busyKeyCache = new Map();
-
-      const getBusyKey = (startValue) => {
-         const raw = String(startValue ?? "");
-         if (!raw) return "";
-         const cached = busyKeyCache.get(raw);
-         if (cached != null) return cached;
-         const next = busyLocalKeyFromStored(raw);
-         busyKeyCache.set(raw, next);
-         return next;
-      };
-
-      for (const r of reservations || []) {
-         if (String(r?.id ?? "") === String(reservationId)) continue;
-
-         const st = getStartFromReservation(r);
-         if (!st) continue;
-         const key = getBusyKey(st);
-         if (!key) continue;
-
-         const sid = String(r?.userId ?? r?.studentId ?? "").trim();
-         if (sid) {
-            let set = byStudent.get(sid);
-            if (!set) {
-               set = new Set();
-               byStudent.set(sid, set);
-            }
-            set.add(key);
-         }
-
-         const iid = String(r?.instructorId ?? "").trim();
-         if (iid) {
-            let set = byInstructor.get(iid);
-            if (!set) {
-               set = new Set();
-               byInstructor.set(iid, set);
-            }
-            set.add(key);
-         }
-      }
-
-      return {
-         busyKeysByStudentId: byStudent,
-         busyKeysByInstructorId: byInstructor,
-      };
-   }, [reservations, reservationId]);
+   const reservationsList = Array.isArray(reservations)
+      ? reservations
+      : EMPTY_RESERVATIONS;
+   const availabilityPairKey = useMemo(() => {
+      const sid = String(studentId ?? "").trim();
+      const iid = String(instructorId ?? "").trim();
+      if (!sid || !iid) return "";
+      return `${String(reservationId ?? "")}|${sid}|${iid}`;
+   }, [reservationId, studentId, instructorId]);
 
    useEffect(() => {
-      if (!studentId || !instructorId) {
+      if (!availabilityEditorOpen || !availabilityPairKey) {
          setFreeSlots([]);
+         setFreeSlotsLoading(false);
+         return;
+      }
+
+      const studentIdStr = String(studentId ?? "").trim();
+      const instructorIdStr = String(instructorId ?? "").trim();
+      const reservationIdStr = String(reservationId ?? "");
+
+      const cached = readPairAvailabilityCache(
+         reservationsList,
+         availabilityPairKey,
+      );
+      if (cached) {
+         const freeFromCache = buildFreeSlotsFromBusySets(
+            fullGrid,
+            cached.studentBusySet || EMPTY_KEY_SET,
+            cached.instructorBusySet || EMPTY_KEY_SET,
+         );
+         setFreeSlots(freeFromCache);
+         setFreeSlotsLoading(false);
          return;
       }
 
       let cancelled = false;
+      let idleId = null;
+      let timeoutId = 0;
+      let idx = 0;
 
-      const compute = () => {
+      const studentBusySet = new Set();
+      const instructorBusySet = new Set();
+
+      setFreeSlots([]);
+      setFreeSlotsLoading(true);
+
+      const finalize = () => {
+         if (cancelled) return;
+         writePairAvailabilityCache(
+            reservationsList,
+            availabilityPairKey,
+            studentBusySet,
+            instructorBusySet,
+         );
+         const free = buildFreeSlotsFromBusySets(
+            fullGrid,
+            studentBusySet,
+            instructorBusySet,
+         );
+         setFreeSlots(free);
+         setFreeSlotsLoading(false);
+      };
+
+      const scheduleNext = () => {
+         if (cancelled) return;
+         if (
+            typeof window !== "undefined" &&
+            typeof window.requestIdleCallback === "function"
+         ) {
+            idleId = window.requestIdleCallback(processChunk, { timeout: 32 });
+            return;
+         }
+         timeoutId = window.setTimeout(() => processChunk(), 0);
+      };
+
+      const processChunk = (deadline) => {
          if (cancelled) return;
 
-         const studentSet =
-            busyKeysByStudentId.get(String(studentId)) || EMPTY_KEY_SET;
-         const instructorSet =
-            busyKeysByInstructorId.get(String(instructorId)) || EMPTY_KEY_SET;
+         let processed = 0;
+         const budgeted =
+            !!deadline && typeof deadline.timeRemaining === "function";
 
-         const free = [];
-         for (const slot of fullGrid) {
-            const key = slot?.key;
+         while (idx < reservationsList.length) {
+            if (
+               budgeted &&
+               processed >= 200 &&
+               deadline.timeRemaining() <= 2
+            ) {
+               break;
+            }
+
+            const r = reservationsList[idx++];
+            processed += 1;
+
+            if (String(r?.id ?? "") === reservationIdStr) continue;
+
+            const sid = String(r?.userId ?? r?.studentId ?? "").trim();
+            const iid = String(r?.instructorId ?? "").trim();
+            if (sid !== studentIdStr && iid !== instructorIdStr) continue;
+
+            const st = getStartFromReservation(r);
+            if (!st) continue;
+
+            const key = getCachedBusyLocalKey(st);
             if (!key) continue;
-            if (studentSet.has(key) || instructorSet.has(key)) continue;
-            free.push(slot.iso);
+
+            if (sid === studentIdStr) studentBusySet.add(key);
+            if (iid === instructorIdStr) instructorBusySet.add(key);
          }
 
-         if (!cancelled) setFreeSlots(free);
+         if (idx >= reservationsList.length) {
+            finalize();
+            return;
+         }
+
+         scheduleNext();
       };
 
-      if (
-         typeof window !== "undefined" &&
-         typeof window.requestIdleCallback === "function"
-      ) {
-         const rid = window.requestIdleCallback(compute, { timeout: 120 });
-         return () => {
-            cancelled = true;
-            if (typeof window.cancelIdleCallback === "function") {
-               window.cancelIdleCallback(rid);
-            }
-         };
-      }
+      scheduleNext();
 
-      const tid = setTimeout(compute, 0);
       return () => {
          cancelled = true;
-         clearTimeout(tid);
+         if (
+            idleId != null &&
+            typeof window !== "undefined" &&
+            typeof window.cancelIdleCallback === "function"
+         ) {
+            window.cancelIdleCallback(idleId);
+         }
+         if (timeoutId) clearTimeout(timeoutId);
       };
    }, [
-      studentId,
-      instructorId,
+      availabilityEditorOpen,
+      availabilityRecalcTick,
+      availabilityPairKey,
       fullGrid,
-      busyKeysByStudentId,
-      busyKeysByInstructorId,
+      instructorId,
+      reservationId,
+      reservationsList,
+      studentId,
    ]);
 
    const freeByDay = useMemo(() => {
@@ -927,11 +1074,8 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
    }, [freeSlots]);
 
    const selectedStudent = useMemo(
-      () =>
-         studentId
-            ? (students || []).find((u) => String(u.id) === String(studentId))
-            : null,
-      [students, studentId],
+      () => (studentId ? usersById.get(String(studentId)) || null : null),
+      [usersById, studentId],
    );
    const selectedInstructor = useMemo(
       () =>
@@ -1137,6 +1281,9 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
       const focusPayload = {
          type: "focus-reservation",
          reservationId: existing.id,
+         oldStartTime: existing?.startTime
+            ? String(existing.startTime)
+            : null,
          newStartTime: changingTime
             ? selectedIsoForBackend
             : existing?.startTime
@@ -1437,114 +1584,184 @@ export default function ReservationEditPopup({ reservationId, onClose }) {
          ? busyLocalKeyFromStored(existing.startTime)
          : null;
       const currentDayKey = currentKey ? currentKey.split("|")[0] : null;
+      const selectedDayLabel = selectedDate
+         ? selectedDate.toLocaleDateString("ro-RO", {
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+           })
+         : "Nesetată";
+      const selectedTimeLabel = selectedTime?.eticheta || "Nesetată";
 
       return (
          <>
-            <div className="popupui__selector">
-               <div className="popupui__field popupui__field--calendar">
-                  <h3 className="popupui__field-label">Selectează data:</h3>
-                  <DatePicker
-                     selected={selectedDate}
-                     onChange={(d) => {
-                        setSelectedDate(d);
-                        setSelectedTime(null);
-                     }}
-                     inline
-                     locale="ro"
-                     openToDate={
-                        selectedDate ||
-                        (existing?.startTime
-                           ? new Date(existing.startTime)
-                           : undefined)
-                     }
-                     formatWeekDay={(name) =>
-                        name
-                           .substring(0, 2)
-                           .replace(/^./, (c) => c.toUpperCase())
-                     }
-                     filterDate={filterDate}
-                     dayClassName={(date) => {
-                        const key = localDateStr(date);
-                        return freeByDay.has(key) || key === currentDayKey
-                           ? ""
-                           : "popupui__day--inactive";
-                     }}
-                     calendarClassName="popupui__datepicker"
-                  />
+            <div className="popupui__form-row popupui__form-row--compact">
+               <div className="popupui__field popupui__field--grow-1">
+                  <span className="popupui__field-label">Ziua</span>
+                  <div className="popupui__field-line">
+                     <span className="popupui__field-text">{selectedDayLabel}</span>
+                  </div>
                </div>
-
-               <div className="popupui__field popupui__field--times">
-                  <h3 className="popupui__field-label">Selectează ora:</h3>
-                  <div className="popupui__times-list">
-                     {!selectedDate && (
-                        <div className="popupui__disclaimer">
-                           Te rog să selectezi mai întâi o zi!
-                        </div>
-                     )}
-
-                     {oreDisponibile.map((ora) => {
-                        const key =
-                           selectedDate && ora?.oraStart
-                              ? localKeyForDateAndTime(
-                                   selectedDate,
-                                   ora.oraStart,
-                                )
-                              : null;
-
-                        const isSelected =
-                           selectedTime?.oraStart === ora.oraStart;
-
-                        const isTodayLocal =
-                           selectedDate &&
-                           localDateStr(selectedDate) === nowDayLocal;
-                        const pastToday =
-                           isTodayLocal && ora.oraStart <= nowHHMM;
-
-                        const isExistingSlot = currentKey && key === currentKey;
-                        const studentUnchanged =
-                           String(studentId) === String(originalStudentId);
-
-                        const available =
-                           (isExistingSlot && studentUnchanged) ||
-                           (key ? freeLocalKeySet.has(key) : false);
-
-                        const disabled =
-                           !selectedDate || !available || pastToday;
-
-                        return (
-                           <button
-                              key={ora.eticheta}
-                              onClick={() => setSelectedTime(ora)}
-                              disabled={disabled}
-                              className={[
-                                 "popupui__time-btn",
-                                 isSelected
-                                    ? "popupui__time-btn--selected"
-                                    : "",
-                                 disabled ? "popupui__time-btn--disabled" : "",
-                                 ora.eticheta === "19:30"
-                                    ? "popupui__time-btn--wide"
-                                    : "",
-                              ]
-                                 .filter(Boolean)
-                                 .join(" ")}
-                              title={
-                                 !selectedDate
-                                    ? "Alege o zi"
-                                    : isExistingSlot && !studentUnchanged
-                                      ? "Schimbi elevul: slotul actual trebuie să fie liber pentru elevul nou"
-                                      : !available
-                                        ? "Indisponibil (există altă rezervare la această oră)"
-                                        : ""
-                              }
-                           >
-                              {ora.eticheta}
-                           </button>
-                        );
-                     })}
+               <div className="popupui__field popupui__field--grow-1">
+                  <span className="popupui__field-label">Ora</span>
+                  <div className="popupui__field-line">
+                     <span className="popupui__field-text">{selectedTimeLabel}</span>
                   </div>
                </div>
             </div>
+
+            <div className="popupui__form-row popupui__form-row--compact">
+               {!availabilityEditorOpen ? (
+                  <button
+                     className="popupui__btn popupui__btn--edit"
+                     onClick={() => {
+                        setAvailabilityEditorOpen(true);
+                        setAvailabilityRecalcTick((v) => v + 1);
+                     }}
+                  >
+                     Editează data și ora
+                  </button>
+               ) : (
+                  <>
+                     <button
+                        className="popupui__btn popupui__btn--edit"
+                        onClick={() => setAvailabilityRecalcTick((v) => v + 1)}
+                     >
+                        Recalculează disponibilitatea
+                     </button>
+                     <button
+                        className="popupui__btn popupui__btn--normal"
+                        onClick={() => setAvailabilityEditorOpen(false)}
+                     >
+                        Ascunde calendarul
+                     </button>
+                  </>
+               )}
+            </div>
+
+            {availabilityEditorOpen && (
+               <div className="popupui__selector">
+                  <div className="popupui__field popupui__field--calendar">
+                     <h3 className="popupui__field-label">Selectează data:</h3>
+                     {calendarReady ? (
+                        <DatePicker
+                           selected={selectedDate}
+                           onChange={(d) => {
+                              setSelectedDate(d);
+                              setSelectedTime(null);
+                           }}
+                           inline
+                           locale="ro"
+                           openToDate={
+                              selectedDate ||
+                              (existing?.startTime
+                                 ? new Date(existing.startTime)
+                                 : undefined)
+                           }
+                           formatWeekDay={(name) =>
+                              name
+                                 .substring(0, 2)
+                                 .replace(/^./, (c) => c.toUpperCase())
+                           }
+                           filterDate={filterDate}
+                           dayClassName={(date) => {
+                              const key = localDateStr(date);
+                              return freeByDay.has(key) || key === currentDayKey
+                                 ? ""
+                                 : "popupui__day--inactive";
+                           }}
+                           calendarClassName="popupui__datepicker"
+                        />
+                     ) : (
+                        <div
+                           className="popupui__disclaimer"
+                           style={{ minHeight: 300 }}
+                        >
+                           Se încarcă calendarul...
+                        </div>
+                     )}
+                  </div>
+
+                  <div className="popupui__field popupui__field--times">
+                     <h3 className="popupui__field-label">Selectează ora:</h3>
+                     <div className="popupui__times-list">
+                        {!selectedDate && (
+                           <div className="popupui__disclaimer">
+                              Te rog să selectezi mai întâi o zi!
+                           </div>
+                        )}
+                        {selectedDate && freeSlotsLoading && (
+                           <div className="popupui__disclaimer">
+                              Se calculează disponibilitatea...
+                           </div>
+                        )}
+
+                        {oreDisponibile.map((ora) => {
+                           const key =
+                              selectedDate && ora?.oraStart
+                                 ? localKeyForDateAndTime(
+                                      selectedDate,
+                                      ora.oraStart,
+                                   )
+                                 : null;
+
+                           const isSelected =
+                              selectedTime?.oraStart === ora.oraStart;
+
+                           const isTodayLocal =
+                              selectedDate &&
+                              localDateStr(selectedDate) === nowDayLocal;
+                           const pastToday =
+                              isTodayLocal && ora.oraStart <= nowHHMM;
+
+                           const isExistingSlot = currentKey && key === currentKey;
+                           const studentUnchanged =
+                              String(studentId) === String(originalStudentId);
+
+                           const available =
+                              (isExistingSlot && studentUnchanged) ||
+                              (key ? freeLocalKeySet.has(key) : false);
+
+                           const disabled =
+                              !selectedDate || !available || pastToday;
+
+                           return (
+                              <button
+                                 key={ora.eticheta}
+                                 onClick={() => setSelectedTime(ora)}
+                                 disabled={disabled}
+                                 className={[
+                                    "popupui__time-btn",
+                                    isSelected
+                                       ? "popupui__time-btn--selected"
+                                       : "",
+                                    disabled
+                                       ? "popupui__time-btn--disabled"
+                                       : "",
+                                    ora.eticheta === "19:30"
+                                       ? "popupui__time-btn--wide"
+                                       : "",
+                                 ]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                 title={
+                                    !selectedDate
+                                       ? "Alege o zi"
+                                       : isExistingSlot && !studentUnchanged
+                                         ? "Schimbi elevul: slotul actual trebuie să fie liber pentru elevul nou"
+                                         : !available
+                                           ? "Indisponibil (există altă rezervare la această oră)"
+                                           : ""
+                                 }
+                              >
+                                 {ora.eticheta}
+                              </button>
+                           );
+                        })}
+                     </div>
+                  </div>
+               </div>
+            )}
 
             <div className="popupui__form-row popupui__form-row--spaced">
                <div className="popupui__field popupui__field--clickable">

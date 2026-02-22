@@ -54,9 +54,17 @@ const LS_DV_ZOOM_KEY = "__DV_CALENDAR_ZOOM_PCT"; // ex: "50","75","100","125","1
 const LS_DV_SCROLL_STATE_KEY = "__DV_CALENDAR_SCROLL_STATE_V1";
 // JSON: { [monthKey]: { x:number, y:number, t:number } }
 const DV_SCROLL_KEEP = 12;
-const VISIBLE_DAYS_SCROLL_THRESHOLD_PX = 48;
+const IS_LOW_SPEC_DEVICE =
+   typeof navigator !== "undefined" &&
+   ((Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 4) ||
+      (Number(navigator.hardwareConcurrency) > 0 &&
+         Number(navigator.hardwareConcurrency) <= 4));
+const VISIBLE_DAYS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 96 : 80;
 const TRACK_DAY_GAP_PX = 24;
-const VISIBLE_DAYS_OVERSCAN = 2;
+const VISIBLE_DAYS_OVERSCAN = IS_LOW_SPEC_DEVICE ? 2 : 3;
+const STICKY_VISIBLE_DAYS_LIMIT = IS_LOW_SPEC_DEVICE ? 10 : 14;
+const VISIBLE_ROWS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 80 : 64;
+const VIEWPORT_X_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 56 : 40;
 
 function safeReadScrollStateMap() {
    if (typeof window === "undefined") return {};
@@ -393,6 +401,8 @@ function closestZoomPercentFromZoom(zoomVal) {
 
 const EMPTY_EVENTS = [];
 const EMPTY_SLOTS = [];
+const EMPTY_RESERVATIONS = [];
+const EMPTY_MAP = new Map();
 
 function setsEqual(a, b) {
    if (a === b) return true;
@@ -514,9 +524,22 @@ export default function ACalendarOptimized({
    const dayRefs = useRef(new Map());
    const scrollLazyRafRef = useRef(null);
    const lastVisibleDaysScrollLeftRef = useRef(-1);
+   const lastViewportScrollTopRef = useRef(-1);
+   const isPanVirtualizationLockedRef = useRef(false);
+
+   const [scrollViewport, setScrollViewport] = useState({
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+   });
 
    const [visibleDays, setVisibleDays] = useState(() => new Set());
+   const [stickyVisibleDays, setStickyVisibleDays] = useState(() => new Set());
+   const [isPanInteracting, setIsPanInteracting] = useState(false);
    const visibleDaysCount = visibleDays.size;
+   const stickyVisibleDaysStampRef = useRef(new Map());
+   const stickyVisibleDaysCounterRef = useRef(0);
 
    // ✅ Auto-scroll Y: doar o singură dată per acțiune (search / săgeți / focus-edit)
    const activeEventIdRef = useRef(null);
@@ -703,6 +726,14 @@ export default function ACalendarOptimized({
       inertiaX: true,
       inertiaY: true,
       slopPx: 6,
+      inertiaBoostX: 1.35,
+      inertiaBoostY: 1.6,
+      frictionX: 0.9,
+      frictionY: 0.94,
+      stopSpeedX: 0.05,
+      stopSpeedY: 0.03,
+      maxInertiaX: 70,
+      maxInertiaY: 95,
    });
 
    const token = getCookie("access_token");
@@ -717,14 +748,11 @@ export default function ACalendarOptimized({
    const [presenceByReservationUsers, setPresenceByReservationUsers] = useState(
       () => new Map(),
    );
-   const [presenceVer, setPresenceVer] = useState(0);
 
    const [createDraftBySlotUsers, setCreateDraftBySlotUsers] = useState(
       () => new Map(),
    );
-   const [createDraftVer, setCreateDraftVer] = useState(0);
 
-   const CREATE_DRAFT_TTL_MS = 60 * 1000;
    const CREATE_DRAFT_CLEANUP_EVERY_MS = 10 * 1000;
 
    useEffect(() => {
@@ -747,8 +775,6 @@ export default function ACalendarOptimized({
 
             return changed ? next : prev;
          });
-
-         if (changed) setCreateDraftVer((v) => v + 1);
       }, CREATE_DRAFT_CLEANUP_EVERY_MS);
 
       return () => clearInterval(t);
@@ -1039,9 +1065,6 @@ export default function ACalendarOptimized({
 
             return next;
          });
-
-         setCreateDraftVer((v) => v + 1);
-
          // IMPORTANT: redraw only (NU refetch)
          triggerRedraw({
             source: "draft",
@@ -1103,9 +1126,6 @@ export default function ACalendarOptimized({
 
          return next;
       });
-
-      setPresenceVer((v) => v + 1);
-
       // redraw only
       scheduleCalendarRefresh({
          source: "presence",
@@ -1574,7 +1594,47 @@ export default function ACalendarOptimized({
       return out;
    }, [presenceByReservationUsers, adminManagerColorById]);
 
-   const reservationsUIDedup = reservationsLive || [];
+   const reservationsUIDedup = useMemo(
+      () =>
+         Array.isArray(reservationsLive) ? reservationsLive : EMPTY_RESERVATIONS,
+      [reservationsLive],
+   );
+
+   // Guard de performanță: chiar dacă list-ul global primește delta cross-month,
+   // calendarul de lună lucrează doar cu rezervările din luna curentă.
+   const monthWindowTs = useMemo(() => {
+      const d = new Date(currentDate);
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      return {
+         start: new Date(y, m, 1).getTime(),
+         end: new Date(y, m + 1, 1).getTime(),
+      };
+   }, [currentDate]);
+
+   const reservationsForCurrentMonth = useMemo(() => {
+      const list = Array.isArray(reservationsUIDedup) ? reservationsUIDedup : [];
+      if (!list.length) return [];
+
+      const out = [];
+      const startLimit = monthWindowTs.start;
+      const endLimit = monthWindowTs.end;
+
+      for (const r of list) {
+         const startRaw = r?.startTime ?? r?.start ?? r?.startedAt ?? r?.startDate;
+         if (!startRaw) continue;
+
+         const start = toFloatingDate(startRaw);
+         if (!start || isNaN(start)) continue;
+
+         const ms = start.getTime();
+         if (ms < startLimit || ms >= endLimit) continue;
+
+         out.push({ r, start });
+      }
+
+      return out;
+   }, [reservationsUIDedup, monthWindowTs.start, monthWindowTs.end]);
 
    useEffect(() => {
       if (!hasPrefetchedAllRef.current) return;
@@ -1912,13 +1972,7 @@ export default function ACalendarOptimized({
       if (isDummyMode) return new Map();
       const map = new Map();
 
-      (reservationsUIDedup || []).forEach((r) => {
-         const startRaw = r.startTime ?? r.start ?? r.startedAt ?? r.startDate;
-         if (!startRaw) return;
-
-         const start = toFloatingDate(startRaw);
-         if (!start || isNaN(start)) return;
-
+      (reservationsForCurrentMonth || []).forEach(({ r, start }) => {
          const ts = startOfDayTs(start);
          if (!map.has(ts)) map.set(ts, []);
 
@@ -1928,7 +1982,7 @@ export default function ACalendarOptimized({
 
       map.forEach((arr) => arr.sort((a, b) => a.start - b.start));
       return map;
-   }, [reservationsUIDedup, mapReservationToEvent, isDummyMode]);
+   }, [reservationsForCurrentMonth, mapReservationToEvent, isDummyMode]);
 
    const SECTOR_CANON = {
       botanica: "Botanica",
@@ -2019,6 +2073,12 @@ export default function ACalendarOptimized({
             } catch {}
          }
 
+         if (typeof window !== "undefined") {
+            try {
+               window.dispatchEvent(new CustomEvent("dvcancelinertia-all"));
+            } catch {}
+         }
+
          openPopup("createRezervation", {
             start: ev.start,
             end: ev.end,
@@ -2075,7 +2135,20 @@ export default function ACalendarOptimized({
    );
    const dayStrideForTrack = dayWidthForTrack + TRACK_DAY_GAP_PX;
 
-   const recomputeVisibleDays = useCallback(() => {
+   const recomputeVisibleDays = useCallback((options = {}) => {
+      const expandOnly = !!options.expandOnly;
+      const extraOverscan = Math.max(
+         0,
+         Math.trunc(Number(options.extraOverscan) || 0),
+      );
+      const extraOverscanBefore = Math.max(
+         0,
+         Math.trunc(Number(options.extraOverscanBefore) || 0),
+      );
+      const extraOverscanAfter = Math.max(
+         0,
+         Math.trunc(Number(options.extraOverscanAfter) || 0),
+      );
       const scroller = scrollRef.current;
       if (!scroller) return;
 
@@ -2089,18 +2162,22 @@ export default function ACalendarOptimized({
       const viewLeft = Math.max(0, scroller.scrollLeft || 0);
       const viewRight = viewLeft + Math.max(0, scroller.clientWidth || 0);
 
-      const rawStart = Math.floor(viewLeft / stride) - VISIBLE_DAYS_OVERSCAN;
-      const rawEnd = Math.ceil(viewRight / stride) + VISIBLE_DAYS_OVERSCAN;
+      const overscanBefore =
+         VISIBLE_DAYS_OVERSCAN + extraOverscan + extraOverscanBefore;
+      const overscanAfter =
+         VISIBLE_DAYS_OVERSCAN + extraOverscan + extraOverscanAfter;
+      const rawStart = Math.floor(viewLeft / stride) - overscanBefore;
+      const rawEnd = Math.ceil(viewRight / stride) + overscanAfter;
       const startIdx = Math.max(0, rawStart);
       const endIdx = Math.min(total - 1, rawEnd);
 
       setVisibleDays((prev) => {
-         const next = new Set();
+         const next = expandOnly ? new Set(prev) : new Set();
          for (let i = startIdx; i <= endIdx; i++) {
             next.add(startOfDayTs(loadedDays[i]));
          }
 
-         if (!next.size && loadedDays.length) {
+         if (!expandOnly && !next.size && loadedDays.length) {
             const maxInit = 7;
             for (let i = 0; i < loadedDays.length && i < maxInit; i++) {
                next.add(startOfDayTs(loadedDays[i]));
@@ -2111,6 +2188,112 @@ export default function ACalendarOptimized({
          return next;
       });
    }, [loadedDays, dayStrideForTrack]);
+
+   useEffect(() => {
+      stickyVisibleDaysStampRef.current.clear();
+      stickyVisibleDaysCounterRef.current = 0;
+      setStickyVisibleDays((prev) => (prev.size ? new Set() : prev));
+   }, [loadedDays]);
+
+   useEffect(() => {
+      if (!visibleDays.size) return;
+      setStickyVisibleDays((prev) => {
+         const stamps = stickyVisibleDaysStampRef.current;
+         let counter = stickyVisibleDaysCounterRef.current || 0;
+
+         visibleDays.forEach((ts) => {
+            counter += 1;
+            stamps.set(ts, counter);
+         });
+         stickyVisibleDaysCounterRef.current = counter;
+
+         if (stamps.size > STICKY_VISIBLE_DAYS_LIMIT) {
+            const recentKeys = Array.from(stamps.entries())
+               .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+               .slice(0, STICKY_VISIBLE_DAYS_LIMIT)
+               .map(([ts]) => ts);
+            const keep = new Set(recentKeys);
+            for (const key of Array.from(stamps.keys())) {
+               if (!keep.has(key)) stamps.delete(key);
+            }
+         }
+
+         const next = new Set(stamps.keys());
+         if (setsEqual(next, prev)) return prev;
+         return next;
+      });
+   }, [visibleDays]);
+
+   useEffect(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+
+      const lockPanVirtualization = () => {
+         isPanVirtualizationLockedRef.current = true;
+         setIsPanInteracting(true);
+         lastVisibleDaysScrollLeftRef.current = -1;
+
+         // Păstrăm viewport-ul sincronizat și în pan, fără a forța full redraw pe Y.
+         const left = el.scrollLeft || 0;
+         const top = el.scrollTop || 0;
+         const width = el.clientWidth || 0;
+         const height = el.clientHeight || 0;
+         lastViewportScrollTopRef.current = top;
+         setScrollViewport((prev) => {
+            if (
+               prev.left === left &&
+               prev.top === top &&
+               prev.width === width &&
+               prev.height === height
+            ) {
+               return prev;
+            }
+            return { left, top, width, height };
+         });
+
+         // În pan actualizăm rapid fereastra de zile cu un overscan mic.
+         recomputeVisibleDays({
+            expandOnly: false,
+            extraOverscan: IS_LOW_SPEC_DEVICE ? 1 : 2,
+            extraOverscanBefore: IS_LOW_SPEC_DEVICE ? 1 : 2,
+            extraOverscanAfter: IS_LOW_SPEC_DEVICE ? 1 : 2,
+         });
+      };
+
+      const unlockPanVirtualization = () => {
+         isPanVirtualizationLockedRef.current = false;
+         setIsPanInteracting(false);
+
+         const left = el.scrollLeft || 0;
+         const top = el.scrollTop || 0;
+         const width = el.clientWidth || 0;
+         const height = el.clientHeight || 0;
+         lastViewportScrollTopRef.current = top;
+         setScrollViewport((prev) => {
+            if (
+               prev.left === left &&
+               prev.top === top &&
+               prev.width === width &&
+               prev.height === height
+            ) {
+               return prev;
+            }
+            return { left, top, width, height };
+         });
+
+         // După pan refacem normal fereastra de zile.
+         recomputeVisibleDays({ expandOnly: false });
+      };
+
+      el.addEventListener("dvpanstart", lockPanVirtualization);
+      el.addEventListener("dvpanend", unlockPanVirtualization);
+
+      return () => {
+         el.removeEventListener("dvpanstart", lockPanVirtualization);
+         el.removeEventListener("dvpanend", unlockPanVirtualization);
+         setIsPanInteracting(false);
+      };
+   }, [recomputeVisibleDays]);
 
    const centerDayTsInScroller = useCallback(
       (targetDayTs) => {
@@ -2539,6 +2722,38 @@ export default function ACalendarOptimized({
 
    const searchInputRef = useRef(null);
 
+   // Index compact pentru search/focus: un singur parcurs peste evenimente.
+   const { searchCatalog, eventIdToDayTs } = useMemo(() => {
+      const catalog = [];
+      const idToDayMap = new Map();
+
+      for (const [dayTs, evs] of eventsByDay.entries()) {
+         if (!Array.isArray(evs) || !evs.length) continue;
+
+         for (const ev of evs) {
+            const eventIdRaw = ev?.id;
+            if (eventIdRaw == null) continue;
+            const eventId = String(eventIdRaw);
+
+            if (!idToDayMap.has(eventId)) {
+               idToDayMap.set(eventId, dayTs);
+            }
+
+            catalog.push({
+               dayTs,
+               eventId,
+               searchNorm: ev?.searchNorm || "",
+               searchPhoneDigits: ev?.searchPhoneDigits || "",
+            });
+         }
+      }
+
+      return {
+         searchCatalog: catalog,
+         eventIdToDayTs: idToDayMap,
+      };
+   }, [eventsByDay]);
+
    // când vine focusRequest (după editare)
    useEffect(() => {
       if (!focusToken) return;
@@ -2561,14 +2776,28 @@ export default function ACalendarOptimized({
       }
       if (!sameMonth) return;
 
-      let targetDayTs = null;
-      for (const [ts, evs] of eventsByDay.entries()) {
-         if (evs.some((ev) => String(ev.id) === targetId)) {
-            targetDayTs = ts;
-            break;
-         }
-      }
+      const targetDayTs = eventIdToDayTs.get(targetId) ?? null;
       if (targetDayTs == null) return;
+
+      const toDayKey = (v) => {
+         const d = toFloatingDate(v);
+         if (!d || Number.isNaN(d.getTime?.())) return "";
+         const y = d.getFullYear();
+         const m = String(d.getMonth() + 1).padStart(2, "0");
+         const day = String(d.getDate()).padStart(2, "0");
+         return `${y}-${m}-${day}`;
+      };
+
+      const oldDayKey = toDayKey(req.oldStartTime);
+      const newDayKey = toDayKey(req.newStartTime);
+      const shouldAutoJumpToMovedDay =
+         !!oldDayKey && !!newDayKey && oldDayKey !== newDayKey;
+
+      if (!shouldAutoJumpToMovedDay) {
+         disarmAutoScrollY();
+         setAutoFocusEventId(targetId);
+         return;
+      }
 
       armAutoScrollYOnce(targetId, `focus:${focusToken}`);
 
@@ -2605,10 +2834,11 @@ export default function ACalendarOptimized({
       }
    }, [
       focusToken,
-      eventsByDay,
+      eventIdToDayTs,
       loadedDays,
       currentMonthValue,
       armAutoScrollYOnce,
+      disarmAutoScrollY,
       centerDayTsInScroller,
    ]);
 
@@ -2813,31 +3043,22 @@ export default function ACalendarOptimized({
 
          const hits = [];
 
-         loadedDays.forEach((d) => {
-            const ts = startOfDayTs(d);
-            const evs = eventsByDay.get(ts) || EMPTY_EVENTS;
-            if (!evs || evs === EMPTY_EVENTS) return;
+         for (const item of searchCatalog) {
+            const text = item.searchNorm;
+            const phoneDigits = item.searchPhoneDigits;
+            let matched = false;
 
-            evs.forEach((ev) => {
-               const text = ev.searchNorm || "";
-               const phoneDigits = ev.searchPhoneDigits || "";
-               let matched = false;
+            if (qNorm && text && text.includes(qNorm)) matched = true;
+            if (!matched && qDigits && phoneDigits && phoneDigits.includes(qDigits))
+               matched = true;
 
-               if (qNorm && text && text.includes(qNorm)) matched = true;
-               if (!matched && qDigits && phoneDigits) {
-                  if (phoneDigits.includes(qDigits)) matched = true;
-               }
-
-               if (matched) {
-                  hits.push({
-                     dayTs: ts,
-                     eventId: String(ev.id),
-                     instructorId: ev.instructorId,
-                     ev,
-                  });
-               }
-            });
-         });
+            if (matched) {
+               hits.push({
+                  dayTs: item.dayTs,
+                  eventId: item.eventId,
+               });
+            }
+         }
 
          // ✅ IMPORTANT: armează Y înainte de primul render cu activeEventId
          if (hits.length) {
@@ -2854,7 +3075,7 @@ export default function ACalendarOptimized({
       } else {
          setTimeout(doWork, 0);
       }
-   }, [searchInput, loadedDays, eventsByDay, clearSearch, armAutoScrollYOnce]);
+   }, [searchInput, searchCatalog, clearSearch, armAutoScrollYOnce]);
 
    const searchHits = searchState.hits;
    const searchTotal = searchHits.length;
@@ -2960,29 +3181,138 @@ export default function ACalendarOptimized({
 
       const onScroll = () => {
          const el = scroller;
-         // ✅ memorează poziția curentă
-         const left = el.scrollLeft || 0;
-         const top = el.scrollTop || 0;
-         schedulePersistScroll(left, top);
-
          if (scrollLazyRafRef.current) return;
          scrollLazyRafRef.current = requestAnimationFrame(() => {
             scrollLazyRafRef.current = null;
-            const prevLeft = lastVisibleDaysScrollLeftRef.current;
-            if (
-               prevLeft >= 0 &&
-               Math.abs(left - prevLeft) < VISIBLE_DAYS_SCROLL_THRESHOLD_PX
-            ) {
-               return;
+            const left = el.scrollLeft || 0;
+            const top = el.scrollTop || 0;
+            const prevScrollPos = scrollPosRef.current || { x: left, y: top };
+            const deltaXSinceLastFrame = left - (Number(prevScrollPos.x) || 0);
+            const isInteractingNow =
+               !!suspendFlagsRef.current?.isInteracting ||
+               isPanVirtualizationLockedRef.current;
+            scrollPosRef.current = { x: left, y: top };
+            if (!isInteractingNow) {
+               schedulePersistScroll(left, top);
             }
-            lastVisibleDaysScrollLeftRef.current = left;
-            recomputeVisibleDays();
+            const daysThreshold = isInteractingNow
+               ? Math.max(
+                    Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.65),
+                    IS_LOW_SPEC_DEVICE ? 32 : 24,
+                 )
+               : VISIBLE_DAYS_SCROLL_THRESHOLD_PX;
+            const viewportXThreshold = isInteractingNow
+               ? Math.max(
+                    Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 0.9),
+                    IS_LOW_SPEC_DEVICE ? 40 : 28,
+                 )
+               : VIEWPORT_X_SCROLL_THRESHOLD_PX;
+            const rowsThreshold = isInteractingNow
+               ? Math.max(
+                    Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 0.9),
+                    IS_LOW_SPEC_DEVICE ? 40 : 28,
+                 )
+               : VISIBLE_ROWS_SCROLL_THRESHOLD_PX;
+
+            const prevLeft = lastVisibleDaysScrollLeftRef.current;
+            const shouldRecomputeDays =
+               isInteractingNow ||
+               prevLeft < 0 ||
+               Math.abs(left - prevLeft) >= daysThreshold;
+            if (shouldRecomputeDays) {
+               lastVisibleDaysScrollLeftRef.current = left;
+               const absDx = Math.abs(deltaXSinceLastFrame);
+               let extraOverscanBefore = 0;
+               let extraOverscanAfter = 0;
+               if (isInteractingNow && absDx > 0.1) {
+                  const leadOverscan =
+                     absDx > 560
+                        ? IS_LOW_SPEC_DEVICE
+                           ? 2
+                           : 4
+                        : absDx > 260
+                          ? IS_LOW_SPEC_DEVICE
+                             ? 1
+                             : 2
+                          : IS_LOW_SPEC_DEVICE
+                            ? 1
+                            : 1;
+                  const trailOverscan = 1;
+                  if (deltaXSinceLastFrame >= 0) {
+                     extraOverscanAfter = leadOverscan;
+                     extraOverscanBefore = trailOverscan;
+                  } else {
+                     extraOverscanBefore = leadOverscan;
+                     extraOverscanAfter = trailOverscan;
+                  }
+               }
+               recomputeVisibleDays({
+                  expandOnly: false,
+                  extraOverscan: isInteractingNow
+                     ? IS_LOW_SPEC_DEVICE
+                        ? 0
+                        : 1
+                     : 0,
+                  extraOverscanBefore,
+                  extraOverscanAfter,
+               });
+            }
+
+            const prevTop = lastViewportScrollTopRef.current;
+            const nextWidth = el.clientWidth || 0;
+            const nextHeight = el.clientHeight || 0;
+            setScrollViewport((prev) => {
+               const nextLeft = left;
+               const nextTop = top;
+               const leftDelta = Math.abs((prev.left || 0) - nextLeft);
+               const topDelta =
+                  prevTop < 0 ? Infinity : Math.abs(nextTop - prevTop);
+               const shouldBumpLeft = leftDelta >= viewportXThreshold;
+               const shouldBumpTop = topDelta >= rowsThreshold;
+               const shouldBumpWidth = Math.abs((prev.width || 0) - nextWidth) > 1;
+               const shouldBumpHeight = Math.abs((prev.height || 0) - nextHeight) > 1;
+
+               if (
+                  !shouldBumpLeft &&
+                  !shouldBumpTop &&
+                  !shouldBumpWidth &&
+                  !shouldBumpHeight
+               ) {
+                  return prev;
+               }
+               lastViewportScrollTopRef.current = nextTop;
+               return {
+                  left: nextLeft,
+                  top: nextTop,
+                  width: nextWidth,
+                  height: nextHeight,
+               };
+            });
          });
       };
 
-      const onResize = () => recomputeVisibleDays();
+      const onResize = () => {
+         recomputeVisibleDays({ extraOverscan: 0 });
+         const left = scroller.scrollLeft || 0;
+         const top = scroller.scrollTop || 0;
+         const width = scroller.clientWidth || 0;
+         const height = scroller.clientHeight || 0;
+         lastViewportScrollTopRef.current = top;
+         setScrollViewport((prev) => {
+            if (
+               prev.left === left &&
+               prev.top === top &&
+               prev.width === width &&
+               prev.height === height
+            ) {
+               return prev;
+            }
+            return { left, top, width, height };
+         });
+      };
 
-      recomputeVisibleDays();
+      recomputeVisibleDays({ extraOverscan: 0 });
+      onResize();
 
       scroller.addEventListener("scroll", onScroll, { passive: true });
       window.addEventListener("resize", onResize);
@@ -3030,6 +3360,8 @@ export default function ACalendarOptimized({
                dayRefs={dayRefs}
                loadedDays={loadedDays}
                visibleDays={visibleDays}
+               stickyVisibleDays={stickyVisibleDays}
+               isPanInteracting={isPanInteracting}
                isDummyMode={isDummyMode}
                allowedInstBySector={allowedInstBySector}
                baseMetrics={baseMetrics}
@@ -3045,11 +3377,12 @@ export default function ACalendarOptimized({
                users={users}
                canvasInstructorsA={canvasInstructorsA}
                canvasInstructorsB={canvasInstructorsB}
+               viewportScrollLeft={scrollViewport.left}
+               viewportScrollTop={scrollViewport.top}
+               viewportWidth={scrollViewport.width}
+               viewportHeight={scrollViewport.height}
                viewModel={calendarViewModel}
                forceAllDaysVisible={false}
-               presenceVer={presenceVer}
-               onReservationJoin={joinReservationSafe}
-               createDraftVer={createDraftVer}
                createDraftBySlotUsers={createDraftBySlotUsers}
                createDraftBySlotColors={createDraftBySlotColors}
                presenceByReservationUsers={presenceByReservationUsers}
@@ -3219,6 +3552,8 @@ const ACalendarTrack = memo(function ACalendarTrack({
    dayRefs,
    loadedDays,
    visibleDays,
+   stickyVisibleDays,
+   isPanInteracting,
    isDummyMode,
    allowedInstBySector,
    baseMetrics,
@@ -3234,13 +3569,14 @@ const ACalendarTrack = memo(function ACalendarTrack({
    users,
    canvasInstructorsA,
    canvasInstructorsB,
+   viewportScrollLeft,
+   viewportScrollTop,
+   viewportWidth,
+   viewportHeight,
    viewModel,
    forceAllDaysVisible,
-   presenceVer,
-   createDraftVer,
    createDraftBySlotUsers,
    createDraftBySlotColors,
-   onReservationJoin,
    presenceByReservationUsers,
    presenceByReservationColors,
 
@@ -3250,10 +3586,28 @@ const ACalendarTrack = memo(function ACalendarTrack({
    onCloseOrderEdit,
    onSaveOrder,
 }) {
-   const eventsByDay = viewModel?.eventsByDay || new Map();
-   const standardSlotsByDay = viewModel?.standardSlotsByDay || new Map();
+   const eventsByDay = viewModel?.eventsByDay ?? EMPTY_MAP;
+   const standardSlotsByDay = viewModel?.standardSlotsByDay ?? EMPTY_MAP;
    const blackoutKeyMap = viewModel?.blackoutKeyMap || null;
    const blackoutVer = viewModel?.blackoutVer ?? 0;
+
+   const eventsByDayForView = useMemo(() => {
+      if (!allowedInstBySector) return eventsByDay;
+
+      const filtered = new Map();
+      for (const [ts, evs] of eventsByDay.entries()) {
+         if (!Array.isArray(evs) || !evs.length) {
+            filtered.set(ts, EMPTY_EVENTS);
+            continue;
+         }
+         const arr = evs.filter((ev) =>
+            allowedInstBySector.has(String(ev?.instructorId ?? "__unknown")),
+         );
+         filtered.set(ts, arr.length ? arr : EMPTY_EVENTS);
+      }
+      return filtered;
+   }, [eventsByDay, allowedInstBySector]);
+
    const labelFormatter = useMemo(
       () =>
          new Intl.DateTimeFormat("ro-RO", {
@@ -3360,11 +3714,16 @@ const ACalendarTrack = memo(function ACalendarTrack({
                      height: "100%",
                   }}
                >
-                  {dayEntries.map((entry) => {
+                  {dayEntries.map((entry, dayIdx) => {
                      const { ts, label, dayStartTs, dayEndTs, isGroupA } =
                         entry;
+                     const dayOffsetLeft =
+                        dayIdx * (baseMetrics.dayWidth + TRACK_DAY_GAP_PX);
+                     const stickyAllowed = true;
                      const isVisible =
-                        forceAllDaysVisible || visibleDays.has(ts);
+                        forceAllDaysVisible ||
+                        visibleDays.has(ts) ||
+                        (stickyAllowed && stickyVisibleDays?.has?.(ts));
                      const dayInstructors = isGroupA
                         ? canvasInstructorsA
                         : canvasInstructorsB;
@@ -3374,15 +3733,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                      if (isVisible) {
                         evs = isDummyMode
                            ? EMPTY_EVENTS
-                           : eventsByDay.get(ts) || EMPTY_EVENTS;
-
-                        if (allowedInstBySector && evs !== EMPTY_EVENTS) {
-                           evs = evs.filter((ev) =>
-                              allowedInstBySector.has(
-                                 String(ev.instructorId ?? "__unknown"),
-                              ),
-                           );
-                        }
+                           : eventsByDayForView.get(ts) || EMPTY_EVENTS;
 
                         slots = standardSlotsByDay.get(ts) || EMPTY_SLOTS;
                      }
@@ -3408,6 +3759,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                               minWidth: `${baseMetrics.dayWidth}px`,
                               display: "flex",
                               flexDirection: "column",
+                              contain: "layout paint",
                            }}
                         >
                            <header className="dayview__group-header">
@@ -3422,12 +3774,16 @@ const ACalendarTrack = memo(function ACalendarTrack({
                            >
                               {isVisible ? (
                                  <DayviewCanvasTrack
-                                    scrollContainerRef={scrollRef}
                                     dayStart={dayStartTs}
                                     dayEnd={dayEndTs}
                                     instructors={dayInstructors} // ✅ A/B pe zi
                                     events={DEBUG_CANVAS_EMPTY ? [] : evs}
                                     slots={slots}
+                                    dayOffsetLeft={dayOffsetLeft}
+                                    viewportScrollLeft={viewportScrollLeft}
+                                    viewportScrollTop={viewportScrollTop}
+                                    viewportWidth={viewportWidth}
+                                    viewportHeight={viewportHeight}
                                     layout={canvasLayout}
                                     timeMarks={timeMarks}
                                     onCreateSlot={handleCreateFromEmpty}
@@ -3448,21 +3804,19 @@ const ACalendarTrack = memo(function ACalendarTrack({
                                     instructorsFull={instructors}
                                     users={users}
                                     zoom={zoom / Z_BASE}
-                                    presenceVer={presenceVer}
-                                    onReservationJoin={onReservationJoin}
                                     presenceByReservationUsers={
                                        presenceByReservationUsers
                                     }
                                     presenceByReservationColors={
                                        presenceByReservationColors
                                     }
-                                    createDraftVer={createDraftVer}
                                     createDraftBySlotColors={
                                        createDraftBySlotColors
                                     }
                                     createDraftBySlotUsers={
                                        createDraftBySlotUsers
                                     }
+                                    isPanInteracting={isPanInteracting}
                                  />
                               ) : (
                                  <div className="dayview__skeleton" />

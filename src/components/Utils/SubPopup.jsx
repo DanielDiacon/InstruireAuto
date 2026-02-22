@@ -86,33 +86,26 @@ export default function SubPopup() {
             }
             revealingPrevRef.current = false;
          } else if (panelRef.current) {
-            // ===== CLOSE (cu animație) =====
-            setExiting(true);
+            // ===== CLOSE (instant) =====
+            setExiting(false);
             document.body.classList.remove("subpopup-open");
 
-            const onEnd = (e) => {
-               if (e.target === panelRef.current) {
-                  // scoatem top-ul din stivă după animație
-                  revealingPrevRef.current = true;
-                  popSubPopup();
+            // scoatem top-ul din stivă imediat
+            revealingPrevRef.current = true;
+            popSubPopup();
 
-                  // curățăm complet starea ca să nu persiste nimic
-                  setPopupState({ type: null, props: {} });
-                  setExiting(false);
-                  panelRef.current.removeEventListener("transitionend", onEnd);
+            // curățăm complet starea
+            setPopupState({ type: null, props: {} });
 
-                  // pe mobil: consumăm o intrare din istorie DOAR dacă închiderea NU a venit din popstate
-                  if (isMobile() && subDepthRef.current > 0) {
-                     if (!closingByPopstateRef.current) {
-                        window.history.back();
-                     }
-                     subDepthRef.current -= 1;
-                  }
-                  // reset flag
-                  closingByPopstateRef.current = false;
+            // pe mobil: consumăm o intrare din istorie DOAR dacă închiderea NU a venit din popstate
+            if (isMobile() && subDepthRef.current > 0) {
+               if (!closingByPopstateRef.current) {
+                  window.history.back();
                }
-            };
-            panelRef.current.addEventListener("transitionend", onEnd);
+               subDepthRef.current -= 1;
+            }
+            // reset flag
+            closingByPopstateRef.current = false;
          }
       });
 

@@ -25,6 +25,12 @@ import CreateRezervation from "../Popups/CreateRezervation";
 import QuestionCategoriesPopup from "../Popups/QuestionCategories";
 import AddProfessor from "../Popups/AddProfessor";
 
+const DEFERRED_POPUP_TYPES = new Set([
+   "studentDetails",
+   "reservationEdit",
+   "createRezervation",
+]);
+
 export default function Popup() {
    const [popupState, setPopupState] = useState({
       type: getCurrentPopup()?.type || null,
@@ -32,6 +38,7 @@ export default function Popup() {
    });
 
    const [exiting, setExiting] = useState(false);
+   const [contentReady, setContentReady] = useState(true);
    const panelRef = useRef(null);
 
    // 🔑 cheie care forțează remount pe fiecare OPEN
@@ -55,6 +62,7 @@ export default function Popup() {
       handler: null,
    });
    const closeTimerRef = useRef(null);
+   const deferredMountTimerRef = useRef(null);
 
    const clearPendingClose = useCallback(() => {
       // scoate listener-ul vechi (dacă există)
@@ -68,6 +76,13 @@ export default function Popup() {
       if (closeTimerRef.current) {
          clearTimeout(closeTimerRef.current);
          closeTimerRef.current = null;
+      }
+   }, []);
+
+   const clearDeferredMountTimer = useCallback(() => {
+      if (deferredMountTimerRef.current) {
+         clearTimeout(deferredMountTimerRef.current);
+         deferredMountTimerRef.current = null;
       }
    }, []);
 
@@ -170,60 +185,46 @@ export default function Popup() {
             // ===== OPEN =====
             // ✅ CRUCIAL: anulează orice "close pending" rămas din sesiunea precedentă
             clearPendingClose();
+            clearDeferredMountTimer();
 
             sessionIdRef.current += 1;
             const sid = sessionIdRef.current;
+            const popupType = detail.type;
+            const deferHeavyMount = DEFERRED_POPUP_TYPES.has(popupType);
 
             didPopHistoryRef.current = false;
 
             setOpenKey(sid);
             setExiting(false);
             document.body.classList.add("popup-open");
+            setContentReady(!deferHeavyMount);
 
             setPopupState({
-               type: detail.type,
+               type: popupType,
                props: { ...(detail.props || {}) },
             });
+
+            if (deferHeavyMount) {
+               deferredMountTimerRef.current = setTimeout(() => {
+                  deferredMountTimerRef.current = null;
+                  setContentReady(true);
+               }, 0);
+            }
 
             if (isMobile()) {
                pushOrReplacePopupDummy(sid);
             }
          } else if (panelRef.current) {
-            // ===== CLOSE =====
-            // ✅ evită handler stacking
+            // ===== CLOSE (instant) =====
             clearPendingClose();
+            clearDeferredMountTimer();
 
-            setExiting(true);
+            // Scoatem conținutul imediat, fără să așteptăm tranziția CSS.
+            setContentReady(false);
+            setExiting(false);
             document.body.classList.remove("popup-open");
-
-            const sidAtClose = sessionIdRef.current;
-            pendingCloseRef.current.sid = sidAtClose;
-
-            const finalizeClose = () => {
-               // ✅ închide DOAR dacă close-ul încă aparține aceleiași sesiuni
-               if (pendingCloseRef.current.sid !== sidAtClose) return;
-
-               setPopupState({ type: null, props: {} });
-               setExiting(false);
-
-               // cleanup (o dată)
-               clearPendingClose();
-            };
-
-            const handleTransitionEnd = (e) => {
-               if (e.target !== panelRef.current) return;
-               finalizeClose();
-            };
-
-            pendingCloseRef.current.handler = handleTransitionEnd;
-            panelRef.current.addEventListener(
-               "transitionend",
-               handleTransitionEnd,
-            );
-
-            // ✅ fallback: dacă transitionend nu vine / vine ciudat, închidem după X ms
-            // (setează valoarea aprox. la durata animației tale CSS)
-            closeTimerRef.current = setTimeout(finalizeClose, 260);
+            setPopupState({ type: null, props: {} });
+            setContentReady(true);
 
             // ✅ dacă cineva a închis popup-ul direct (closePopupStore) fără handleCloseClick,
             // scoatem dummy-ul, DAR doar dacă e pe top.
@@ -232,14 +233,17 @@ export default function Popup() {
          } else {
             // edge: panelRef null -> închide direct
             clearPendingClose();
+            clearDeferredMountTimer();
             setPopupState({ type: null, props: {} });
             setExiting(false);
+            setContentReady(true);
             document.body.classList.remove("popup-open");
          }
       });
 
       return () => {
          clearPendingClose();
+         clearDeferredMountTimer();
          unsubscribe?.();
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -332,7 +336,15 @@ export default function Popup() {
                className="popup-panel__close react-icon rotate45"
                src={addIcon}
             />
-            <div className="popup-panel__inner">{renderContent()}</div>
+            <div className="popup-panel__inner">
+               {contentReady ? (
+                  renderContent()
+               ) : (
+                  <div className="popupui popupui__content">
+                     <div className="popupui__disclaimer">Se încarcă...</div>
+                  </div>
+               )}
+            </div>
          </div>
       </>
    );

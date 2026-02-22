@@ -33,10 +33,13 @@ let LAST_OVERLAP_SOURCE_REF = null;
 let LAST_OVERLAP_MAP = null;
 let LAST_SLOT_GEOMS_REF = null;
 let LAST_SLOT_INDEX_BY_LABEL = null;
+let STATIC_COLOR_OVERRIDES = null;
 let EVENTS_SIGNATURE_CACHE = new WeakMap();
 let SLOTS_SIGNATURE_CACHE = new WeakMap();
 let WAIT_NOTES_SIGNATURE_CACHE = new WeakMap();
 let BLOCKED_SIGNATURE_CACHE = new WeakMap();
+let WRAP_TEXT_CACHE = new Map();
+const WRAP_TEXT_CACHE_MAX = 20000;
 
 export function getColorRoot() {
    if (typeof document === "undefined") return null;
@@ -65,36 +68,97 @@ export function clearColorCache() {
    SLOTS_SIGNATURE_CACHE = new WeakMap();
    WAIT_NOTES_SIGNATURE_CACHE = new WeakMap();
    BLOCKED_SIGNATURE_CACHE = new WeakMap();
+   WRAP_TEXT_CACHE = new Map();
+}
+
+function normalizeColorLookupKey(color) {
+   const value = String(color || "").trim();
+   if (!value) return "";
+   if (value.startsWith("var(") && value.endsWith(")")) {
+      return value.slice(4, -1).trim();
+   }
+   return value;
+}
+
+function lookupStaticColor(color) {
+   if (!STATIC_COLOR_OVERRIDES || !STATIC_COLOR_OVERRIDES.size) return null;
+   const key = normalizeColorLookupKey(color);
+   if (!key) return null;
+   const direct = STATIC_COLOR_OVERRIDES.get(key);
+   if (direct != null && String(direct).trim()) return String(direct).trim();
+   return null;
+}
+
+export function setStaticColorOverrides(overrides) {
+   if (!overrides) {
+      STATIC_COLOR_OVERRIDES = null;
+      COLOR_CACHE.clear();
+      return;
+   }
+
+   const next = new Map();
+
+   const register = (key, value) => {
+      const normalizedKey = normalizeColorLookupKey(key);
+      const normalizedValue = String(value ?? "").trim();
+      if (!normalizedKey || !normalizedValue) return;
+      next.set(normalizedKey, normalizedValue);
+   };
+
+   if (overrides instanceof Map) {
+      for (const [key, value] of overrides.entries()) register(key, value);
+   } else if (typeof overrides === "object") {
+      for (const [key, value] of Object.entries(overrides))
+         register(key, value);
+   }
+
+   STATIC_COLOR_OVERRIDES = next.size ? next : null;
+   COLOR_CACHE.clear();
 }
 
 function resolveColor(color) {
    if (!color) return "#616161";
 
-   if (typeof window === "undefined" || typeof document === "undefined") {
-      return color;
+   const key = String(color).trim();
+   if (!key) return "#616161";
+
+   const cached = COLOR_CACHE.get(key);
+   if (cached) return cached;
+
+   const staticResolved = lookupStaticColor(key);
+   if (staticResolved) {
+      COLOR_CACHE.set(key, staticResolved);
+      return staticResolved;
    }
 
-   const cached = COLOR_CACHE.get(color);
-   if (cached) return cached;
+   if (typeof window === "undefined" || typeof document === "undefined") {
+      COLOR_CACHE.set(key, key);
+      return key;
+   }
 
    const root = getColorRoot();
    if (!root) {
-      COLOR_CACHE.set(color, color);
-      return color;
+      COLOR_CACHE.set(key, key);
+      return key;
    }
 
-   let result = color;
+   let result = key;
 
-   if (color.startsWith("var(")) {
-      const name = color.slice(4, -1).trim();
+   if (key.startsWith("var(")) {
+      const name = normalizeColorLookupKey(key);
       const val = getComputedStyle(root).getPropertyValue(name).trim();
       result = val || "#616161";
-   } else if (color.startsWith("--")) {
-      const val = getComputedStyle(root).getPropertyValue(color).trim();
+   } else if (key.startsWith("--")) {
+      const val = getComputedStyle(root).getPropertyValue(key).trim();
       result = val || "#616161";
    }
 
-   COLOR_CACHE.set(color, result);
+   if (!result || result === key) {
+      const fallback = lookupStaticColor(key);
+      if (fallback) result = fallback;
+   }
+
+   COLOR_CACHE.set(key, result);
    return result;
 } /* ================== PRESENCE (colored borders) ================== */
 
@@ -268,6 +332,16 @@ export function drawRoundRect(ctx, x, y, w, h, r) {
 
 export function wrapText(ctx, text, maxWidth, maxLines = Infinity) {
    const raw = String(text || "");
+   if (!raw) return [];
+
+   const safeWidth = Math.max(0, Math.round(Number(maxWidth) || 0));
+   const fontKey = String(ctx?.font || "");
+   const linesKey = Number.isFinite(maxLines) ? Number(maxLines) : -1;
+   const cacheKey = `${fontKey}|${safeWidth}|${linesKey}|${raw}`;
+
+   const cached = WRAP_TEXT_CACHE.get(cacheKey);
+   if (cached) return cached;
+
    const words = raw.split(/\s+/).filter(Boolean);
 
    const lines = [];
@@ -345,6 +419,11 @@ export function wrapText(ctx, text, maxWidth, maxLines = Infinity) {
          }
       }
    }
+
+   if (WRAP_TEXT_CACHE.size >= WRAP_TEXT_CACHE_MAX) {
+      WRAP_TEXT_CACHE.clear();
+   }
+   WRAP_TEXT_CACHE.set(cacheKey, lines);
 
    return lines;
 }
@@ -518,8 +597,12 @@ export function drawAll({
    createDraftBySlotUsers = null,
    createDraftBySlotColors = null,
    activeSearchEventId = null,
+   denseMode = false,
    visibleRowStart = 0,
    visibleRowEnd = null,
+   visibleColStart = 0,
+   visibleColEnd = null,
+   includeEventPayloadInHitMap = true,
 }) {
    if (!ctx || !width || !height) return;
 
@@ -623,6 +706,7 @@ export function drawAll({
    const cancelSlotTextColor = resolveColor("--black-p");
 
    const z = zoom || 1;
+   const isDense = !!denseMode;
    const fontScale = Math.max(0.6, Math.min(1.6, z));
    const fontMetaPx = 11 * fontScale;
    const fontNotesPx = 10 * fontScale;
@@ -713,6 +797,10 @@ export function drawAll({
    const drawRowEnd = Number.isFinite(visibleRowEnd)
       ? Math.min(rowsCount - 1, Number(visibleRowEnd))
       : rowsCount - 1;
+   const drawColStart = Math.max(0, Number(visibleColStart || 0));
+   const drawColEnd = Number.isFinite(visibleColEnd)
+      ? Math.min(colsPerRow - 1, Number(visibleColEnd))
+      : colsPerRow - 1;
 
    let currentRowTop = 0;
 
@@ -735,6 +823,7 @@ export function drawAll({
       const slotAreaTop = rowContentTop + CONTENT_PAD_TOP;
 
       for (let c = 0; c < colsInThisRow; c++) {
+         if (c < drawColStart || c > drawColEnd) continue;
          const instIdx = rowStartIdx + c;
          const inst = instructors[instIdx];
          if (!inst) continue;
@@ -1068,7 +1157,12 @@ export function drawAll({
 
             if (shouldDrawText && slotLabelText) {
                const maxTextWidth = Math.max(0, slotW - padX * 2);
-               const lines = wrapText(ctx, slotLabelText, maxTextWidth, 5);
+               const lines = wrapText(
+                  ctx,
+                  slotLabelText,
+                  maxTextWidth,
+                  isDense ? 1 : 5,
+               );
                for (let li = 0; li < lines.length; li++) {
                   ctx.fillText(
                      lines[li],
@@ -1187,17 +1281,13 @@ export function drawAll({
 
             let isBlockedEvent = false;
             if (blockedKeyMap && evLocalKey) {
-               const instSet = getBlockedSetForInstructor(
-                  blockedKeyMap,
-                  instId,
-               );
-               if (instSet) {
-                  if (instSet instanceof Set)
-                     isBlockedEvent = instSet.has(evLocalKey);
-                  else if (Array.isArray(instSet))
-                     isBlockedEvent = instSet.includes(evLocalKey);
-                  else if (typeof instSet === "object")
-                     isBlockedEvent = !!instSet[evLocalKey];
+               if (instBlockedSet) {
+                  if (instBlockedSet instanceof Set)
+                     isBlockedEvent = instBlockedSet.has(evLocalKey);
+                  else if (Array.isArray(instBlockedSet))
+                     isBlockedEvent = instBlockedSet.includes(evLocalKey);
+                  else if (typeof instBlockedSet === "object")
+                     isBlockedEvent = !!instBlockedSet[evLocalKey];
                }
             }
 
@@ -1268,14 +1358,6 @@ export function drawAll({
             // ✅ IMPORTANT: filter(Boolean) (NU metaParts.push(Boolean)!)
             const metaLine = metaParts.filter(Boolean).join(" · ");
 
-            if (metaLine) {
-               const metaLines = wrapText(ctx, metaLine, maxTextWidth, 1);
-               for (const line of metaLines) {
-                  ctx.fillText(line, textX, textY);
-                  textY += lineH;
-               }
-            }
-
             const fallbackName =
                raw?.clientName ||
                raw?.customerName ||
@@ -1288,47 +1370,68 @@ export function drawAll({
                fallbackName
             ).trim();
 
-            const noteFromEvent = (ev.eventPrivateMessage || "")
-               .toString()
-               .trim();
-            const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
-               .toString()
-               .trim();
-
-            const bothNotes = [
-               noteFromEvent && noteFromEvent,
-               noteFromProfile && noteFromProfile,
-            ]
-               .filter(Boolean)
-               .join("; ");
-
-            if (person) {
-               const nameLines = wrapText(ctx, person, maxTextWidth, 2);
-               for (const line of nameLines) {
-                  ctx.fillText(line, textX, textY);
-                  textY += lineH;
+            if (isDense) {
+               const compact = [metaLine, person, studentPhone]
+                  .filter(Boolean)
+                  .join(" · ");
+               if (compact) {
+                  const compactLines = wrapText(ctx, compact, maxTextWidth, 2);
+                  for (const line of compactLines) {
+                     ctx.fillText(line, textX, textY);
+                     textY += lineH;
+                  }
                }
-            }
-
-            if (studentPhone) {
-               const phoneLines = wrapText(ctx, studentPhone, maxTextWidth, 1);
-               for (const line of phoneLines) {
-                  ctx.fillText(line, textX, textY);
-                  textY += lineH;
+            } else {
+               if (metaLine) {
+                  const metaLines = wrapText(ctx, metaLine, maxTextWidth, 1);
+                  for (const line of metaLines) {
+                     ctx.fillText(line, textX, textY);
+                     textY += lineH;
+                  }
                }
-            }
 
-            if (bothNotes) {
-               ctx.font = `${fontNotesPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-               const notesLines = wrapText(
-                  ctx,
-                  bothNotes.replace(/\s+/g, " ").trim(),
-                  maxTextWidth,
-                  2,
-               );
-               for (const line of notesLines) {
-                  ctx.fillText(line, textX, textY);
-                  textY += lineH;
+               if (person) {
+                  const nameLines = wrapText(ctx, person, maxTextWidth, 2);
+                  for (const line of nameLines) {
+                     ctx.fillText(line, textX, textY);
+                     textY += lineH;
+                  }
+               }
+
+               if (studentPhone) {
+                  const phoneLines = wrapText(ctx, studentPhone, maxTextWidth, 1);
+                  for (const line of phoneLines) {
+                     ctx.fillText(line, textX, textY);
+                     textY += lineH;
+                  }
+               }
+
+               const noteFromEvent = (ev.eventPrivateMessage || "")
+                  .toString()
+                  .trim();
+               const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
+                  .toString()
+                  .trim();
+
+               const bothNotes = [
+                  noteFromEvent && noteFromEvent,
+                  noteFromProfile && noteFromProfile,
+               ]
+                  .filter(Boolean)
+                  .join("; ");
+
+               if (bothNotes) {
+                  ctx.font = `${fontNotesPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+                  const notesLines = wrapText(
+                     ctx,
+                     bothNotes.replace(/\s+/g, " ").trim(),
+                     maxTextWidth,
+                     2,
+                  );
+                  for (const line of notesLines) {
+                     ctx.fillText(line, textX, textY);
+                     textY += lineH;
+                  }
                }
             }
 
@@ -1340,22 +1443,6 @@ export function drawAll({
                presenceByReservationColors,
                ridPresence,
             );
-            if (ridPresence != null) {
-               // o singură dată, ca să nu-ți omoare consola
-               if (!window.__presenceDbgOnce) {
-                  window.__presenceDbgOnce = true;
-                  console.log(
-                     "presenceByReservationColors sample:",
-                     presenceByReservationColors,
-                  );
-               }
-               //console.log(
-               //   "RID:",
-               //   String(ridPresence),
-               //   "colors:",
-               //   presenceColors
-               //);
-            }
 
             if (presenceColors && presenceColors.length) {
                drawPresenceBorder(
@@ -1457,15 +1544,17 @@ export function drawAll({
 
             if (hitMap) {
                const reservationId = raw?.id ?? ev.id;
-               hitMap.push({
+               const hitItem = {
                   x: cardX,
                   y: cardY,
                   w: cardW,
                   h: cardH,
                   kind: "reservation",
                   reservationId,
-                  ev,
-               });
+               };
+               if (includeEventPayloadInHitMap || reservationId == null)
+                  hitItem.ev = ev;
+               hitMap.push(hitItem);
             }
          }
       }

@@ -10,6 +10,14 @@ import { useEffect, useRef } from "react";
  *  - slopPx?: number       // prag de separare click/drag
  *  - inertiaX?: boolean    // inerție pe X (default true)
  *  - inertiaY?: boolean    // inerție pe Y (default false)
+ *  - inertiaBoostX?: number
+ *  - inertiaBoostY?: number
+ *  - frictionX?: number
+ *  - frictionY?: number
+ *  - stopSpeedX?: number
+ *  - stopSpeedY?: number
+ *  - maxInertiaX?: number
+ *  - maxInertiaY?: number
  */
 export default function useInertialPan(
    scrollRef,
@@ -21,6 +29,14 @@ export default function useInertialPan(
       slopPx = 8,
       inertiaX = true,
       inertiaY = false,
+      inertiaBoostX = 1.4,
+      inertiaBoostY = 1.4,
+      frictionX = 0.9,
+      frictionY = 0.9,
+      stopSpeedX = 0.05,
+      stopSpeedY = 0.05,
+      maxInertiaX = 70,
+      maxInertiaY = 70,
    } = {}
 ) {
    const isDown = useRef(false);
@@ -180,18 +196,11 @@ export default function useInertialPan(
             return;
          }
 
-         // === INERȚIE OPTIMIZATĂ ===
-         const frictionX = 0.9; // mai mare = se oprește mai repede
-         const frictionY = 0.9;
-         const stopSpeedX = 0.05;
-         const stopSpeedY = 0.05;
-
          // clamp viteză maximă, să nu facă salturi
-         let vx = inertiaX ? vel.current.x * 1.4 : 0;
-         let vy = inertiaY ? vel.current.y * 1.4 : 0;
-         const MAX_V = 70;
-         vx = Math.max(-MAX_V, Math.min(MAX_V, vx));
-         vy = Math.max(-MAX_V, Math.min(MAX_V, vy));
+         let vx = inertiaX ? vel.current.x * inertiaBoostX : 0;
+         let vy = inertiaY ? vel.current.y * inertiaBoostY : 0;
+         vx = Math.max(-maxInertiaX, Math.min(maxInertiaX, vx));
+         vy = Math.max(-maxInertiaY, Math.min(maxInertiaY, vy));
 
          const tooSlowX = !inertiaX || Math.abs(vx) < stopSpeedX;
          const tooSlowY = !inertiaY || Math.abs(vy) < stopSpeedY;
@@ -313,6 +322,14 @@ export default function useInertialPan(
       slopPx,
       inertiaX,
       inertiaY,
+      inertiaBoostX,
+      inertiaBoostY,
+      frictionX,
+      frictionY,
+      stopSpeedX,
+      stopSpeedY,
+      maxInertiaX,
+      maxInertiaY,
    ]);
 
    return {

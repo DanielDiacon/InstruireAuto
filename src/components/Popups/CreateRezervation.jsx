@@ -42,6 +42,50 @@ const EMAIL_DOMAIN = "instrauto.com";
 const MOLDOVA_TZ = "Europe/Chisinau";
 const SEARCH_RESULTS_LIMIT = 10;
 const OUTSIDE_CLOSE_GUARD_MS = 280;
+const EMPTY_USERS = [];
+
+function hasUserRole(u) {
+   const role = String(u?.role ?? u?.Role ?? u?.userRole ?? "").toUpperCase();
+   if (role === "USER") return true;
+   const roles = Array.isArray(u?.roles)
+      ? u.roles.map((r) => String(r).toUpperCase())
+      : [];
+   return roles.includes("USER");
+}
+
+function findStudentsForSearch(list, query, phoneDigits, limit = 20) {
+   const src = Array.isArray(list) ? list : EMPTY_USERS;
+   const q = String(query || "")
+      .trim()
+      .toLowerCase();
+   const typedDigits = String(phoneDigits || "").replace(/\D/g, "");
+   const noFilter = !q && !typedDigits;
+
+   const out = [];
+   for (const s of src) {
+      if (!hasUserRole(s)) continue;
+
+      if (noFilter) {
+         out.push(s);
+         if (out.length >= limit) break;
+         continue;
+      }
+
+      const full = `${s.firstName || ""} ${s.lastName || ""}`.toLowerCase();
+      const phone = (s.phone || "").toLowerCase();
+      const phoneDigitsOnly = String(s.phone || "").replace(/\D/g, "");
+
+      const matchName = q && full.includes(q);
+      const matchPhoneText = q && phone.includes(q);
+      const matchPhoneDigits =
+         typedDigits && phoneDigitsOnly.includes(typedDigits);
+
+      if (!matchName && !matchPhoneText && !matchPhoneDigits) continue;
+      out.push(s);
+      if (out.length >= limit) break;
+   }
+   return out;
+}
 
 const __fmtCache = new Map();
 function getFmt(locale, timeZone, mode) {
@@ -387,20 +431,7 @@ export default function CreateRezervation({
    useEffect(() => {
       studentsAllRef.current = studentsAll;
    }, [studentsAll]);
-
-   const students = useMemo(() => {
-      const hasUserRole = (u) => {
-         const role = String(
-            u?.role ?? u?.Role ?? u?.userRole ?? "",
-         ).toUpperCase();
-         if (role === "USER") return true;
-         const roles = Array.isArray(u?.roles)
-            ? u.roles.map((r) => String(r).toUpperCase())
-            : [];
-         return roles.includes("USER");
-      };
-      return (studentsAll || []).filter(hasUserRole);
-   }, [studentsAll]);
+   const studentsAllList = Array.isArray(studentsAll) ? studentsAll : EMPTY_USERS;
 
    const [messages, setMessages] = useState([]);
    const pushPill = useCallback((text, type = "error") => {
@@ -525,16 +556,26 @@ export default function CreateRezervation({
    const [blocking, setBlocking] = useState(false);
 
    useEffect(() => {
-      if (!studentsAll?.length) dispatch(fetchStudents());
-      if (!instructors?.length) dispatch(fetchInstructors());
-   }, [dispatch, studentsAll?.length, instructors?.length]);
+      if (!studentsAllList.length) dispatch(fetchStudents());
+      if (
+         (view === "searchInstructor" || view === "formSelect") &&
+         !instructors?.length
+      ) {
+         dispatch(fetchInstructors());
+      }
+   }, [dispatch, studentsAllList.length, instructors?.length, view]);
 
    const selectedStudent = useMemo(
-      () =>
-         studentId
-            ? students.find((u) => String(u.id) === String(studentId))
-            : null,
-      [students, studentId],
+      () => {
+         if (!studentId) return null;
+         const sid = String(studentId);
+         for (const user of studentsAllList) {
+            if (!hasUserRole(user)) continue;
+            if (String(user?.id ?? "") === sid) return user;
+         }
+         return null;
+      },
+      [studentsAllList, studentId],
    );
    const selectedInstructor = useMemo(
       () =>
@@ -545,24 +586,14 @@ export default function CreateRezervation({
    );
 
    const filteredStudents = useMemo(() => {
-      const base = students;
-      const q = (qStudent || "").trim().toLowerCase();
-      const typedDigits = onlyDigits(phoneFull);
-      if (!q && !typedDigits) return base;
-
-      return (base || []).filter((s) => {
-         const full = `${s.firstName || ""} ${s.lastName || ""}`.toLowerCase();
-         const phone = (s.phone || "").toLowerCase();
-         const phoneDigits = onlyDigits(s.phone || "");
-
-         const matchName = q && full.includes(q);
-         const matchPhoneText = q && phone.includes(q);
-         const matchPhoneDigits =
-            typedDigits && phoneDigits.includes(typedDigits);
-
-         return matchName || matchPhoneText || matchPhoneDigits;
-      });
-   }, [students, qStudent, phoneFull]);
+      if (view !== "searchStudent") return EMPTY_USERS;
+      return findStudentsForSearch(
+         studentsAllList,
+         qStudent,
+         phoneFull,
+         SEARCH_RESULTS_LIMIT * 2,
+      );
+   }, [studentsAllList, qStudent, phoneFull, view]);
 
    const filteredInstructors = useMemo(() => {
       const q = (qInstructor || "").trim().toLowerCase();
@@ -1091,8 +1122,8 @@ export default function CreateRezervation({
 
       setQStudent(digits);
 
-      const exact = (students || []).find(
-         (s) => onlyDigits(s.phone || "") === digits,
+      const exact = studentsAllList.find(
+         (s) => hasUserRole(s) && onlyDigits(s.phone || "") === digits,
       );
       if (exact) {
          const idStr = String(exact.id);
@@ -1102,7 +1133,7 @@ export default function CreateRezervation({
          setHighlightedStudentId(null);
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [phoneFull, students]);
+   }, [phoneFull, studentsAllList]);
 
    const handlePhoneKeyDown = (e) => {
       if (e.key === "Enter") {
@@ -1161,6 +1192,11 @@ export default function CreateRezervation({
 
    /* ====== Blackout detect ====== */
    useEffect(() => {
+      if (view !== "formSelect") {
+         setCheckingBlackout(false);
+         return;
+      }
+
       if (!instructorId || !selectedDate || !selectedTime) {
          setHasBlackout(false);
          setBlackoutId(null);
@@ -1251,7 +1287,7 @@ export default function CreateRezervation({
       return () => {
          cancelled = true;
       };
-   }, [instructorId, selectedDate, selectedTime]);
+   }, [view, instructorId, selectedDate, selectedTime]);
 
    /* ====== Block / Unblock blackout SINGLE ====== */
    const handleToggleBlackout = useCallback(async () => {
