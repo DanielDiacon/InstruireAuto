@@ -272,6 +272,183 @@ function hasAnyPresence(v) {
 }
 
 const CANVAS_EVENTS_SIGNATURE_CACHE = new WeakMap();
+const WORKER_EVENT_PATCH_MIN_RESET_CHANGES = 120;
+const WORKER_EVENT_PATCH_RESET_RATIO = 0.6;
+
+function buildCanvasEventSignaturePart(ev) {
+   if (!ev) return "";
+
+   const raw = ev.raw || {};
+
+   const id = raw.id ?? ev.id ?? "";
+   const startMs = _ms(ev.start ?? raw.startTime ?? raw.start ?? raw.date);
+   const endMs = _ms(ev.end ?? raw.endTime ?? raw.end) || startMs;
+
+   const instId = String(
+      raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? "",
+   );
+
+   const userId = String(
+      raw.userId ??
+         raw.user_id ??
+         ev.userId ??
+         ev.studentId ??
+         raw.user?.id ??
+         "",
+   );
+
+   const sector = String(raw.sector ?? ev.sector ?? "");
+   const gearbox = String(raw.gearbox ?? ev.gearbox ?? "");
+   const color = String(raw.color ?? ev.color ?? "");
+
+   const isConf = !!(raw.isConfirmed ?? raw.is_confirmed ?? ev.isConfirmed);
+   const isFav = !!(raw.isFavorite ?? raw.is_favorite ?? ev.isFavorite);
+   const isImp = !!(raw.isImportant ?? raw.is_important ?? ev.isImportant);
+   const isCanc = !!(raw.isCancelled ?? raw.is_cancelled ?? ev.isCancelled);
+
+   const flags = `${isConf ? 1 : 0}${isFav ? 1 : 0}${isImp ? 1 : 0}${
+      isCanc ? 1 : 0
+   }`;
+
+   // ⚠️ acestea schimbă text/inscripții desenate
+   const phone = String(getStudentPhoneFromEv(ev) || "");
+   const noteFromEvent = String(
+      raw.privateMessage ?? ev.privateMessage ?? ev.eventPrivateMessage ?? "",
+   );
+   const noteFromProfile = String(getStudentPrivateMessageFromEv(ev) || "");
+   const notesHash = _hashStr(`${noteFromEvent}|${noteFromProfile}`);
+
+   // ⚠️ acestea schimbă poziția/randarea în pad-uri
+   const padSlotIndex = ev._padSlotIndex != null ? String(ev._padSlotIndex) : "";
+   const padColIndex =
+      ev._padColumnIndex != null ? String(ev._padColumnIndex) : "";
+   const movedCancel = ev._movedToCancelPad ? "1" : "0";
+   const fromLateral = ev._fromLateralPad ? "1" : "0";
+   const localSlotKey = String(ev.localSlotKey || "");
+
+   // dacă ai updatedAt/version din API, e cel mai bun invalidator
+   const ver = String(
+      raw.updatedAt ?? raw.updated_at ?? raw.version ?? raw.rev ?? raw._rev ?? "",
+   );
+
+   return [
+      instId,
+      id,
+      startMs,
+      endMs,
+      userId,
+      sector,
+      gearbox,
+      color,
+      flags,
+      phone,
+      notesHash,
+      padSlotIndex,
+      padColIndex,
+      movedCancel,
+      fromLateral,
+      localSlotKey,
+      ver,
+   ].join("|");
+}
+
+function buildWorkerEventPatchBaseKey(ev) {
+   const raw = ev?.raw || {};
+   const reservationId = String(raw.id ?? ev?.id ?? "");
+   const startMs = _ms(ev?.start ?? raw.startTime ?? raw.start ?? raw.date);
+   const instructorId = String(
+      ev?.instructorId ?? raw.instructorId ?? raw.instructor_id ?? "",
+   );
+   const padSlotIndex =
+      ev?._padSlotIndex != null ? String(ev._padSlotIndex) : "";
+   const padColumnIndex =
+      ev?._padColumnIndex != null ? String(ev._padColumnIndex) : "";
+   const movedToCancel = ev?._movedToCancelPad ? "1" : "0";
+   const fromLateral = ev?._fromLateralPad ? "1" : "0";
+   const localSlotKey = String(ev?.localSlotKey || "");
+
+   return [
+      reservationId,
+      startMs,
+      instructorId,
+      padSlotIndex,
+      padColumnIndex,
+      movedToCancel,
+      fromLateral,
+      localSlotKey,
+   ].join("|");
+}
+
+function buildWorkerEventState(events) {
+   const state = new Map();
+   if (!Array.isArray(events) || !events.length) return state;
+
+   const dupCounters = new Map();
+
+   for (let index = 0; index < events.length; index++) {
+      const ev = events[index];
+      if (!ev) continue;
+
+      const baseKey = buildWorkerEventPatchBaseKey(ev);
+      const dupCount = dupCounters.get(baseKey) || 0;
+      dupCounters.set(baseKey, dupCount + 1);
+      const key = `${baseKey}#${dupCount}`;
+      const rev = `${index}|${buildCanvasEventSignaturePart(ev)}`;
+
+      state.set(key, {
+         index,
+         rev,
+         event: ev,
+      });
+   }
+
+   return state;
+}
+
+function serializeWorkerEventState(state) {
+   if (!state || !state.size) return [];
+
+   const entries = [];
+   for (const [key, value] of state.entries()) {
+      if (!value) continue;
+      entries.push({
+         key,
+         index: Number(value.index) || 0,
+         event: value.event || null,
+      });
+   }
+   return entries;
+}
+
+function diffWorkerEventState(prevState, nextState) {
+   const removals = [];
+   const upserts = [];
+
+   const prev = prevState instanceof Map ? prevState : new Map();
+   const next = nextState instanceof Map ? nextState : new Map();
+
+   for (const [key, nextEntry] of next.entries()) {
+      const prevEntry = prev.get(key);
+      if (!prevEntry || prevEntry.rev !== nextEntry.rev) {
+         upserts.push({
+            key,
+            index: Number(nextEntry.index) || 0,
+            event: nextEntry.event || null,
+         });
+      }
+   }
+
+   for (const key of prev.keys()) {
+      if (!next.has(key)) removals.push(key);
+   }
+
+   return {
+      removals,
+      upserts,
+      totalChanges: removals.length + upserts.length,
+      nextCount: next.size,
+   };
+}
 
 /**
  * Semnătură robustă pentru canvas:
@@ -286,91 +463,9 @@ function buildCanvasEventsSignature(events) {
    const parts = [];
 
    for (const ev of events) {
-      if (!ev) continue;
-
-      const raw = ev.raw || {};
-
-      const id = raw.id ?? ev.id ?? "";
-      const startMs = _ms(ev.start ?? raw.startTime ?? raw.start ?? raw.date);
-      const endMs = _ms(ev.end ?? raw.endTime ?? raw.end) || startMs;
-
-      const instId = String(
-         raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? "",
-      );
-
-      const userId = String(
-         raw.userId ??
-            raw.user_id ??
-            ev.userId ??
-            ev.studentId ??
-            raw.user?.id ??
-            "",
-      );
-
-      const sector = String(raw.sector ?? ev.sector ?? "");
-      const gearbox = String(raw.gearbox ?? ev.gearbox ?? "");
-      const color = String(raw.color ?? ev.color ?? "");
-
-      const isConf = !!(raw.isConfirmed ?? raw.is_confirmed ?? ev.isConfirmed);
-      const isFav = !!(raw.isFavorite ?? raw.is_favorite ?? ev.isFavorite);
-      const isImp = !!(raw.isImportant ?? raw.is_important ?? ev.isImportant);
-      const isCanc = !!(raw.isCancelled ?? raw.is_cancelled ?? ev.isCancelled);
-
-      const flags = `${isConf ? 1 : 0}${isFav ? 1 : 0}${isImp ? 1 : 0}${
-         isCanc ? 1 : 0
-      }`;
-
-      // ⚠️ acestea schimbă text/inscripții desenate
-      const phone = String(getStudentPhoneFromEv(ev) || "");
-      const noteFromEvent = String(
-         raw.privateMessage ??
-            ev.privateMessage ??
-            ev.eventPrivateMessage ??
-            "",
-      );
-      const noteFromProfile = String(getStudentPrivateMessageFromEv(ev) || "");
-      const notesHash = _hashStr(`${noteFromEvent}|${noteFromProfile}`);
-
-      // ⚠️ acestea schimbă poziția/randarea în pad-uri
-      const padSlotIndex =
-         ev._padSlotIndex != null ? String(ev._padSlotIndex) : "";
-      const padColIndex =
-         ev._padColumnIndex != null ? String(ev._padColumnIndex) : "";
-      const movedCancel = ev._movedToCancelPad ? "1" : "0";
-      const fromLateral = ev._fromLateralPad ? "1" : "0";
-      const localSlotKey = String(ev.localSlotKey || "");
-
-      // dacă ai updatedAt/version din API, e cel mai bun invalidator
-      const ver = String(
-         raw.updatedAt ??
-            raw.updated_at ??
-            raw.version ??
-            raw.rev ??
-            raw._rev ??
-            "",
-      );
-
-      parts.push(
-         [
-            instId,
-            id,
-            startMs,
-            endMs,
-            userId,
-            sector,
-            gearbox,
-            color,
-            flags,
-            phone,
-            notesHash,
-            padSlotIndex,
-            padColIndex,
-            movedCancel,
-            fromLateral,
-            localSlotKey,
-            ver,
-         ].join("|"),
-      );
+      const part = buildCanvasEventSignaturePart(ev);
+      if (!part) continue;
+      parts.push(part);
    }
 
    parts.sort();
@@ -1097,12 +1192,18 @@ function DayviewCanvasTrack({
 }) {
    const canvasRef = useRef(null);
    const drawBufferRef = useRef(null);
+   const staticLayerBufferRef = useRef(null);
+   const staticLayerSigRef = useRef("");
+   const renderWindowRef = useRef({ x: 0, y: 0, w: 1, h: 1 });
    const hitMapRef = useRef([]);
    const lastDrawSigRef = useRef(null);
    const workerRef = useRef(null);
    const workerReadyRef = useRef(false);
    const workerEnabledRef = useRef(false);
    const workerSceneSigRef = useRef("");
+   const workerEventsSigRef = useRef("");
+   const workerEventsStateRef = useRef(new Map());
+   const workerEventsSourceRef = useRef(null);
    const workerDrawSeqRef = useRef(0);
    const workerAppliedDrawSeqRef = useRef(0);
    const workerDrawInFlightRef = useRef(false);
@@ -1165,6 +1266,26 @@ function DayviewCanvasTrack({
       return buffer;
    }, []);
 
+   const ensureStaticLayerBuffer = useCallback((pixelW, pixelH) => {
+      let buffer = staticLayerBufferRef.current;
+
+      if (!buffer) {
+         if (typeof OffscreenCanvas !== "undefined") {
+            buffer = new OffscreenCanvas(pixelW, pixelH);
+         } else if (typeof document !== "undefined") {
+            buffer = document.createElement("canvas");
+         } else {
+            return null;
+         }
+         staticLayerBufferRef.current = buffer;
+      }
+
+      if (buffer.width !== pixelW) buffer.width = pixelW;
+      if (buffer.height !== pixelH) buffer.height = pixelH;
+
+      return buffer;
+   }, []);
+
    const notifyHitMapUpdated = useCallback(() => {
       if (activeEventIdRef.current == null) return;
       setHitMapVersion((v) => v + 1);
@@ -1181,6 +1302,9 @@ function DayviewCanvasTrack({
       workerReadyRef.current = false;
       workerEnabledRef.current = false;
       workerSceneSigRef.current = "";
+      workerEventsSigRef.current = "";
+      workerEventsStateRef.current = new Map();
+      workerEventsSourceRef.current = null;
       workerDrawSeqRef.current = 0;
       workerAppliedDrawSeqRef.current = 0;
       workerDrawInFlightRef.current = false;
@@ -1253,6 +1377,8 @@ function DayviewCanvasTrack({
          }
          teardownWorker();
          drawBufferRef.current = null;
+         staticLayerBufferRef.current = null;
+         staticLayerSigRef.current = "";
       };
    }, [teardownWorker]);
 
@@ -2299,6 +2425,9 @@ function DayviewCanvasTrack({
       workerEnabledRef.current = true;
       setWorkerRuntimeReady(false);
       workerSceneSigRef.current = "";
+      workerEventsSigRef.current = "";
+      workerEventsStateRef.current = new Map();
+      workerEventsSourceRef.current = null;
       workerDrawSeqRef.current = 0;
       workerAppliedDrawSeqRef.current = 0;
       workerDrawInFlightRef.current = false;
@@ -3349,21 +3478,11 @@ function DayviewCanvasTrack({
       [eventsForCanvas, refreshTick],
    );
 
-   const overlapSig = useMemo(
-      () => buildCanvasEventsSignature(events || []),
-      [events, refreshTick],
-   );
-
    const slotsSig = useMemo(() => buildSlotsSignature(slotGeoms), [slotGeoms]);
 
    const blockedSig = useMemo(
       () => buildBlockedSignature(blockedKeyMapForSlots, effectiveInstructors),
       [blockedKeyMapForSlots, effectiveInstructors],
-   );
-
-   const canceledSig = useMemo(
-      () => buildBlockedSignature(canceledSlotKeysByInst, effectiveInstructors),
-      [canceledSlotKeysByInst, effectiveInstructors],
    );
 
    const waitSig = useMemo(
@@ -3457,7 +3576,7 @@ function DayviewCanvasTrack({
            }
          : null;
 
-      const sceneSig = {
+      const sceneBaseSig = {
          dayStart: dayStart ? ymdStrInTZ(dayStart) : "0",
          dayEnd: dayEnd ? ymdStrInTZ(dayEnd) : "0",
          colsCount,
@@ -3472,46 +3591,21 @@ function DayviewCanvasTrack({
          zoom,
          blackoutVer,
          themeTick,
-         eventsSig,
-         overlapSig,
          slotsSig,
          blockedSig,
-         canceledSig,
          waitSig,
          presenceSig,
          desiredBadgeSig,
          createDraftSig,
          denseRenderMode: denseRenderMode ? 1 : 0,
-         hitMapMode: shouldBuildHitMap ? 1 : 0,
 
          // ✅ NEW: forțează redraw când schimbi sector/ordonare instructori
          sectorSig: activeSectorFilter || "ALL",
          instructorsLayoutSig,
       };
 
-      const sceneKey = JSON.stringify(sceneSig);
-      const sigKey = JSON.stringify({
-         sceneKey,
-         searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
-         renderScene: shouldRenderScene ? 1 : 0,
-         forceFullSceneForFocus: forceFullSceneForFocus ? 1 : 0,
-         visibleRows: `${visibleRowStartForDraw}:${visibleRowEndForDraw}`,
-         visibleCols: `${visibleColStartForDraw}:${visibleColEndForDraw}`,
-         highlightId: highlightEventIdForRender,
-         highlightSlotKey: highlightSlot
-            ? `${highlightSlot.instructorId}|${highlightSlot.slotStart}`
-            : "",
-         waitEditSlot:
-            editingWaitForRender && editingWaitForRender.slotIndex != null
-               ? String(editingWaitForRender.slotIndex)
-               : "",
-      });
-
-      const noSkip =
-         typeof window !== "undefined" && window.__DV_NO_SKIP === true;
-
-      if (!noSkip && lastDrawSigRef.current === sigKey) return;
-      lastDrawSigRef.current = sigKey;
+      const sceneBaseKey = JSON.stringify(sceneBaseSig);
+      const sceneRuntimeKey = `${sceneBaseKey}|${eventsSig}`;
 
       let width = hoursColWidth + worldWidth;
 
@@ -3526,14 +3620,90 @@ function DayviewCanvasTrack({
       width = Math.max(width, effectiveCols * colWidth);
       height = Math.max(height, headerHeight + 200);
       const canvasDpr = computeSafeCanvasDpr(width, height, desiredDpr);
+      const localViewportLeft = Math.max(
+         0,
+         (Number(viewportScrollLeft) || 0) - (Number(dayOffsetLeft) || 0),
+      );
+      const localViewportTop = Math.max(0, Number(viewportScrollTop) || 0);
+      const viewW = Math.max(0, Number(viewportWidth) || 0);
+      const viewH = Math.max(0, Number(viewportHeight) || 0);
+      const overscanX = Math.max(80, Math.round(colWidth * 0.75));
+      const overscanY = Math.max(120, Math.round(slotHeight * 1.5));
+      const canWindow = shouldRenderScene && viewW > 0 && viewH > 0;
+      const renderSurfaceWidth = canWindow
+         ? Math.max(1, Math.min(width, Math.round(viewW + overscanX * 2)))
+         : Math.max(1, Math.round(width));
+      const renderSurfaceHeight = canWindow
+         ? Math.max(1, Math.min(height, Math.round(viewH + overscanY * 2)))
+         : Math.max(1, Math.round(height));
+      const maxOriginX = Math.max(0, Math.round(width - renderSurfaceWidth));
+      const maxOriginY = Math.max(0, Math.round(height - renderSurfaceHeight));
+      const renderOriginX = canWindow
+         ? Math.max(
+              0,
+              Math.min(maxOriginX, Math.round(localViewportLeft - overscanX)),
+           )
+         : 0;
+      const renderOriginY = canWindow
+         ? Math.max(
+              0,
+              Math.min(maxOriginY, Math.round(localViewportTop - overscanY)),
+           )
+         : 0;
+      renderWindowRef.current = {
+         x: renderOriginX,
+         y: renderOriginY,
+         w: renderSurfaceWidth,
+         h: renderSurfaceHeight,
+      };
+      const staticLayerKey = JSON.stringify({
+         sceneRuntimeKey,
+         width: renderSurfaceWidth,
+         height: renderSurfaceHeight,
+         dpr: Number(canvasDpr.toFixed(3)),
+         originX: renderOriginX,
+         originY: renderOriginY,
+         visibleRows: `${visibleRowStartForDraw}:${visibleRowEndForDraw}`,
+         visibleCols: `${visibleColStartForDraw}:${visibleColEndForDraw}`,
+      });
+      const sigKey = JSON.stringify({
+         sceneBaseKey,
+         eventsSig,
+         searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
+         renderScene: shouldRenderScene ? 1 : 0,
+         forceFullSceneForFocus: forceFullSceneForFocus ? 1 : 0,
+         visibleRows: `${visibleRowStartForDraw}:${visibleRowEndForDraw}`,
+         visibleCols: `${visibleColStartForDraw}:${visibleColEndForDraw}`,
+         highlightId: highlightEventIdForRender,
+         highlightSlotKey: highlightSlot
+            ? `${highlightSlot.instructorId}|${highlightSlot.slotStart}`
+            : "",
+         waitEditSlot:
+            editingWaitForRender && editingWaitForRender.slotIndex != null
+               ? String(editingWaitForRender.slotIndex)
+               : "",
+         window: `${renderOriginX}:${renderOriginY}:${renderSurfaceWidth}:${renderSurfaceHeight}`,
+      });
+
+      const noSkip =
+         typeof window !== "undefined" && window.__DV_NO_SKIP === true;
+
+      if (!noSkip && lastDrawSigRef.current === sigKey) return;
+      lastDrawSigRef.current = sigKey;
 
       const workerOwnsCanvas =
          canvasTransferredRef.current ||
          (ENABLE_CANVAS_WORKER && workerEnabledRef.current);
       if (!workerOwnsCanvas) {
          if (shouldRenderScene) {
-            const nextPixelW = Math.max(1, Math.floor(width * canvasDpr));
-            const nextPixelH = Math.max(1, Math.floor(height * canvasDpr));
+            const nextPixelW = Math.max(
+               1,
+               Math.floor(renderSurfaceWidth * canvasDpr),
+            );
+            const nextPixelH = Math.max(
+               1,
+               Math.floor(renderSurfaceHeight * canvasDpr),
+            );
             if (canvas.width !== nextPixelW) canvas.width = nextPixelW;
             if (canvas.height !== nextPixelH) canvas.height = nextPixelH;
          } else {
@@ -3541,8 +3711,15 @@ function DayviewCanvasTrack({
             if (canvas.height !== 1) canvas.height = 1;
          }
       }
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
+      canvas.style.position = "absolute";
+      canvas.style.left = `${shouldRenderScene ? renderOriginX : 0}px`;
+      canvas.style.top = `${shouldRenderScene ? renderOriginY : 0}px`;
+      canvas.style.width = `${
+         shouldRenderScene ? renderSurfaceWidth : 1
+      }px`;
+      canvas.style.height = `${
+         shouldRenderScene ? renderSurfaceHeight : 1
+      }px`;
 
       setCanvasPx((prev) =>
          prev.w === width && prev.h === height ? prev : { w: width, h: height },
@@ -3550,6 +3727,9 @@ function DayviewCanvasTrack({
 
       const workerCanRender = workerSceneCacheEnabled;
       if (!shouldRenderScene) {
+         renderWindowRef.current = { x: 0, y: 0, w: 1, h: 1 };
+         staticLayerBufferRef.current = null;
+         staticLayerSigRef.current = "";
          if (hitMapRef.current.length) {
             hitMapRef.current = [];
             notifyHitMapUpdated();
@@ -3560,6 +3740,7 @@ function DayviewCanvasTrack({
                width: 1,
                height: 1,
                dpr: 1,
+               staticLayerKey: "__offscreen__",
                draw: {
                   buildHitMap: false,
                   highlightEventId: null,
@@ -3599,59 +3780,114 @@ function DayviewCanvasTrack({
       }
 
       if (workerCanRender) {
+         staticLayerBufferRef.current = null;
+         staticLayerSigRef.current = "";
          const worker = workerRef.current;
          if (!worker) return;
 
-         if (workerSceneSigRef.current !== sceneKey) {
-            workerSceneSigRef.current = sceneKey;
+         const nextWorkerEventState = buildWorkerEventState(eventsSafe);
+         const workerBaseScene = {
+            hoursColWidth,
+            headerHeight,
+            colWidth,
+            colGap,
+            colsCount,
+            colsPerRow,
+            rowsCount,
+            rowGap,
+            rowHeights,
+            instructors: effectiveInstructors,
+            slotGeoms,
+            slotHeight,
+            slotGap,
+            blockedKeyMap: blockedKeyMapForSlots || null,
+            zoom,
+            preGrid: hasPreGrid
+               ? { columns: preGridCols, rows: preGridRows }
+               : null,
+            preGridWidth,
+            waitNotesMap: waitNotesTextMap,
+            presenceByReservationColors: presenceColorsByReservation,
+            presenceReservationIds: effectivePresenceReservationIds,
+            desiredInstructorBadgeByUserId,
+            createDraftBySlotUsers,
+            createDraftBySlotColors,
+            denseMode: denseRenderMode,
+         };
+
+         if (workerSceneSigRef.current !== sceneBaseKey) {
+            workerSceneSigRef.current = sceneBaseKey;
             try {
                worker.postMessage({
                   type: "scene",
                   colorOverrides: workerColorOverrides,
-                  scene: {
-                     hoursColWidth,
-                     headerHeight,
-                     colWidth,
-                     colGap,
-                     colsCount,
-                     colsPerRow,
-                     rowsCount,
-                     rowGap,
-                     rowHeights,
-                     instructors: effectiveInstructors,
-                     events: eventsSafe,
-                     slotGeoms,
-                     slotHeight,
-                     slotGap,
-                     blockedKeyMap: blockedKeyMapForSlots || null,
-                     zoom,
-                     preGrid: hasPreGrid
-                        ? { columns: preGridCols, rows: preGridRows }
-                        : null,
-                     preGridWidth,
-                     waitNotesMap: waitNotesTextMap,
-                     overlapEventsByInst,
-                     canceledSlotKeysByInst,
-                     presenceByReservationColors: presenceColorsByReservation,
-                     presenceReservationIds: effectivePresenceReservationIds,
-                     desiredInstructorBadgeByUserId,
-                     createDraftBySlotUsers,
-                     createDraftBySlotColors,
-                     denseMode: denseRenderMode,
-                  },
+                  scene: workerBaseScene,
+                  eventEntries: serializeWorkerEventState(nextWorkerEventState),
                });
             } catch (error) {
                markWorkerFatal(error?.message || error);
                return;
             }
+
+            workerEventsSigRef.current = eventsSig;
+            workerEventsStateRef.current = nextWorkerEventState;
+            workerEventsSourceRef.current = eventsSafe;
+         } else if (
+            workerEventsSigRef.current !== eventsSig ||
+            workerEventsSourceRef.current !== eventsSafe
+         ) {
+            const prevWorkerEventState = workerEventsStateRef.current;
+            const diff = diffWorkerEventState(
+               prevWorkerEventState,
+               nextWorkerEventState,
+            );
+            const prevCount =
+               prevWorkerEventState && prevWorkerEventState.size
+                  ? prevWorkerEventState.size
+                  : 0;
+
+            if (diff.totalChanges > 0) {
+               const resetThreshold = Math.max(
+                  WORKER_EVENT_PATCH_MIN_RESET_CHANGES,
+                  Math.round(diff.nextCount * WORKER_EVENT_PATCH_RESET_RATIO),
+               );
+               const shouldReset = prevCount === 0 || diff.totalChanges > resetThreshold;
+
+               try {
+                  worker.postMessage(
+                     shouldReset
+                        ? {
+                             type: "scene-events-reset",
+                             entries: serializeWorkerEventState(nextWorkerEventState),
+                          }
+                        : {
+                             type: "scene-events-patch",
+                             removals: diff.removals,
+                             upserts: diff.upserts,
+                          },
+                  );
+               } catch (error) {
+                  markWorkerFatal(error?.message || error);
+                  return;
+               }
+            }
+
+            workerEventsSigRef.current = eventsSig;
+            workerEventsStateRef.current = nextWorkerEventState;
+            workerEventsSourceRef.current = eventsSafe;
          }
 
          const drawPayload = {
-            width,
-            height,
+            width: renderSurfaceWidth,
+            height: renderSurfaceHeight,
             dpr: canvasDpr,
+            staticLayerKey,
             draw: {
                buildHitMap: shouldBuildHitMap,
+               worldWidth: width,
+               worldHeight: height,
+               renderOriginX,
+               renderOriginY,
                highlightEventId: highlightEventIdForRender,
                highlightSlot,
                editingWait: editingWaitForRender,
@@ -3698,9 +3934,71 @@ function DayviewCanvasTrack({
       const drawCtx = canUseDoubleBuffer ? drawBuffer?.getContext?.("2d") : frontCtx;
       if (!drawCtx) return;
 
+      const staticLayerBuffer = ensureStaticLayerBuffer(pixelW, pixelH);
+      const staticLayerCtx = staticLayerBuffer?.getContext?.("2d");
+      if (!staticLayerBuffer || !staticLayerCtx) {
+         staticLayerBufferRef.current = null;
+         staticLayerSigRef.current = "";
+      } else if (staticLayerSigRef.current !== staticLayerKey) {
+         staticLayerSigRef.current = staticLayerKey;
+         staticLayerCtx.setTransform(1, 0, 0, 1, 0, 0);
+         staticLayerCtx.clearRect(0, 0, pixelW, pixelH);
+         staticLayerCtx.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
+         staticLayerCtx.translate(-renderOriginX, -renderOriginY);
+
+         drawAll({
+            ctx: staticLayerCtx,
+            width,
+            height,
+            hoursColWidth,
+            headerHeight,
+            colWidth,
+            colGap,
+            colsCount,
+            colsPerRow,
+            rowsCount,
+            rowGap,
+            rowHeights,
+            instructors: effectiveInstructors,
+            events: eventsSafe,
+            slotGeoms,
+            slotHeight,
+            slotGap,
+            hitMap: null,
+            blockedKeyMap: blockedKeyMapForSlots || null,
+            highlightEventId: null,
+            highlightSlot: null,
+            zoom,
+            preGrid: hasPreGrid
+               ? { columns: preGridCols, rows: preGridRows }
+               : null,
+            preGridWidth,
+            waitNotesMap: waitNotesTextMap,
+            editingWait: null,
+            overlapEventsByInst,
+            canceledSlotKeysByInst,
+            presenceByReservationColors: presenceColorsByReservation,
+            presenceReservationIds: effectivePresenceReservationIds,
+            desiredInstructorBadgeByUserId,
+            createDraftBySlotUsers,
+            createDraftBySlotColors,
+            activeSearchEventId: null,
+            denseMode: denseRenderMode,
+            visibleRowStart: visibleRowStartForDraw,
+            visibleRowEnd: visibleRowEndForDraw,
+            visibleColStart: visibleColStartForDraw,
+            visibleColEnd: visibleColEndForDraw,
+            paintStatic: true,
+            paintDynamic: false,
+            clearCanvas: false,
+         });
+      }
+
       drawCtx.setTransform(1, 0, 0, 1, 0, 0);
       drawCtx.clearRect(0, 0, pixelW, pixelH);
+      if (staticLayerBuffer) drawCtx.drawImage(staticLayerBuffer, 0, 0);
       drawCtx.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
+      drawCtx.translate(-renderOriginX, -renderOriginY);
 
       const hitMap = shouldBuildHitMap ? [] : null;
 
@@ -3746,6 +4044,9 @@ function DayviewCanvasTrack({
          visibleRowEnd: visibleRowEndForDraw,
          visibleColStart: visibleColStartForDraw,
          visibleColEnd: visibleColEndForDraw,
+         paintStatic: false,
+         paintDynamic: true,
+         clearCanvas: false,
       });
 
       if (canUseDoubleBuffer && drawBuffer) {
@@ -3781,10 +4082,8 @@ function DayviewCanvasTrack({
       waitNotesTextMap,
       waitEdit,
       eventsSig,
-      overlapSig,
       slotsSig,
       blockedSig,
-      canceledSig,
       waitSig,
       overlapEventsByInst,
       canceledSlotKeysByInst,
@@ -3806,6 +4105,7 @@ function DayviewCanvasTrack({
       colRenderEndDep,
       workerSceneCacheEnabled,
       ensureDrawBuffer,
+      ensureStaticLayerBuffer,
       workerColorOverrides,
       postWorkerDraw,
       markWorkerFatal,
@@ -3847,7 +4147,8 @@ function DayviewCanvasTrack({
       }
 
       const canvasRect = canvas.getBoundingClientRect();
-      const topY = canvasRect.top + activeHit.y;
+      const renderWin = renderWindowRef.current || { x: 0, y: 0 };
+      const topY = canvasRect.top + (activeHit.y - (renderWin.y || 0));
       const bottomY = topY + activeHit.h;
       const centerY = (topY + bottomY) / 2;
 
@@ -4261,8 +4562,11 @@ function DayviewCanvasTrack({
          if (Date.now() < ignoreClickUntilRef.current) return;
 
          const rect = canvas.getBoundingClientRect();
-         const x = e.clientX - rect.left;
-         const y = e.clientY - rect.top;
+         const localX = e.clientX - rect.left;
+         const localY = e.clientY - rect.top;
+         const renderWin = renderWindowRef.current || { x: 0, y: 0 };
+         const x = localX + (renderWin.x || 0);
+         const y = localY + (renderWin.y || 0);
 
          const items = hitMapRef.current || [];
          let foundEvent = null;
@@ -4333,8 +4637,11 @@ function DayviewCanvasTrack({
          clearPendingClickCommit();
 
          const rect = canvas.getBoundingClientRect();
-         const x = e.clientX - rect.left;
-         const y = e.clientY - rect.top;
+         const localX = e.clientX - rect.left;
+         const localY = e.clientY - rect.top;
+         const renderWin = renderWindowRef.current || { x: 0, y: 0 };
+         const x = localX + (renderWin.x || 0);
+         const y = localY + (renderWin.y || 0);
 
          const items = hitMapRef.current || [];
          if (!items.length) return;
@@ -4431,8 +4738,11 @@ function DayviewCanvasTrack({
 
       const getHitAtClient = (clientX, clientY) => {
          const rect = canvas.getBoundingClientRect();
-         const x = clientX - rect.left;
-         const y = clientY - rect.top;
+         const localX = clientX - rect.left;
+         const localY = clientY - rect.top;
+         const renderWin = renderWindowRef.current || { x: 0, y: 0 };
+         const x = localX + (renderWin.x || 0);
+         const y = localY + (renderWin.y || 0);
 
          const items = hitMapRef.current || [];
          for (let i = items.length - 1; i >= 0; i--) {
@@ -4622,7 +4932,14 @@ function DayviewCanvasTrack({
    }, [dayStart]);
 
    return (
-      <div style={{ position: "relative", flex: "0 0 auto" }}>
+      <div
+         style={{
+            position: "relative",
+            flex: "0 0 auto",
+            width: `${Math.max(1, Math.round(canvasPx.w || 1))}px`,
+            height: `${Math.max(1, Math.round(canvasPx.h || 1))}px`,
+         }}
+      >
          <canvas key={canvasEpoch} ref={canvasRef} />
 
          {effectiveInstructors.map((inst, idx) => {

@@ -31,6 +31,8 @@ let LAST_EVENTS_WITH_COLOR = [];
 let LAST_EVENTS_BY_INST = {};
 let LAST_OVERLAP_SOURCE_REF = null;
 let LAST_OVERLAP_MAP = null;
+let LAST_CANCELED_SOURCE_REF = null;
+let LAST_CANCELED_MAP = null;
 let LAST_SLOT_GEOMS_REF = null;
 let LAST_SLOT_INDEX_BY_LABEL = null;
 let STATIC_COLOR_OVERRIDES = null;
@@ -62,6 +64,8 @@ export function clearColorCache() {
    LAST_EVENTS_BY_INST = {};
    LAST_OVERLAP_SOURCE_REF = null;
    LAST_OVERLAP_MAP = null;
+   LAST_CANCELED_SOURCE_REF = null;
+   LAST_CANCELED_MAP = null;
    LAST_SLOT_GEOMS_REF = null;
    LAST_SLOT_INDEX_BY_LABEL = null;
    EVENTS_SIGNATURE_CACHE = new WeakMap();
@@ -177,6 +181,17 @@ function resolveCanvasColor(input) {
 
    // fallback: acceptă "GREEN", "event-green", etc.
    return resolveColor(normalizeEventColor(s));
+}
+
+function isCanceledReservation(ev) {
+   if (!ev || typeof ev !== "object") return false;
+   const raw = ev.raw || {};
+   return !!(
+      raw.isCancelled ??
+      raw.is_cancelled ??
+      ev.isCancelled ??
+      ev.is_cancelled
+   );
 }
 
 function getPresenceColorsForId(presenceMap, reservationId) {
@@ -603,6 +618,9 @@ export function drawAll({
    visibleColStart = 0,
    visibleColEnd = null,
    includeEventPayloadInHitMap = true,
+   paintStatic = true,
+   paintDynamic = true,
+   clearCanvas = true,
 }) {
    if (!ctx || !width || !height) return;
 
@@ -663,6 +681,7 @@ export function drawAll({
    } else {
       overlapMap = new Map();
       eventsWithColor.forEach((ev) => {
+         if (isCanceledReservation(ev)) return;
          let iid = "";
          if (ev.instructorId != null) iid = String(ev.instructorId);
          else if (ev.raw?.instructorId != null)
@@ -680,6 +699,41 @@ export function drawAll({
       });
       LAST_OVERLAP_SOURCE_REF = events;
       LAST_OVERLAP_MAP = overlapMap;
+   }
+
+   let canceledMap;
+   if (canceledSlotKeysByInst && canceledSlotKeysByInst instanceof Map) {
+      canceledMap = canceledSlotKeysByInst;
+   } else if (LAST_CANCELED_SOURCE_REF === events) {
+      canceledMap = LAST_CANCELED_MAP || new Map();
+   } else {
+      canceledMap = new Map();
+      eventsWithColor.forEach((ev) => {
+         if (!isCanceledReservation(ev)) return;
+
+         const raw = ev.raw || {};
+         const instId = String(
+            raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? "",
+         );
+         if (!instId) return;
+
+         const start =
+            ev.start instanceof Date ? ev.start : new Date(ev.start || 0);
+         const startMs = start.getTime();
+         if (!Number.isFinite(startMs)) return;
+
+         const localKey = localKeyFromTs(start);
+         if (!localKey) return;
+
+         let set = canceledMap.get(instId);
+         if (!set) {
+            set = new Set();
+            canceledMap.set(instId, set);
+         }
+         set.add(localKey);
+      });
+      LAST_CANCELED_SOURCE_REF = events;
+      LAST_CANCELED_MAP = canceledMap;
    }
 
    let slotIndexByLabel = LAST_SLOT_INDEX_BY_LABEL;
@@ -735,10 +789,10 @@ export function drawAll({
    let waitPadCounter = 0;
 
    ctx.save();
-   ctx.clearRect(0, 0, width, height);
+   if (clearCanvas) ctx.clearRect(0, 0, width, height);
 
    // preGrid placeholder
-   if (hasPreGrid && preCols > 0 && preRows > 0) {
+   if (paintStatic && hasPreGrid && preCols > 0 && preRows > 0) {
       const rowTop = 0;
       const colHeight = headerHeight + maxWorldHeight;
       const slotAreaTopGlobal = rowTop + headerHeight + CONTENT_PAD_TOP;
@@ -851,8 +905,8 @@ export function drawAll({
          );
 
          const instCanceledSet =
-            canceledSlotKeysByInst && canceledSlotKeysByInst.get && instId
-               ? canceledSlotKeysByInst.get(instId) || null
+            canceledMap && canceledMap.get && instId
+               ? canceledMap.get(instId) || null
                : null;
 
          const isPadCol = instId.startsWith("__pad_");
@@ -896,36 +950,38 @@ export function drawAll({
             ? computeWorldHeight(maxSlotsForThisColumn, slotHeight, slotGap)
             : worldHeight;
 
-         // column bg gradient
-         ctx.save();
+         if (paintStatic) {
+            // column bg gradient
+            ctx.save();
 
-         const sectorSlug = (inst.sectorSlug || "").toString().toLowerCase();
-         let colTopColor = baseBg;
-         let colBottomColor = baseBg;
+            const sectorSlug = (inst.sectorSlug || "").toString().toLowerCase();
+            let colTopColor = baseBg;
+            let colBottomColor = baseBg;
 
-         if (sectorSlug.includes("botanica"))
-            colBottomColor = resolveColor("--event-blue");
-         else if (sectorSlug.includes("ciocana"))
-            colBottomColor = resolveColor("--event-pink");
-         else if (sectorSlug.includes("buiucani"))
-            colBottomColor = resolveColor("--event-green");
+            if (sectorSlug.includes("botanica"))
+               colBottomColor = resolveColor("--event-blue");
+            else if (sectorSlug.includes("ciocana"))
+               colBottomColor = resolveColor("--event-pink");
+            else if (sectorSlug.includes("buiucani"))
+               colBottomColor = resolveColor("--event-green");
 
-         const colHeight = headerHeight + worldHeightForColumn;
+            const colHeight = headerHeight + worldHeightForColumn;
 
-         const grad = ctx.createLinearGradient(
-            0,
-            rowTop,
-            0,
-            rowTop + colHeight,
-         );
-         grad.addColorStop(0, colBottomColor);
-         grad.addColorStop(0.1, colTopColor);
-         grad.addColorStop(1, colTopColor);
+            const grad = ctx.createLinearGradient(
+               0,
+               rowTop,
+               0,
+               rowTop + colHeight,
+            );
+            grad.addColorStop(0, colBottomColor);
+            grad.addColorStop(0.1, colTopColor);
+            grad.addColorStop(1, colTopColor);
 
-         ctx.fillStyle = grad;
-         drawRoundRect(ctx, colX, rowTop, w, colHeight, columnRadius);
-         ctx.fill();
-         ctx.restore();
+            ctx.fillStyle = grad;
+            drawRoundRect(ctx, colX, rowTop, w, colHeight, columnRadius);
+            ctx.fill();
+            ctx.restore();
+         }
 
          let waitPadIndex = null;
          if (isWaitPad) waitPadIndex = waitPadCounter++;
@@ -1020,8 +1076,6 @@ export function drawAll({
                instCanceledSet.has(slotKey)
             );
 
-            ctx.save();
-
             const slotBaseBg =
                isWaitPad || isLateralPad || isCancelPad
                   ? emptySlotBgPads
@@ -1031,94 +1085,6 @@ export function drawAll({
 
             if (isCancelledHere) fillColor = cancelSlotBgColor;
             else if (isBlocked || isSlot19_30) fillColor = blackoutFillColor;
-
-            ctx.fillStyle = fillColor;
-            drawRoundRect(ctx, slotX, slotY, slotW, slotH, slotRadius);
-            ctx.fill();
-            // ✅ CREATE-DRAFT indicator (slot gol)
-            // ✅ CREATE-DRAFT overlay (slot gol) — ca la EDIT, dar scrie "CREARE"
-            // ✅ CREATE-DRAFT overlay (slot gol) — cu border colorat (ca la EDITARE)
-            if (
-               createDraftBySlotColors &&
-               !isPadCol &&
-               slotStartDate instanceof Date &&
-               !isNaN(slotStartDate)
-            ) {
-               const draftKey = `${instId}|${slotStartDate.toISOString()}`;
-
-               // re-folosim exact aceeași rezolvare de culori ca la EDITARE
-               const draftColors = getPresenceColorsForId(
-                  createDraftBySlotColors,
-                  draftKey,
-               );
-               const isCreatingHere =
-                  Array.isArray(draftColors) && draftColors.length;
-
-               if (isCreatingHere) {
-                  ctx.save();
-
-                  // overlay
-                  ctx.fillStyle = "rgba(0,0,0,0.65)";
-                  drawRoundRect(
-                     ctx,
-                     slotX + 1,
-                     slotY + 1,
-                     slotW - 2,
-                     slotH - 2,
-                     slotRadius,
-                  );
-                  ctx.fill();
-
-                  // text
-                  ctx.fillStyle = "#fff";
-                  ctx.textBaseline = "top";
-                  ctx.font = `bold ${Math.max(
-                     11,
-                     12 * fontScale,
-                  )}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-                  ctx.fillText(
-                     "CREARE",
-                     slotX + 8 * fontScale,
-                     slotY + 6 * fontScale,
-                  );
-
-                  // ✅ border colorat (identic ca la EDITARE)
-                  drawPresenceBorder(
-                     ctx,
-                     slotX,
-                     slotY,
-                     slotW,
-                     slotH,
-                     draftColors,
-                     slotRadius,
-                  );
-
-                  ctx.restore();
-               }
-            }
-
-            // border blackout
-            if (isBlocked || isSlot19_30) {
-               ctx.lineWidth = 1;
-               ctx.strokeStyle = blackoutBorderColor;
-               drawRoundRect(
-                  ctx,
-                  slotX + 1,
-                  slotY + 1,
-                  slotW - 2,
-                  slotH - 2,
-                  Math.max(0, slotRadius - 1.5 * fontScale),
-               );
-               ctx.stroke();
-            }
-
-            // text
-            let slotTextColor = emptySlotTextColor;
-            if (isCancelledHere) slotTextColor = cancelSlotTextColor;
-
-            ctx.fillStyle = slotTextColor;
-            ctx.font = `${fontMetaPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-            ctx.textBaseline = "top";
 
             let shouldDrawText = true;
             let waitSlotGlobalIndex = null;
@@ -1155,44 +1121,130 @@ export function drawAll({
                }
             }
 
-            if (shouldDrawText && slotLabelText) {
-               const maxTextWidth = Math.max(0, slotW - padX * 2);
-               const lines = wrapText(
-                  ctx,
-                  slotLabelText,
-                  maxTextWidth,
-                  isDense ? 1 : 5,
-               );
-               for (let li = 0; li < lines.length; li++) {
-                  ctx.fillText(
-                     lines[li],
-                     slotX + padX,
-                     slotY + padY + li * lineHeight,
-                  );
-               }
-            }
-
             const isHighlightedSlot =
                highlightSlot &&
                String(highlightSlot.instructorId) === instId &&
                slotStartDate &&
                highlightSlot.slotStart === slotStartDate.toISOString();
 
-            if (isHighlightedSlot) {
-               ctx.lineWidth = 2;
-               ctx.strokeStyle = activeBorderColor;
-               drawRoundRect(
-                  ctx,
-                  slotX + 1,
-                  slotY + 1,
-                  slotW - 2,
-                  slotH - 2,
-                  Math.max(0, slotRadius - 1.5 * fontScale),
-               );
-               ctx.stroke();
+            if (paintStatic) {
+               ctx.save();
+               ctx.fillStyle = fillColor;
+               drawRoundRect(ctx, slotX, slotY, slotW, slotH, slotRadius);
+               ctx.fill();
+
+               // border blackout
+               if (isBlocked || isSlot19_30) {
+                  ctx.lineWidth = 1;
+                  ctx.strokeStyle = blackoutBorderColor;
+                  drawRoundRect(
+                     ctx,
+                     slotX + 1,
+                     slotY + 1,
+                     slotW - 2,
+                     slotH - 2,
+                     Math.max(0, slotRadius - 1.5 * fontScale),
+                  );
+                  ctx.stroke();
+               }
+
+               // text
+               let slotTextColor = emptySlotTextColor;
+               if (isCancelledHere) slotTextColor = cancelSlotTextColor;
+
+               ctx.fillStyle = slotTextColor;
+               ctx.font = `${fontMetaPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+               ctx.textBaseline = "top";
+
+               if (shouldDrawText && slotLabelText) {
+                  const maxTextWidth = Math.max(0, slotW - padX * 2);
+                  const lines = wrapText(
+                     ctx,
+                     slotLabelText,
+                     maxTextWidth,
+                     isDense ? 1 : 5,
+                  );
+                  for (let li = 0; li < lines.length; li++) {
+                     ctx.fillText(
+                        lines[li],
+                        slotX + padX,
+                        slotY + padY + li * lineHeight,
+                     );
+                  }
+               }
+               ctx.restore();
             }
 
-            ctx.restore();
+            if (paintDynamic) {
+               // CREATE-DRAFT overlay (slot gol)
+               if (
+                  createDraftBySlotColors &&
+                  !isPadCol &&
+                  slotStartDate instanceof Date &&
+                  !isNaN(slotStartDate)
+               ) {
+                  const draftKey = `${instId}|${slotStartDate.toISOString()}`;
+                  const draftColors = getPresenceColorsForId(
+                     createDraftBySlotColors,
+                     draftKey,
+                  );
+                  const isCreatingHere =
+                     Array.isArray(draftColors) && draftColors.length;
+
+                  if (isCreatingHere) {
+                     ctx.save();
+                     ctx.fillStyle = "rgba(0,0,0,0.65)";
+                     drawRoundRect(
+                        ctx,
+                        slotX + 1,
+                        slotY + 1,
+                        slotW - 2,
+                        slotH - 2,
+                        slotRadius,
+                     );
+                     ctx.fill();
+
+                     ctx.fillStyle = "#fff";
+                     ctx.textBaseline = "top";
+                     ctx.font = `bold ${Math.max(
+                        11,
+                        12 * fontScale,
+                     )}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+                     ctx.fillText(
+                        "CREARE",
+                        slotX + 8 * fontScale,
+                        slotY + 6 * fontScale,
+                     );
+
+                     drawPresenceBorder(
+                        ctx,
+                        slotX,
+                        slotY,
+                        slotW,
+                        slotH,
+                        draftColors,
+                        slotRadius,
+                     );
+                     ctx.restore();
+                  }
+               }
+
+               if (isHighlightedSlot) {
+                  ctx.save();
+                  ctx.lineWidth = 2;
+                  ctx.strokeStyle = activeBorderColor;
+                  drawRoundRect(
+                     ctx,
+                     slotX + 1,
+                     slotY + 1,
+                     slotW - 2,
+                     slotH - 2,
+                     Math.max(0, slotRadius - 1.5 * fontScale),
+                  );
+                  ctx.stroke();
+                  ctx.restore();
+               }
+            }
 
             // hitMap
             if (hitMap && slotStartDate && slotEndDate) {
@@ -1232,7 +1284,8 @@ export function drawAll({
          }
 
          // draw events
-         for (const ev of instEvents) {
+         if (paintDynamic) {
+            for (const ev of instEvents) {
             const displayStart = ev.start;
 
             let slotIdx;
@@ -1542,19 +1595,20 @@ export function drawAll({
                ctx.restore();
             }
 
-            if (hitMap) {
-               const reservationId = raw?.id ?? ev.id;
-               const hitItem = {
-                  x: cardX,
-                  y: cardY,
-                  w: cardW,
-                  h: cardH,
-                  kind: "reservation",
-                  reservationId,
-               };
-               if (includeEventPayloadInHitMap || reservationId == null)
-                  hitItem.ev = ev;
-               hitMap.push(hitItem);
+               if (hitMap) {
+                  const reservationId = raw?.id ?? ev.id;
+                  const hitItem = {
+                     x: cardX,
+                     y: cardY,
+                     w: cardW,
+                     h: cardH,
+                     kind: "reservation",
+                     reservationId,
+                  };
+                  if (includeEventPayloadInHitMap || reservationId == null)
+                     hitItem.ev = ev;
+                  hitMap.push(hitItem);
+               }
             }
          }
       }
