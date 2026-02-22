@@ -3432,6 +3432,7 @@ function DayviewCanvasTrack({
       const visibleColEndForDraw = forceFullSceneForFocus
          ? Math.max(0, colsPerRow - 1)
          : colRenderEndDep;
+      const shouldRenderScene = isDayNearViewport || forceFullSceneForFocus;
       const highlightEventIdForRender =
          selectedEventId || activeEventId || null;
 
@@ -3492,6 +3493,7 @@ function DayviewCanvasTrack({
       const sigKey = JSON.stringify({
          sceneKey,
          searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
+         renderScene: shouldRenderScene ? 1 : 0,
          forceFullSceneForFocus: forceFullSceneForFocus ? 1 : 0,
          visibleRows: `${visibleRowStartForDraw}:${visibleRowEndForDraw}`,
          visibleCols: `${visibleColStartForDraw}:${visibleColEndForDraw}`,
@@ -3524,7 +3526,6 @@ function DayviewCanvasTrack({
       width = Math.max(width, effectiveCols * colWidth);
       height = Math.max(height, headerHeight + 200);
       const canvasDpr = computeSafeCanvasDpr(width, height, desiredDpr);
-      const shouldRenderScene = isDayNearViewport || forceFullSceneForFocus;
 
       const workerOwnsCanvas =
          canvasTransferredRef.current ||
@@ -3581,6 +3582,12 @@ function DayviewCanvasTrack({
                   markWorkerFatal(error?.message || error);
                }
             }
+         } else if (
+            canvasTransferredRef.current ||
+            (ENABLE_CANVAS_WORKER && workerEnabledRef.current)
+         ) {
+            // Canvas-ul este deja transferat la OffscreenCanvas.
+            // Evităm getContext() pe HTMLCanvasElement până revine worker-ul.
          } else {
             const frontCtx = canvas.getContext("2d");
             if (frontCtx) {
