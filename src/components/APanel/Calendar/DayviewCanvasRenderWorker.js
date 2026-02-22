@@ -110,7 +110,7 @@ self.onmessage = (event) => {
       const drawId = toFiniteNumber(payload.drawId, 0);
       const width = Math.max(1, toFiniteNumber(payload.width, 1));
       const height = Math.max(1, toFiniteNumber(payload.height, 1));
-      const dpr = Math.max(0.5, toFiniteNumber(payload.dpr, 1));
+      const dpr = Math.max(0.01, toFiniteNumber(payload.dpr, 1));
       const drawPayload = payload.draw || {};
       const buildHitMap = drawPayload.buildHitMap !== false;
       const drawOverrides = { ...drawPayload };

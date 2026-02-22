@@ -127,6 +127,26 @@ const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
 const CLICK_COMMIT_DELAY_MS = 90;
 const DAY_OFFSCREEN_MARGIN_BASE_PX = 320;
+const CANVAS_MAX_EDGE_PX = IS_LOW_SPEC_DEVICE ? 8192 : 12288;
+const CANVAS_MAX_TOTAL_PIXELS = IS_LOW_SPEC_DEVICE ? 8_000_000 : 16_000_000;
+const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
+   ? 6_000_000
+   : 10_000_000;
+const CANVAS_MIN_DPR = 0.01;
+
+function computeSafeCanvasDpr(cssWidth, cssHeight, desiredDpr) {
+   const width = Math.max(1, Number(cssWidth) || 1);
+   const height = Math.max(1, Number(cssHeight) || 1);
+   const targetDpr = Math.max(CANVAS_MIN_DPR, Number(desiredDpr) || 1);
+
+   const maxByEdgeW = CANVAS_MAX_EDGE_PX / width;
+   const maxByEdgeH = CANVAS_MAX_EDGE_PX / height;
+   const maxByPixels = Math.sqrt(CANVAS_MAX_TOTAL_PIXELS / (width * height));
+
+   const safeDpr = Math.min(targetDpr, maxByEdgeW, maxByEdgeH, maxByPixels);
+   if (!Number.isFinite(safeDpr) || safeDpr <= 0) return CANVAS_MIN_DPR;
+   return Math.max(CANVAS_MIN_DPR, safeDpr);
+}
 
 function extractCssTokenFromColor(color) {
    const value = String(color || "").trim();
@@ -3384,7 +3404,7 @@ function DayviewCanvasTrack({
 
       const worldWidth = preGridWidth + baseWorldWidth;
 
-      const dpr =
+      const desiredDpr =
          typeof window !== "undefined"
             ? Math.min(window.devicePixelRatio || 1, DPR_LIMIT)
             : 1;
@@ -3503,13 +3523,22 @@ function DayviewCanvasTrack({
 
       width = Math.max(width, effectiveCols * colWidth);
       height = Math.max(height, headerHeight + 200);
+      const canvasDpr = computeSafeCanvasDpr(width, height, desiredDpr);
+      const shouldRenderScene = isDayNearViewport || forceFullSceneForFocus;
 
       const workerOwnsCanvas =
          canvasTransferredRef.current ||
          (ENABLE_CANVAS_WORKER && workerEnabledRef.current);
       if (!workerOwnsCanvas) {
-         canvas.width = Math.max(1, Math.floor(width * dpr));
-         canvas.height = Math.max(1, Math.floor(height * dpr));
+         if (shouldRenderScene) {
+            const nextPixelW = Math.max(1, Math.floor(width * canvasDpr));
+            const nextPixelH = Math.max(1, Math.floor(height * canvasDpr));
+            if (canvas.width !== nextPixelW) canvas.width = nextPixelW;
+            if (canvas.height !== nextPixelH) canvas.height = nextPixelH;
+         } else {
+            if (canvas.width !== 1) canvas.width = 1;
+            if (canvas.height !== 1) canvas.height = 1;
+         }
       }
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
@@ -3519,8 +3548,40 @@ function DayviewCanvasTrack({
       );
 
       const workerCanRender = workerSceneCacheEnabled;
-      if (!isDayNearViewport && !forceFullSceneForFocus) {
-         if (!workerCanRender) {
+      if (!shouldRenderScene) {
+         if (hitMapRef.current.length) {
+            hitMapRef.current = [];
+            notifyHitMapUpdated();
+         }
+
+         if (workerCanRender) {
+            const shrinkDrawPayload = {
+               width: 1,
+               height: 1,
+               dpr: 1,
+               draw: {
+                  buildHitMap: false,
+                  highlightEventId: null,
+                  highlightSlot: null,
+                  editingWait: null,
+                  activeSearchEventId: null,
+                  visibleRowStart: 0,
+                  visibleRowEnd: -1,
+                  visibleColStart: 0,
+                  visibleColEnd: -1,
+               },
+            };
+
+            if (workerDrawInFlightRef.current) {
+               workerPendingDrawPayloadRef.current = shrinkDrawPayload;
+            } else {
+               try {
+                  postWorkerDraw(shrinkDrawPayload);
+               } catch (error) {
+                  markWorkerFatal(error?.message || error);
+               }
+            }
+         } else {
             const frontCtx = canvas.getContext("2d");
             if (frontCtx) {
                frontCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -3581,7 +3642,7 @@ function DayviewCanvasTrack({
          const drawPayload = {
             width,
             height,
-            dpr,
+            dpr: canvasDpr,
             draw: {
                buildHitMap: shouldBuildHitMap,
                highlightEventId: highlightEventIdForRender,
@@ -3617,11 +3678,22 @@ function DayviewCanvasTrack({
       const pixelW = canvas.width;
       const pixelH = canvas.height;
 
-      const drawBuffer = ensureDrawBuffer(pixelW, pixelH);
-      const drawCtx = drawBuffer?.getContext?.("2d");
+      const canUseDoubleBuffer =
+         pixelW > 0 &&
+         pixelH > 0 &&
+         pixelW * pixelH <= CANVAS_DOUBLE_BUFFER_MAX_PIXELS;
+
+      if (!canUseDoubleBuffer) drawBufferRef.current = null;
+
+      const drawBuffer = canUseDoubleBuffer
+         ? ensureDrawBuffer(pixelW, pixelH)
+         : null;
+      const drawCtx = canUseDoubleBuffer ? drawBuffer?.getContext?.("2d") : frontCtx;
       if (!drawCtx) return;
 
-      drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawCtx.setTransform(1, 0, 0, 1, 0, 0);
+      drawCtx.clearRect(0, 0, pixelW, pixelH);
+      drawCtx.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
 
       const hitMap = shouldBuildHitMap ? [] : null;
 
@@ -3669,10 +3741,12 @@ function DayviewCanvasTrack({
          visibleColEnd: visibleColEndForDraw,
       });
 
-      // Double-buffer present: desenul se compune în buffer și apoi se blitează pe canvas.
-      frontCtx.setTransform(1, 0, 0, 1, 0, 0);
-      frontCtx.clearRect(0, 0, pixelW, pixelH);
-      frontCtx.drawImage(drawBuffer, 0, 0);
+      if (canUseDoubleBuffer && drawBuffer) {
+         // Double-buffer present: desenul se compune în buffer și apoi se blitează pe canvas.
+         frontCtx.setTransform(1, 0, 0, 1, 0, 0);
+         frontCtx.clearRect(0, 0, pixelW, pixelH);
+         frontCtx.drawImage(drawBuffer, 0, 0);
+      }
 
       if (shouldBuildHitMap) {
          hitMapRef.current = hitMap;
@@ -4549,6 +4623,9 @@ function DayviewCanvasTrack({
             if (isGapCol?.(inst)) return null; // (opțional defensiv)
             const row = Math.floor(idx / colsPerRow);
             const col = idx % colsPerRow;
+            if (!isDayNearViewport) return null;
+            if (row < rowRenderStartDep || row > rowRenderEndDep) return null;
+            if (col < colRenderStartDep || col > colRenderEndDep) return null;
 
             const left = preGridWidth2 + col * (colWidth + colGap);
             const top = rowTops[row] ?? 0;
