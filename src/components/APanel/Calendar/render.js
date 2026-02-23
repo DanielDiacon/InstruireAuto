@@ -35,6 +35,10 @@ let LAST_CANCELED_SOURCE_REF = null;
 let LAST_CANCELED_MAP = null;
 let LAST_SLOT_GEOMS_REF = null;
 let LAST_SLOT_INDEX_BY_LABEL = null;
+let LAST_SLOT_INDEX_BY_START_MS = null;
+let LAST_SLOT_START_POINTS = null;
+let LAST_EVENT_LAYOUT_EVENTS_REF = null;
+let LAST_EVENT_LAYOUT_SLOTS_REF = null;
 let STATIC_COLOR_OVERRIDES = null;
 let EVENTS_SIGNATURE_CACHE = new WeakMap();
 let SLOTS_SIGNATURE_CACHE = new WeakMap();
@@ -68,6 +72,10 @@ export function clearColorCache() {
    LAST_CANCELED_MAP = null;
    LAST_SLOT_GEOMS_REF = null;
    LAST_SLOT_INDEX_BY_LABEL = null;
+   LAST_SLOT_INDEX_BY_START_MS = null;
+   LAST_SLOT_START_POINTS = null;
+   LAST_EVENT_LAYOUT_EVENTS_REF = null;
+   LAST_EVENT_LAYOUT_SLOTS_REF = null;
    EVENTS_SIGNATURE_CACHE = new WeakMap();
    SLOTS_SIGNATURE_CACHE = new WeakMap();
    WAIT_NOTES_SIGNATURE_CACHE = new WeakMap();
@@ -443,6 +451,38 @@ export function wrapText(ctx, text, maxWidth, maxLines = Infinity) {
    return lines;
 }
 
+function findClosestSlotIndex(slotStartPoints, targetMs) {
+   const points = Array.isArray(slotStartPoints) ? slotStartPoints : [];
+   if (!points.length || !Number.isFinite(targetMs)) return 0;
+
+   let lo = 0;
+   let hi = points.length - 1;
+
+   while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const midMs = Number(points[mid]?.ms);
+      if (!Number.isFinite(midMs) || midMs >= targetMs) hi = mid;
+      else lo = mid + 1;
+   }
+
+   let bestIdx = Math.max(0, Math.min(points.length - 1, lo));
+
+   if (bestIdx > 0) {
+      const currentMs = Number(points[bestIdx]?.ms);
+      const prevMs = Number(points[bestIdx - 1]?.ms);
+      if (
+         Number.isFinite(currentMs) &&
+         Number.isFinite(prevMs) &&
+         Math.abs(targetMs - prevMs) <= Math.abs(currentMs - targetMs)
+      ) {
+         bestIdx -= 1;
+      }
+   }
+
+   const resolved = Number(points[bestIdx]?.idx);
+   return Number.isFinite(resolved) ? resolved : 0;
+}
+
 /* ================== Geometrie ================== */
 
 export const CONTENT_PAD_TOP = 0;
@@ -681,13 +721,112 @@ export function buildDayRenderModel({
    }
 
    let slotIndexByLabel = LAST_SLOT_INDEX_BY_LABEL;
-   if (LAST_SLOT_GEOMS_REF !== slotGeomsSafe || !slotIndexByLabel) {
+   let slotIndexByStartMs = LAST_SLOT_INDEX_BY_START_MS;
+   let slotStartPoints = LAST_SLOT_START_POINTS;
+   if (
+      LAST_SLOT_GEOMS_REF !== slotGeomsSafe ||
+      !slotIndexByLabel ||
+      !slotIndexByStartMs ||
+      !slotStartPoints
+   ) {
       slotIndexByLabel = new Map();
+      slotIndexByStartMs = new Map();
+      slotStartPoints = [];
       slotGeomsSafe.forEach((sg, idx) => {
          if (sg.label) slotIndexByLabel.set(sg.label, idx);
+         const startMs = Number(sg?.startMs);
+         if (Number.isFinite(startMs)) {
+            if (!slotIndexByStartMs.has(startMs)) slotIndexByStartMs.set(startMs, idx);
+            slotStartPoints.push({ ms: startMs, idx });
+         }
       });
+      slotStartPoints.sort((a, b) => a.ms - b.ms);
       LAST_SLOT_GEOMS_REF = slotGeomsSafe;
       LAST_SLOT_INDEX_BY_LABEL = slotIndexByLabel;
+      LAST_SLOT_INDEX_BY_START_MS = slotIndexByStartMs;
+      LAST_SLOT_START_POINTS = slotStartPoints;
+   }
+
+   if (
+      LAST_EVENT_LAYOUT_EVENTS_REF !== eventsSafe ||
+      LAST_EVENT_LAYOUT_SLOTS_REF !== slotGeomsSafe
+   ) {
+      const maxSlotIdx = Math.max(0, slotGeomsSafe.length - 1);
+      eventsWithColor.forEach((ev) => {
+         const raw = ev?.raw || {};
+         const displayStart =
+            ev.start instanceof Date ? ev.start : new Date(ev.start || 0);
+         const displayStartMs = displayStart.getTime();
+         const hasValidStartMs = Number.isFinite(displayStartMs);
+         const timeText = hasValidStartMs ? formatHHMM(displayStart) : "";
+
+         let slotIdx;
+         if (typeof ev._padSlotIndex === "number") {
+            slotIdx = ev._padSlotIndex;
+         } else {
+            if (timeText) slotIdx = slotIndexByLabel.get(timeText);
+            if (slotIdx == null && hasValidStartMs) {
+               slotIdx = slotIndexByStartMs.get(displayStartMs);
+            }
+            if (slotIdx == null && hasValidStartMs) {
+               slotIdx = findClosestSlotIndex(slotStartPoints, displayStartMs);
+            }
+            if (!Number.isFinite(slotIdx)) slotIdx = 0;
+            slotIdx = Math.max(0, Math.min(maxSlotIdx, Number(slotIdx)));
+         }
+
+         const isFavorite = raw.isFavorite === true;
+         const isImportant = raw.isImportant === true;
+         const statusMarks = [];
+         if (isFavorite) statusMarks.push("⁂");
+         if (isImportant) statusMarks.push("‼");
+         const statusEmoji = statusMarks.join(" - ");
+
+         const fallbackName =
+            raw?.clientName ||
+            raw?.customerName ||
+            raw?.name ||
+            ev.title ||
+            "Programare";
+         const person = (
+            `${ev.studentFirst || ""} ${ev.studentLast || ""}`.trim() ||
+            fallbackName
+         ).trim();
+
+         const noteFromEvent = (ev.eventPrivateMessage || "").toString().trim();
+         const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
+            .toString()
+            .trim();
+         const notesJoined = [noteFromEvent, noteFromProfile]
+            .filter(Boolean)
+            .join("; ");
+         const notesCompact = notesJoined
+            ? notesJoined.replace(/\s+/g, " ").trim()
+            : "";
+
+         const metaLineBase = [timeText, ev.gearboxLabel, statusEmoji]
+            .filter(Boolean)
+            .join(" · ");
+         const eventIdStr = String(ev.id ?? "");
+         const reservationId = raw?.id ?? ev?.raw?.id ?? ev?.id ?? null;
+         const reservationIdStr =
+            reservationId != null ? String(reservationId) : "";
+
+         ev._displayStart = hasValidStartMs ? displayStart : null;
+         ev._timeText = timeText;
+         ev._slotIndex = Number(slotIdx);
+         ev._statusEmoji = statusEmoji;
+         ev._metaLineBase = metaLineBase;
+         ev._studentPhone = getStudentPhoneFromEv(ev) || "";
+         ev._person = person || "";
+         ev._notesCompact = notesCompact;
+         ev._eventIdStr = eventIdStr;
+         ev._reservationId = reservationId;
+         ev._reservationIdStr = reservationIdStr;
+      });
+
+      LAST_EVENT_LAYOUT_EVENTS_REF = eventsSafe;
+      LAST_EVENT_LAYOUT_SLOTS_REF = slotGeomsSafe;
    }
 
    return {
@@ -738,6 +877,7 @@ export function drawAll({
    createDraftBySlotColors = null,
    activeSearchEventId = null,
    denseMode = false,
+   ultraFastMode = false,
    dayRenderModel = null,
    visibleRowStart = 0,
    visibleRowEnd = null,
@@ -784,11 +924,6 @@ export function drawAll({
       resolvedModel?.canceledMap instanceof Map
          ? resolvedModel.canceledMap
          : new Map();
-   const slotIndexByLabel =
-      resolvedModel?.slotIndexByLabel instanceof Map
-         ? resolvedModel.slotIndexByLabel
-         : new Map();
-
    const baseBg = resolveColor("--black-p");
    const emptySlotBgPads = resolveColor(NO_COLOR_TOKEN);
    const emptySlotBgDefault = resolveColor(DEFAULT_EVENT_COLOR_TOKEN);
@@ -803,6 +938,7 @@ export function drawAll({
 
    const z = zoom || 1;
    const isDense = !!denseMode;
+   const isUltraFast = !!ultraFastMode;
    const fontScale = Math.max(0.6, Math.min(1.6, z));
    const fontMetaPx = 11 * fontScale;
    const fontNotesPx = 10 * fontScale;
@@ -897,6 +1033,25 @@ export function drawAll({
    const drawColEnd = Number.isFinite(visibleColEnd)
       ? Math.min(colsPerRow - 1, Number(visibleColEnd))
       : colsPerRow - 1;
+   const hasDraftSlotOverlay =
+      !!createDraftBySlotColors &&
+      (createDraftBySlotColors instanceof Map
+         ? createDraftBySlotColors.size > 0
+         : Array.isArray(createDraftBySlotColors)
+            ? createDraftBySlotColors.length > 0
+            : typeof createDraftBySlotColors === "object"
+               ? Object.keys(createDraftBySlotColors).length > 0
+               : false);
+   const hasHighlightedSlot = !!(
+      highlightSlot &&
+      highlightSlot.instructorId != null &&
+      highlightSlot.slotStart
+   );
+   const needsDynamicSlotPass = !!(
+      paintDynamic && (hasDraftSlotOverlay || hasHighlightedSlot)
+   );
+   const needsSlotPass = !!(paintStatic || !!hitMap || needsDynamicSlotPass);
+   const shouldCheckRealSlotOccupancy = !!(paintDynamic || !!hitMap);
 
    let currentRowTop = 0;
 
@@ -1028,8 +1183,9 @@ export function drawAll({
          let waitPadIndex = null;
          if (isWaitPad) waitPadIndex = waitPadCounter++;
 
-         // draw empty slots
-         for (let si = 0; si < maxSlotsForThisColumn; si++) {
+         if (needsSlotPass) {
+            // draw empty slots
+            for (let si = 0; si < maxSlotsForThisColumn; si++) {
             const sg = slotGeoms[si];
             if (!sg) break;
 
@@ -1077,13 +1233,16 @@ export function drawAll({
                }
             }
 
-            // pentru instructori reali: nu desenăm slot dacă e ocupat
-            if (
+            // Pentru layerul static putem păstra sloturile sub evenimente;
+            // în layerul dinamic/hitmap continuăm să le ascundem când sunt ocupate.
+            const isOccupiedRealSlot = !!(
+               shouldCheckRealSlotOccupancy &&
                !isPadCol &&
                slotStartMs &&
                slotEndMs &&
                slotOverlapsEvents(slotStartMs, slotEndMs, overlapEventsForInst)
-            ) {
+            );
+            if (isOccupiedRealSlot) {
                continue;
             }
 
@@ -1308,34 +1467,15 @@ export function drawAll({
                   });
                }
             }
+            }
          }
 
          // draw events
          if (paintDynamic) {
             for (const ev of instEvents) {
-            const displayStart = ev.start;
-
-            let slotIdx;
-            if (typeof ev._padSlotIndex === "number") {
-               slotIdx = ev._padSlotIndex;
-            } else {
-               const labelForIndex = formatHHMM(ev.start);
-               slotIdx = slotIndexByLabel.get(labelForIndex);
-
-               if (slotIdx == null) {
-                  let bestIdx = 0;
-                  let bestDiff = Infinity;
-                  const evMs = ev.start.getTime();
-                  slotGeoms.forEach((sg, idx2) => {
-                     const diff = Math.abs(evMs - sg.startMs);
-                     if (diff < bestDiff) {
-                        bestDiff = diff;
-                        bestIdx = idx2;
-                     }
-                  });
-                  slotIdx = bestIdx;
-               }
-            }
+            const slotIdx = Number.isFinite(Number(ev._slotIndex))
+               ? Number(ev._slotIndex)
+               : 0;
 
             const cardX = colX + 4;
             const cardY = slotAreaTop + slotIdx * (slotHeight + slotGap);
@@ -1354,12 +1494,16 @@ export function drawAll({
             const color =
                ev._resolvedColor || resolveColor(normalizeEventColor(ev.color));
             const raw = ev.raw || {};
-            const studentPhone = getStudentPhoneFromEv(ev);
+            const studentPhone = ev._studentPhone || getStudentPhoneFromEv(ev);
+            const reservationId =
+               ev._reservationId ?? raw?.id ?? ev?.raw?.id ?? ev?.id ?? null;
+            const reservationIdStr =
+               ev._reservationIdStr || (reservationId != null ? String(reservationId) : "");
 
             const isHighlighted =
                highlightEventIdForRender &&
                String(ev.id) === String(highlightEventIdForRender);
-            const eventIdStr = String(ev.id ?? "");
+            const eventIdStr = ev._eventIdStr || String(ev.id ?? "");
             const isActiveSearchMatch =
                !!eventIdStr &&
                activeSearchEventIdStr != null &&
@@ -1386,114 +1530,80 @@ export function drawAll({
             ctx.textBaseline = "top";
             ctx.font = `${fontMetaPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
 
-            let timeText = formatHHMM(displayStart);
+            const displayStart = ev._displayStart || ev.start;
+            const timeText = ev._timeText || formatHHMM(displayStart);
 
-            const isFavorite = raw.isFavorite === true;
-            const isImportant = raw.isImportant === true;
-            const statusMarks = [];
-            if (isFavorite) statusMarks.push("⁂");
-            if (isImportant) statusMarks.push("‼");
-            const statusEmoji = statusMarks.join(" - ");
-
-            // ✅ userId din rezervare
-            const userIdForBadge = raw?.userId ?? null;
-
-            // ✅ badge "AB"
-            let desiredBadge = "";
-            if (userIdForBadge != null && desiredInstructorBadgeByUserId) {
-               const k = String(userIdForBadge);
-
-               if (desiredInstructorBadgeByUserId instanceof Map) {
-                  desiredBadge = desiredInstructorBadgeByUserId.get(k) || "";
-               } else if (typeof desiredInstructorBadgeByUserId === "object") {
-                  desiredBadge = desiredInstructorBadgeByUserId[k] || "";
-               }
-            }
-
-            const metaParts = [];
-            if (timeText) metaParts.push(timeText);
-            if (ev.gearboxLabel) metaParts.push(ev.gearboxLabel);
-            if (statusEmoji) metaParts.push(statusEmoji);
-
-            // ✅ aici apare inițiala lângă celelalte meta
-            if (desiredBadge) metaParts.push(desiredBadge);
-
-            // ✅ IMPORTANT: filter(Boolean) (NU metaParts.push(Boolean)!)
-            const metaLine = metaParts.filter(Boolean).join(" · ");
-
-            const fallbackName =
-               raw?.clientName ||
-               raw?.customerName ||
-               raw?.name ||
-               ev.title ||
-               "Programare";
-
-            const person = (
-               `${ev.studentFirst || ""} ${ev.studentLast || ""}`.trim() ||
-               fallbackName
-            ).trim();
-
-            if (isDense) {
-               const compact = [metaLine, person, studentPhone]
-                  .filter(Boolean)
-                  .join(" · ");
-               if (compact) {
-                  const compactLines = wrapText(ctx, compact, maxTextWidth, 2);
-                  for (const line of compactLines) {
-                     ctx.fillText(line, textX, textY);
-                     textY += lineH;
-                  }
-               }
+            if (isUltraFast) {
+               const fastLine = [timeText, ev.gearboxLabel].filter(Boolean).join(" · ");
+               if (fastLine) ctx.fillText(fastLine, textX, textY);
             } else {
-               if (metaLine) {
-                  const metaLines = wrapText(ctx, metaLine, maxTextWidth, 1);
-                  for (const line of metaLines) {
-                     ctx.fillText(line, textX, textY);
-                     textY += lineH;
+               const statusEmoji = ev._statusEmoji || "";
+
+               // ✅ userId din rezervare
+               const userIdForBadge = raw?.userId ?? null;
+
+               // ✅ badge "AB"
+               let desiredBadge = "";
+               if (userIdForBadge != null && desiredInstructorBadgeByUserId) {
+                  const k = String(userIdForBadge);
+
+                  if (desiredInstructorBadgeByUserId instanceof Map) {
+                     desiredBadge = desiredInstructorBadgeByUserId.get(k) || "";
+                  } else if (typeof desiredInstructorBadgeByUserId === "object") {
+                     desiredBadge = desiredInstructorBadgeByUserId[k] || "";
                   }
                }
 
-               if (person) {
-                  const nameLines = wrapText(ctx, person, maxTextWidth, 2);
-                  for (const line of nameLines) {
-                     ctx.fillText(line, textX, textY);
-                     textY += lineH;
+               const metaLineBase =
+                  ev._metaLineBase ||
+                  [timeText, ev.gearboxLabel, statusEmoji].filter(Boolean).join(" · ");
+               const metaLine = desiredBadge
+                  ? metaLineBase
+                     ? `${metaLineBase} · ${desiredBadge}`
+                     : desiredBadge
+                  : metaLineBase;
+               const person = ev._person || "";
+
+               if (isDense) {
+                  const compact = [metaLine, person, studentPhone]
+                     .filter(Boolean)
+                     .join(" · ");
+                  if (compact) {
+                     const compactLines = wrapText(ctx, compact, maxTextWidth, 2);
+                     for (const line of compactLines) {
+                        ctx.fillText(line, textX, textY);
+                        textY += lineH;
+                     }
                   }
-               }
+               } else {
+                  const bothNotes = ev._notesCompact || "";
+                  const textBlock = [metaLine, person, studentPhone, bothNotes]
+                     .filter(Boolean)
+                     .join("\n");
 
-               if (studentPhone) {
-                  const phoneLines = wrapText(ctx, studentPhone, maxTextWidth, 1);
-                  for (const line of phoneLines) {
-                     ctx.fillText(line, textX, textY);
-                     textY += lineH;
-                  }
-               }
+                  if (textBlock) {
+                     const blockRows = textBlock.split("\n").filter(Boolean);
+                     for (const row of blockRows) {
+                        const isMetaRow = row === metaLine;
+                        const isPhoneRow = row === studentPhone;
+                        const isNotesRow = row === bothNotes;
+                        const rowMaxLines = isMetaRow || isPhoneRow ? 1 : 2;
 
-               const noteFromEvent = (ev.eventPrivateMessage || "")
-                  .toString()
-                  .trim();
-               const noteFromProfile = (getStudentPrivateMessageFromEv(ev) || "")
-                  .toString()
-                  .trim();
+                        ctx.font = `${
+                           isNotesRow ? fontNotesPx : fontMetaPx
+                        }px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
 
-               const bothNotes = [
-                  noteFromEvent && noteFromEvent,
-                  noteFromProfile && noteFromProfile,
-               ]
-                  .filter(Boolean)
-                  .join("; ");
-
-               if (bothNotes) {
-                  ctx.font = `${fontNotesPx}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-                  const notesLines = wrapText(
-                     ctx,
-                     bothNotes.replace(/\s+/g, " ").trim(),
-                     maxTextWidth,
-                     2,
-                  );
-                  for (const line of notesLines) {
-                     ctx.fillText(line, textX, textY);
-                     textY += lineH;
+                        const wrappedRows = wrapText(
+                           ctx,
+                           row,
+                           maxTextWidth,
+                           rowMaxLines,
+                        );
+                        for (const line of wrappedRows) {
+                           ctx.fillText(line, textX, textY);
+                           textY += lineH;
+                        }
+                     }
                   }
                }
             }
@@ -1501,10 +1611,9 @@ export function drawAll({
             ctx.restore();
 
             /* ✅ presence border (outer) */
-            const ridPresence = raw?.id ?? ev?.raw?.id ?? ev?.id ?? null;
             const presenceColors = getPresenceColorsForId(
                presenceByReservationColors,
-               ridPresence,
+               reservationId,
             );
 
             if (presenceColors && presenceColors.length) {
@@ -1549,7 +1658,7 @@ export function drawAll({
 
             ctx.restore();
             // ✅ DEBUG: overlay negru dacă rezervarea e în editare (presence)
-            const rid = String(raw?.id ?? ev.id ?? "");
+            const rid = reservationIdStr;
 
             const isEditing =
                !!rid &&
@@ -1591,20 +1700,19 @@ export function drawAll({
                ctx.restore();
             }
 
-               if (hitMap) {
-                  const reservationId = raw?.id ?? ev.id;
-                  const hitItem = {
-                     x: cardX,
-                     y: cardY,
-                     w: cardW,
-                     h: cardH,
-                     kind: "reservation",
-                     reservationId,
-                  };
-                  if (includeEventPayloadInHitMap || reservationId == null)
-                     hitItem.ev = ev;
-                  hitMap.push(hitItem);
-               }
+            if (hitMap) {
+               const hitItem = {
+                  x: cardX,
+                  y: cardY,
+                  w: cardW,
+                  h: cardH,
+                  kind: "reservation",
+                  reservationId,
+               };
+               if (includeEventPayloadInHitMap || reservationId == null)
+                  hitItem.ev = ev;
+               hitMap.push(hitItem);
+            }
             }
          }
       }

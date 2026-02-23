@@ -134,6 +134,10 @@ const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
    ? 6_000_000
    : 10_000_000;
 const CANVAS_MIN_DPR = 0.01;
+const STATIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 40 : 56;
+const DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 104 : 148;
+const HITMAP_INTERACTION_KEEP_MS = 1600;
+const HITMAP_STALE_MAX_AGE_MS = IS_LOW_SPEC_DEVICE ? 520 : 360;
 
 function computeSafeCanvasDpr(cssWidth, cssHeight, desiredDpr) {
    const width = Math.max(1, Number(cssWidth) || 1);
@@ -147,6 +151,21 @@ function computeSafeCanvasDpr(cssWidth, cssHeight, desiredDpr) {
    const safeDpr = Math.min(targetDpr, maxByEdgeW, maxByEdgeH, maxByPixels);
    if (!Number.isFinite(safeDpr) || safeDpr <= 0) return CANVAS_MIN_DPR;
    return Math.max(CANVAS_MIN_DPR, safeDpr);
+}
+
+function snapViewportOrigin(origin, maxOrigin, step) {
+   const clampedOrigin = Math.max(
+      0,
+      Math.min(Math.max(0, Number(maxOrigin) || 0), Math.round(origin || 0)),
+   );
+   const snapStep = Math.max(1, Math.round(step || 1));
+   if (snapStep <= 1) return clampedOrigin;
+
+   const snapped = Math.floor(clampedOrigin / snapStep) * snapStep;
+   return Math.max(
+      0,
+      Math.min(Math.max(0, Number(maxOrigin) || 0), Math.round(snapped || 0)),
+   );
 }
 
 function extractCssTokenFromColor(color) {
@@ -1160,7 +1179,9 @@ function DayviewCanvasTrack({
    const canvasRef = useRef(null);
    const drawBufferRef = useRef(null);
    const staticLayerBufferRef = useRef(null);
+   const dynamicLayerBufferRef = useRef(null);
    const staticLayerSigRef = useRef("");
+   const dynamicLayerSigRef = useRef("");
    const renderWindowRef = useRef({ x: 0, y: 0, w: 1, h: 1 });
    const hitMapRef = useRef([]);
    const lastDrawSigRef = useRef(null);
@@ -1189,6 +1210,9 @@ function DayviewCanvasTrack({
    const pendingWaitNotesRef = useRef(null);
    const waitNotesApplyRafRef = useRef(0);
    const isPanInteractingRef = useRef(!!isPanInteracting);
+   const hitMapInteractiveUntilRef = useRef(0);
+   const hitMapNeedsRebuildRef = useRef(true);
+   const hitMapBuiltAtRef = useRef(0);
 
    const preGridCols =
       !preGrid || preGrid.enabled === false
@@ -1245,6 +1269,26 @@ function DayviewCanvasTrack({
             return null;
          }
          staticLayerBufferRef.current = buffer;
+      }
+
+      if (buffer.width !== pixelW) buffer.width = pixelW;
+      if (buffer.height !== pixelH) buffer.height = pixelH;
+
+      return buffer;
+   }, []);
+
+   const ensureDynamicLayerBuffer = useCallback((pixelW, pixelH) => {
+      let buffer = dynamicLayerBufferRef.current;
+
+      if (!buffer) {
+         if (typeof OffscreenCanvas !== "undefined") {
+            buffer = new OffscreenCanvas(pixelW, pixelH);
+         } else if (typeof document !== "undefined") {
+            buffer = document.createElement("canvas");
+         } else {
+            return null;
+         }
+         dynamicLayerBufferRef.current = buffer;
       }
 
       if (buffer.width !== pixelW) buffer.width = pixelW;
@@ -1327,6 +1371,30 @@ function DayviewCanvasTrack({
          setRefreshTick((t) => t + 1);
       });
    }, []);
+
+   const requestInteractiveHitMap = useCallback(
+      ({ keepMs = HITMAP_INTERACTION_KEEP_MS, forceRebuild = false } = {}) => {
+         const now = Date.now();
+         const wasInteractive = hitMapInteractiveUntilRef.current > now;
+         const keepFor = Math.max(120, Number(keepMs) || HITMAP_INTERACTION_KEEP_MS);
+         const nextUntil = now + keepFor;
+         if (nextUntil > hitMapInteractiveUntilRef.current) {
+            hitMapInteractiveUntilRef.current = nextUntil;
+         }
+         if (forceRebuild) hitMapNeedsRebuildRef.current = true;
+
+         const age = now - hitMapBuiltAtRef.current;
+         if (
+            forceRebuild ||
+            !wasInteractive ||
+            hitMapNeedsRebuildRef.current ||
+            age > HITMAP_STALE_MAX_AGE_MS
+         ) {
+            requestRedrawFromBus();
+         }
+      },
+      [requestRedrawFromBus],
+   );
 
    useEffect(() => {
       return () => {
@@ -2418,6 +2486,8 @@ function DayviewCanvasTrack({
                const hitMapIncluded = data.hitMapIncluded !== false;
                if (hitMapIncluded) {
                   hitMapRef.current = Array.isArray(data.hitMap) ? data.hitMap : [];
+                  hitMapNeedsRebuildRef.current = false;
+                  hitMapBuiltAtRef.current = Date.now();
                   notifyHitMapUpdated();
                }
             }
@@ -3354,7 +3424,8 @@ function DayviewCanvasTrack({
       return Object.keys(output).length ? output : null;
    }, [eventsForCanvas, themeTick]);
 
-   // Când densitatea e foarte mare, folosim desen compact ca să păstrăm fluiditatea.
+   // Când densitatea e mare folosim desen compact, dar NU îl forțăm în pan;
+   // păstrăm textul stabil și evităm "dispariția" în timpul drag/pan.
    const dynamicDenseRenderMode = useMemo(() => {
       const eventCount = Array.isArray(eventsForCanvas) ? eventsForCanvas.length : 0;
       const instructorCount = Array.isArray(effectiveInstructors)
@@ -3362,14 +3433,8 @@ function DayviewCanvasTrack({
          : 0;
       return eventCount >= 260 || instructorCount >= 72;
    }, [eventsForCanvas, effectiveInstructors]);
-   const stableDenseRenderModeRef = useRef(dynamicDenseRenderMode);
-   useEffect(() => {
-      if (isPanInteracting) return;
-      stableDenseRenderModeRef.current = dynamicDenseRenderMode;
-   }, [dynamicDenseRenderMode, isPanInteracting]);
-   const denseRenderMode = isPanInteracting
-      ? stableDenseRenderModeRef.current
-      : dynamicDenseRenderMode;
+   const denseRenderMode = dynamicDenseRenderMode;
+   const ultraFastRenderMode = false;
 
    /* ================== blocked normalize + canceled slots per inst ================== */
 
@@ -3471,6 +3536,20 @@ function DayviewCanvasTrack({
       [eventsForCanvas, refreshTick],
    );
 
+   const workerEventState = useMemo(
+      () => {
+         // menținem și invalidarea pe eventsSig pentru cazurile cu mutații in-place
+         void eventsSig;
+         return buildWorkerEventState(eventsForCanvas);
+      },
+      [eventsForCanvas, eventsSig],
+   );
+
+   const workerEventEntries = useMemo(
+      () => serializeWorkerEventState(workerEventState),
+      [workerEventState],
+   );
+
    const slotsSig = useMemo(() => buildSlotsSignature(slotGeoms), [slotGeoms]);
 
    const blockedSig = useMemo(
@@ -3501,6 +3580,23 @@ function DayviewCanvasTrack({
          themeTick,
       ],
    );
+
+   useEffect(() => {
+      hitMapNeedsRebuildRef.current = true;
+   }, [
+      eventsSig,
+      slotsSig,
+      blockedSig,
+      waitSig,
+      activeSectorFilter,
+      instructorsLayoutSig,
+      rowRenderStartDep,
+      rowRenderEndDep,
+      colRenderStartDep,
+      colRenderEndDep,
+      dayStart,
+      dayEnd,
+   ]);
 
    /* ================== draw effect ================== */
 
@@ -3541,7 +3637,12 @@ function DayviewCanvasTrack({
             : 1;
 
       const eventsSafe = Array.isArray(eventsForCanvas) ? eventsForCanvas : [];
-      const shouldBuildHitMap = !isPanInteracting;
+      const nowTs = Date.now();
+      const hasHitMapDemand =
+         activeEventId != null || hitMapInteractiveUntilRef.current > nowTs;
+      const shouldBuildHitMap = !!(
+         !isPanInteracting && hasHitMapDemand
+      );
       const dayHasActiveEvent =
          activeEventId != null &&
          eventsByReservationId.has(String(activeEventId));
@@ -3617,7 +3718,6 @@ function DayviewCanvasTrack({
       };
 
       const sceneBaseKey = JSON.stringify(sceneBaseSig);
-      const sceneRuntimeKey = `${sceneBaseKey}|${eventsSig}`;
 
       let width = hoursColWidth + worldWidth;
 
@@ -3639,8 +3739,12 @@ function DayviewCanvasTrack({
       const localViewportTop = Math.max(0, Number(viewportScrollTop) || 0);
       const viewW = Math.max(0, Number(viewportWidth) || 0);
       const viewH = Math.max(0, Number(viewportHeight) || 0);
-      const overscanX = Math.max(80, Math.round(colWidth * 0.75));
-      const overscanY = Math.max(120, Math.round(slotHeight * 1.5));
+      const overscanX = isPanInteracting
+         ? Math.max(56, Math.round(colWidth * 0.45))
+         : Math.max(80, Math.round(colWidth * 0.75));
+      const overscanY = isPanInteracting
+         ? Math.max(84, Math.round(slotHeight * 1.0))
+         : Math.max(120, Math.round(slotHeight * 1.5));
       const canWindow = shouldRenderScene && viewW > 0 && viewH > 0;
       const renderSurfaceWidth = canWindow
          ? Math.max(1, Math.min(width, Math.round(viewW + overscanX * 2)))
@@ -3662,6 +3766,130 @@ function DayviewCanvasTrack({
               Math.min(maxOriginY, Math.round(localViewportTop - overscanY)),
            )
          : 0;
+      const staticSnapStepX = canWindow
+         ? Math.max(
+              8,
+              Math.min(
+                 STATIC_LAYER_ORIGIN_SNAP_MAX_PX,
+                 Math.round(Math.max(16, overscanX * 0.5)),
+              ),
+           )
+         : 1;
+      const staticSnapStepY = canWindow
+         ? Math.max(
+              8,
+              Math.min(
+                 STATIC_LAYER_ORIGIN_SNAP_MAX_PX,
+                 Math.round(Math.max(16, overscanY * 0.5)),
+              ),
+           )
+         : 1;
+      const staticOriginX = canWindow
+         ? snapViewportOrigin(renderOriginX, maxOriginX, staticSnapStepX)
+         : renderOriginX;
+      const staticOriginY = canWindow
+         ? snapViewportOrigin(renderOriginY, maxOriginY, staticSnapStepY)
+         : renderOriginY;
+      const staticSourceOffsetX = Math.max(0, renderOriginX - staticOriginX);
+      const staticSourceOffsetY = Math.max(0, renderOriginY - staticOriginY);
+      const staticSurfaceWidth = canWindow
+         ? Math.max(
+              renderSurfaceWidth,
+              Math.min(
+                 Math.max(1, Math.round(width - staticOriginX)),
+                 Math.round(renderSurfaceWidth + staticSnapStepX),
+              ),
+           )
+         : renderSurfaceWidth;
+      const staticSurfaceHeight = canWindow
+         ? Math.max(
+              renderSurfaceHeight,
+              Math.min(
+                 Math.max(1, Math.round(height - staticOriginY)),
+                 Math.round(renderSurfaceHeight + staticSnapStepY),
+              ),
+           )
+         : renderSurfaceHeight;
+      const dynamicSnapStepX =
+         canWindow && isPanInteracting
+            ? Math.max(
+                 12,
+                 Math.min(
+                    DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX,
+                    Math.round(Math.max(20, overscanX * 0.95)),
+                 ),
+              )
+            : 1;
+      const dynamicSnapStepY =
+         canWindow && isPanInteracting
+            ? Math.max(
+                 16,
+                 Math.min(
+                    DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX,
+                    Math.round(Math.max(26, overscanY * 0.95)),
+                 ),
+              )
+            : 1;
+      const dynamicOriginX = canWindow
+         ? snapViewportOrigin(renderOriginX, maxOriginX, dynamicSnapStepX)
+         : renderOriginX;
+      const dynamicOriginY = canWindow
+         ? snapViewportOrigin(renderOriginY, maxOriginY, dynamicSnapStepY)
+         : renderOriginY;
+      const dynamicSourceOffsetX = Math.max(0, renderOriginX - dynamicOriginX);
+      const dynamicSourceOffsetY = Math.max(0, renderOriginY - dynamicOriginY);
+      const dynamicSurfaceWidth = canWindow
+         ? Math.max(
+              renderSurfaceWidth,
+              Math.min(
+                 Math.max(1, Math.round(width - dynamicOriginX)),
+                 Math.round(renderSurfaceWidth + dynamicSnapStepX),
+              ),
+           )
+         : renderSurfaceWidth;
+      const dynamicSurfaceHeight = canWindow
+         ? Math.max(
+              renderSurfaceHeight,
+              Math.min(
+                 Math.max(1, Math.round(height - dynamicOriginY)),
+                 Math.round(renderSurfaceHeight + dynamicSnapStepY),
+              ),
+           )
+         : renderSurfaceHeight;
+      const maxSceneRowIdx = Math.max(0, rowsCount - 1);
+      const maxSceneColIdx = Math.max(0, colsPerRow - 1);
+      const staticVisibleRowStart = Math.max(
+         0,
+         Math.min(maxSceneRowIdx, Number(visibleRowStartForDraw || 0) - 1),
+      );
+      const staticVisibleRowEnd = Math.max(
+         staticVisibleRowStart,
+         Math.min(maxSceneRowIdx, Number(visibleRowEndForDraw || 0) + 1),
+      );
+      const staticVisibleColStart = Math.max(
+         0,
+         Math.min(maxSceneColIdx, Number(visibleColStartForDraw || 0) - 1),
+      );
+      const staticVisibleColEnd = Math.max(
+         staticVisibleColStart,
+         Math.min(maxSceneColIdx, Number(visibleColEndForDraw || 0) + 1),
+      );
+      const dynamicVisibleRowStart = Math.max(
+         0,
+         Math.min(maxSceneRowIdx, Number(visibleRowStartForDraw || 0) - 1),
+      );
+      const dynamicVisibleRowEnd = Math.max(
+         dynamicVisibleRowStart,
+         Math.min(maxSceneRowIdx, Number(visibleRowEndForDraw || 0) + 1),
+      );
+      const dynamicVisibleColStart = Math.max(
+         0,
+         Math.min(maxSceneColIdx, Number(visibleColStartForDraw || 0) - 1),
+      );
+      const dynamicVisibleColEnd = Math.max(
+         dynamicVisibleColStart,
+         Math.min(maxSceneColIdx, Number(visibleColEndForDraw || 0) + 1),
+      );
       renderWindowRef.current = {
          x: renderOriginX,
          y: renderOriginY,
@@ -3669,14 +3897,40 @@ function DayviewCanvasTrack({
          h: renderSurfaceHeight,
       };
       const staticLayerKey = JSON.stringify({
-         sceneRuntimeKey,
+         sceneBaseKey,
          width: renderSurfaceWidth,
          height: renderSurfaceHeight,
+         staticW: staticSurfaceWidth,
+         staticH: staticSurfaceHeight,
          dpr: Number(canvasDpr.toFixed(3)),
-         originX: renderOriginX,
-         originY: renderOriginY,
-         visibleRows: `${visibleRowStartForDraw}:${visibleRowEndForDraw}`,
-         visibleCols: `${visibleColStartForDraw}:${visibleColEndForDraw}`,
+         originX: staticOriginX,
+         originY: staticOriginY,
+         staticRows: `${staticVisibleRowStart}:${staticVisibleRowEnd}`,
+         staticCols: `${staticVisibleColStart}:${staticVisibleColEnd}`,
+      });
+      const dynamicLayerKey = JSON.stringify({
+         sceneBaseKey,
+         eventsSig,
+         searchActiveId: activeSearchEventId ? String(activeSearchEventId) : "",
+         highlightId: highlightEventIdForRender,
+         highlightSlotKey: highlightSlot
+            ? `${highlightSlot.instructorId}|${highlightSlot.slotStart}`
+            : "",
+         waitEditSlot:
+            editingWaitForRender && editingWaitForRender.slotIndex != null
+               ? String(editingWaitForRender.slotIndex)
+               : "",
+         denseMode: denseRenderMode ? 1 : 0,
+         ultraFastMode: ultraFastRenderMode ? 1 : 0,
+         width: renderSurfaceWidth,
+         height: renderSurfaceHeight,
+         dynamicW: dynamicSurfaceWidth,
+         dynamicH: dynamicSurfaceHeight,
+         dpr: Number(canvasDpr.toFixed(3)),
+         originX: dynamicOriginX,
+         originY: dynamicOriginY,
+         dynamicRows: `${dynamicVisibleRowStart}:${dynamicVisibleRowEnd}`,
+         dynamicCols: `${dynamicVisibleColStart}:${dynamicVisibleColEnd}`,
       });
       const sigKey = JSON.stringify({
          sceneBaseKey,
@@ -3741,7 +3995,11 @@ function DayviewCanvasTrack({
       if (!shouldRenderScene) {
          renderWindowRef.current = { x: 0, y: 0, w: 1, h: 1 };
          staticLayerBufferRef.current = null;
+         dynamicLayerBufferRef.current = null;
          staticLayerSigRef.current = "";
+         dynamicLayerSigRef.current = "";
+         hitMapBuiltAtRef.current = 0;
+         hitMapNeedsRebuildRef.current = true;
          if (hitMapRef.current.length) {
             hitMapRef.current = [];
             notifyHitMapUpdated();
@@ -3753,6 +4011,7 @@ function DayviewCanvasTrack({
                height: 1,
                dpr: 1,
                staticLayerKey: "__offscreen__",
+               dynamicLayerKey: "__offscreen__",
                draw: {
                   buildHitMap: false,
                   highlightEventId: null,
@@ -3793,11 +4052,14 @@ function DayviewCanvasTrack({
 
       if (workerCanRender) {
          staticLayerBufferRef.current = null;
+         dynamicLayerBufferRef.current = null;
          staticLayerSigRef.current = "";
+         dynamicLayerSigRef.current = "";
          const worker = workerRef.current;
          if (!worker) return;
 
-         const nextWorkerEventState = buildWorkerEventState(eventsSafe);
+         const nextWorkerEventState = workerEventState;
+         const nextWorkerEventEntries = workerEventEntries;
          const workerBaseScene = {
             hoursColWidth,
             headerHeight,
@@ -3834,7 +4096,7 @@ function DayviewCanvasTrack({
                   type: "scene",
                   colorOverrides: workerColorOverrides,
                   scene: workerBaseScene,
-                  eventEntries: serializeWorkerEventState(nextWorkerEventState),
+                  eventEntries: nextWorkerEventEntries,
                });
             } catch (error) {
                markWorkerFatal(error?.message || error);
@@ -3853,7 +4115,7 @@ function DayviewCanvasTrack({
                try {
                   worker.postMessage({
                      type: "scene-events-reset",
-                     entries: serializeWorkerEventState(nextWorkerEventState),
+                     entries: nextWorkerEventEntries,
                   });
                } catch (error) {
                   markWorkerFatal(error?.message || error);
@@ -3871,12 +4133,34 @@ function DayviewCanvasTrack({
             height: renderSurfaceHeight,
             dpr: canvasDpr,
             staticLayerKey,
+            dynamicLayerKey,
             draw: {
                buildHitMap: shouldBuildHitMap,
                worldWidth: width,
                worldHeight: height,
                renderOriginX,
                renderOriginY,
+               staticOriginX,
+               staticOriginY,
+               staticSurfaceWidth,
+               staticSurfaceHeight,
+               staticSourceOffsetX,
+               staticSourceOffsetY,
+               staticVisibleRowStart,
+               staticVisibleRowEnd,
+               staticVisibleColStart,
+               staticVisibleColEnd,
+               dynamicOriginX,
+               dynamicOriginY,
+               dynamicSurfaceWidth,
+               dynamicSurfaceHeight,
+               dynamicSourceOffsetX,
+               dynamicSourceOffsetY,
+               dynamicVisibleRowStart,
+               dynamicVisibleRowEnd,
+               dynamicVisibleColStart,
+               dynamicVisibleColEnd,
+               ultraFastMode: ultraFastRenderMode ? 1 : 0,
                highlightEventId: highlightEventIdForRender,
                highlightSlot,
                editingWait: editingWaitForRender,
@@ -3887,6 +4171,11 @@ function DayviewCanvasTrack({
                visibleColEnd: visibleColEndForDraw,
             },
          };
+
+         if (shouldBuildHitMap) {
+            hitMapNeedsRebuildRef.current = false;
+            hitMapBuiltAtRef.current = nowTs;
+         }
 
          if (workerDrawInFlightRef.current) {
             workerPendingDrawPayloadRef.current = drawPayload;
@@ -3923,7 +4212,9 @@ function DayviewCanvasTrack({
       const drawCtx = canUseDoubleBuffer ? drawBuffer?.getContext?.("2d") : frontCtx;
       if (!drawCtx) return;
 
-      const staticLayerBuffer = ensureStaticLayerBuffer(pixelW, pixelH);
+      const staticPixelW = Math.max(1, Math.floor(staticSurfaceWidth * canvasDpr));
+      const staticPixelH = Math.max(1, Math.floor(staticSurfaceHeight * canvasDpr));
+      const staticLayerBuffer = ensureStaticLayerBuffer(staticPixelW, staticPixelH);
       const staticLayerCtx = staticLayerBuffer?.getContext?.("2d");
       if (!staticLayerBuffer || !staticLayerCtx) {
          staticLayerBufferRef.current = null;
@@ -3931,9 +4222,9 @@ function DayviewCanvasTrack({
       } else if (staticLayerSigRef.current !== staticLayerKey) {
          staticLayerSigRef.current = staticLayerKey;
          staticLayerCtx.setTransform(1, 0, 0, 1, 0, 0);
-         staticLayerCtx.clearRect(0, 0, pixelW, pixelH);
+         staticLayerCtx.clearRect(0, 0, staticPixelW, staticPixelH);
          staticLayerCtx.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
-         staticLayerCtx.translate(-renderOriginX, -renderOriginY);
+         staticLayerCtx.translate(-staticOriginX, -staticOriginY);
 
          drawAll({
             ctx: staticLayerCtx,
@@ -3974,71 +4265,201 @@ function DayviewCanvasTrack({
             dayRenderModel,
             activeSearchEventId: null,
             denseMode: denseRenderMode,
-            visibleRowStart: visibleRowStartForDraw,
-            visibleRowEnd: visibleRowEndForDraw,
-            visibleColStart: visibleColStartForDraw,
-            visibleColEnd: visibleColEndForDraw,
+            ultraFastMode: ultraFastRenderMode,
+            visibleRowStart: staticVisibleRowStart,
+            visibleRowEnd: staticVisibleRowEnd,
+            visibleColStart: staticVisibleColStart,
+            visibleColEnd: staticVisibleColEnd,
             paintStatic: true,
             paintDynamic: false,
             clearCanvas: false,
          });
       }
 
+      const dynamicPixelW = Math.max(
+         1,
+         Math.floor(dynamicSurfaceWidth * canvasDpr),
+      );
+      const dynamicPixelH = Math.max(
+         1,
+         Math.floor(dynamicSurfaceHeight * canvasDpr),
+      );
+      const dynamicLayerBuffer = ensureDynamicLayerBuffer(dynamicPixelW, dynamicPixelH);
+      const dynamicLayerCtx = dynamicLayerBuffer?.getContext?.("2d");
+      const hasDynamicLayer = !!(dynamicLayerBuffer && dynamicLayerCtx);
+      const shouldRefreshDynamicLayer =
+         shouldBuildHitMap || dynamicLayerSigRef.current !== dynamicLayerKey;
+      let hitMap = null;
+
+      if (!hasDynamicLayer) {
+         dynamicLayerBufferRef.current = null;
+         dynamicLayerSigRef.current = "";
+      } else if (shouldRefreshDynamicLayer) {
+         dynamicLayerSigRef.current = dynamicLayerKey;
+         dynamicLayerCtx.setTransform(1, 0, 0, 1, 0, 0);
+         dynamicLayerCtx.clearRect(0, 0, dynamicPixelW, dynamicPixelH);
+         dynamicLayerCtx.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
+         dynamicLayerCtx.translate(-dynamicOriginX, -dynamicOriginY);
+
+         hitMap = shouldBuildHitMap ? [] : null;
+         drawAll({
+            ctx: dynamicLayerCtx,
+            width,
+            height,
+            hoursColWidth,
+            headerHeight,
+            colWidth,
+            colGap,
+            colsCount,
+            colsPerRow,
+            rowsCount,
+            rowGap,
+            rowHeights,
+            instructors: effectiveInstructors,
+            events: eventsSafe,
+            slotGeoms,
+            slotHeight,
+            slotGap,
+            hitMap,
+            blockedKeyMap: blockedKeyMapForSlots || null,
+            highlightEventId: highlightEventIdForRender,
+            highlightSlot,
+            zoom,
+            preGrid: hasPreGrid
+               ? { columns: preGridCols, rows: preGridRows }
+               : null,
+            preGridWidth,
+            waitNotesMap: waitNotesTextMap,
+            editingWait: editingWaitForRender,
+            overlapEventsByInst,
+            canceledSlotKeysByInst,
+            presenceByReservationColors: presenceColorsByReservation,
+            presenceReservationIds: effectivePresenceReservationIds,
+            desiredInstructorBadgeByUserId,
+            createDraftBySlotUsers,
+            createDraftBySlotColors,
+            dayRenderModel,
+            activeSearchEventId,
+            denseMode: denseRenderMode,
+            ultraFastMode: ultraFastRenderMode,
+            visibleRowStart: dynamicVisibleRowStart,
+            visibleRowEnd: dynamicVisibleRowEnd,
+            visibleColStart: dynamicVisibleColStart,
+            visibleColEnd: dynamicVisibleColEnd,
+            paintStatic: false,
+            paintDynamic: true,
+            clearCanvas: false,
+         });
+      }
+
       drawCtx.setTransform(1, 0, 0, 1, 0, 0);
       drawCtx.clearRect(0, 0, pixelW, pixelH);
-      if (staticLayerBuffer) drawCtx.drawImage(staticLayerBuffer, 0, 0);
-      drawCtx.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
-      drawCtx.translate(-renderOriginX, -renderOriginY);
-
-      const hitMap = shouldBuildHitMap ? [] : null;
-
-      drawAll({
-         ctx: drawCtx,
-         width,
-         height,
-         hoursColWidth,
-         headerHeight,
-         colWidth,
-         colGap,
-         colsCount,
-         colsPerRow,
-         rowsCount,
-         rowGap,
-         rowHeights,
-         instructors: effectiveInstructors,
-         events: eventsSafe,
-         slotGeoms,
-         slotHeight,
-         slotGap,
-         hitMap,
-         blockedKeyMap: blockedKeyMapForSlots || null,
-         highlightEventId: highlightEventIdForRender,
-         highlightSlot,
-         zoom,
-         preGrid: hasPreGrid
-            ? { columns: preGridCols, rows: preGridRows }
-            : null,
-         preGridWidth,
-         waitNotesMap: waitNotesTextMap,
-         editingWait: editingWaitForRender,
-         overlapEventsByInst,
-         canceledSlotKeysByInst,
-         presenceByReservationColors: presenceColorsByReservation,
-         presenceReservationIds: effectivePresenceReservationIds,
-         desiredInstructorBadgeByUserId,
-         createDraftBySlotUsers,
-         createDraftBySlotColors,
-         dayRenderModel,
-         activeSearchEventId,
-         denseMode: denseRenderMode,
-         visibleRowStart: visibleRowStartForDraw,
-         visibleRowEnd: visibleRowEndForDraw,
-         visibleColStart: visibleColStartForDraw,
-         visibleColEnd: visibleColEndForDraw,
-         paintStatic: false,
-         paintDynamic: true,
-         clearCanvas: false,
-      });
+      if (staticLayerBuffer) {
+         const staticSourceDeviceX = Math.max(
+            0,
+            Math.min(
+               Math.max(0, staticPixelW - pixelW),
+               Math.round(staticSourceOffsetX * canvasDpr),
+            ),
+         );
+         const staticSourceDeviceY = Math.max(
+            0,
+            Math.min(
+               Math.max(0, staticPixelH - pixelH),
+               Math.round(staticSourceOffsetY * canvasDpr),
+            ),
+         );
+         drawCtx.drawImage(
+            staticLayerBuffer,
+            staticSourceDeviceX,
+            staticSourceDeviceY,
+            pixelW,
+            pixelH,
+            0,
+            0,
+            pixelW,
+            pixelH,
+         );
+      }
+      if (hasDynamicLayer) {
+         const dynamicSourceDeviceX = Math.max(
+            0,
+            Math.min(
+               Math.max(0, dynamicPixelW - pixelW),
+               Math.round(dynamicSourceOffsetX * canvasDpr),
+            ),
+         );
+         const dynamicSourceDeviceY = Math.max(
+            0,
+            Math.min(
+               Math.max(0, dynamicPixelH - pixelH),
+               Math.round(dynamicSourceOffsetY * canvasDpr),
+            ),
+         );
+         drawCtx.drawImage(
+            dynamicLayerBuffer,
+            dynamicSourceDeviceX,
+            dynamicSourceDeviceY,
+            pixelW,
+            pixelH,
+            0,
+            0,
+            pixelW,
+            pixelH,
+         );
+      } else {
+         drawCtx.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
+         drawCtx.translate(-renderOriginX, -renderOriginY);
+         hitMap = shouldBuildHitMap ? [] : null;
+         drawAll({
+            ctx: drawCtx,
+            width,
+            height,
+            hoursColWidth,
+            headerHeight,
+            colWidth,
+            colGap,
+            colsCount,
+            colsPerRow,
+            rowsCount,
+            rowGap,
+            rowHeights,
+            instructors: effectiveInstructors,
+            events: eventsSafe,
+            slotGeoms,
+            slotHeight,
+            slotGap,
+            hitMap,
+            blockedKeyMap: blockedKeyMapForSlots || null,
+            highlightEventId: highlightEventIdForRender,
+            highlightSlot,
+            zoom,
+            preGrid: hasPreGrid
+               ? { columns: preGridCols, rows: preGridRows }
+               : null,
+            preGridWidth,
+            waitNotesMap: waitNotesTextMap,
+            editingWait: editingWaitForRender,
+            overlapEventsByInst,
+            canceledSlotKeysByInst,
+            presenceByReservationColors: presenceColorsByReservation,
+            presenceReservationIds: effectivePresenceReservationIds,
+            desiredInstructorBadgeByUserId,
+            createDraftBySlotUsers,
+            createDraftBySlotColors,
+            dayRenderModel,
+            activeSearchEventId,
+            denseMode: denseRenderMode,
+            ultraFastMode: ultraFastRenderMode,
+            visibleRowStart: visibleRowStartForDraw,
+            visibleRowEnd: visibleRowEndForDraw,
+            visibleColStart: visibleColStartForDraw,
+            visibleColEnd: visibleColEndForDraw,
+            paintStatic: !staticLayerBuffer,
+            paintDynamic: true,
+            clearCanvas: false,
+         });
+      }
 
       if (canUseDoubleBuffer && drawBuffer) {
          // Double-buffer present: desenul se compune în buffer și apoi se blitează pe canvas.
@@ -4049,6 +4470,8 @@ function DayviewCanvasTrack({
 
       if (shouldBuildHitMap) {
          hitMapRef.current = hitMap;
+         hitMapNeedsRebuildRef.current = false;
+         hitMapBuiltAtRef.current = nowTs;
          notifyHitMapUpdated();
       }
    }, [
@@ -4073,6 +4496,8 @@ function DayviewCanvasTrack({
       waitNotesTextMap,
       waitEdit,
       eventsSig,
+      workerEventState,
+      workerEventEntries,
       slotsSig,
       blockedSig,
       waitSig,
@@ -4091,6 +4516,7 @@ function DayviewCanvasTrack({
       activeSearchEventId,
       isPanInteracting,
       denseRenderMode,
+      ultraFastRenderMode,
       rowRenderStartDep,
       rowRenderEndDep,
       colRenderStartDep,
@@ -4098,6 +4524,7 @@ function DayviewCanvasTrack({
       workerSceneCacheEnabled,
       ensureDrawBuffer,
       ensureStaticLayerBuffer,
+      ensureDynamicLayerBuffer,
       workerColorOverrides,
       postWorkerDraw,
       markWorkerFatal,
@@ -4126,7 +4553,13 @@ function DayviewCanvasTrack({
             String(item.reservationId ?? item.ev?.raw?.id ?? item.ev?.id) ===
                String(activeEventId),
       );
-      if (!activeHit) return;
+      if (!activeHit) {
+         requestInteractiveHitMap({
+            keepMs: HITMAP_INTERACTION_KEEP_MS,
+            forceRebuild: true,
+         });
+         return;
+      }
 
       if (
          activeRectResolveRef.current.id === String(activeEventId) &&
@@ -4151,7 +4584,12 @@ function DayviewCanvasTrack({
          item: activeHit,
          canvasRect,
       });
-   }, [activeEventId, onActiveEventRectChange, hitMapVersion]);
+   }, [
+      activeEventId,
+      onActiveEventRectChange,
+      hitMapVersion,
+      requestInteractiveHitMap,
+   ]);
 
    /* ================== delete (Ctrl+X) ================== */
 
@@ -4254,7 +4692,9 @@ function DayviewCanvasTrack({
          const startTimeToSend = buildStartTimeForSlot(slot.slotStart);
          if (!startTimeToSend) return;
 
-         let instructorIdNum = Number(slot.instructorId);
+         let instructorIdNum = Number(
+            slot.actionInstructorId ?? slot.instructorId,
+         );
          if (!Number.isFinite(instructorIdNum) || instructorIdNum <= 0) {
             instructorIdNum = Number(copy.instructorId);
          }
@@ -4447,7 +4887,19 @@ function DayviewCanvasTrack({
 
    const resolveInstructorIdForHit = useCallback(
       (hit) => {
-         if (!hit) return hit?.instructorId ?? null;
+         if (!hit) return null;
+         const directRaw = hit.instructorId;
+         if (directRaw != null) {
+            const directStr = String(directRaw);
+            if (
+               directStr &&
+               !directStr.startsWith("__pad_") &&
+               !directStr.startsWith(GAPCOL_PREFIX)
+            ) {
+               return directStr;
+            }
+         }
+         if (hit.kind === "empty-slot" || hit.kind === "wait-slot") return null;
          const idx = hit.instIdx;
          if (typeof idx === "number" && idx >= 0) {
             const inst = effectiveInstructors[idx];
@@ -4456,12 +4908,7 @@ function DayviewCanvasTrack({
                if (idStr && !idStr.startsWith("__pad_")) return idStr;
             }
          }
-         const fallback = hit.instructorId;
-         if (!fallback) return null;
-         const fallbackStr = String(fallback);
-         if (fallbackStr.startsWith("__pad_")) return null;
-         if (fallbackStr.startsWith(GAPCOL_PREFIX)) return null;
-         return fallbackStr;
+         return null;
       },
       [effectiveInstructors],
    );
@@ -4552,6 +4999,9 @@ function DayviewCanvasTrack({
 
       const handleClick = (e) => {
          if (Date.now() < ignoreClickUntilRef.current) return;
+         requestInteractiveHitMap({
+            keepMs: HITMAP_INTERACTION_KEEP_MS,
+         });
 
          const rect = canvas.getBoundingClientRect();
          const localX = e.clientX - rect.left;
@@ -4618,7 +5068,12 @@ function DayviewCanvasTrack({
 
       canvas.addEventListener("click", handleClick);
       return () => canvas.removeEventListener("click", handleClick);
-   }, [clearPendingClickCommit, commitSelectionFromHit, resolveEventFromHit]);
+   }, [
+      clearPendingClickCommit,
+      commitSelectionFromHit,
+      resolveEventFromHit,
+      requestInteractiveHitMap,
+   ]);
 
    useEffect(() => {
       const canvas = canvasRef.current;
@@ -4627,6 +5082,10 @@ function DayviewCanvasTrack({
       const handleDblClick = (e) => {
          if (Date.now() < ignoreClickUntilRef.current) return;
          clearPendingClickCommit();
+         requestInteractiveHitMap({
+            keepMs: HITMAP_INTERACTION_KEEP_MS,
+            forceRebuild: true,
+         });
 
          const rect = canvas.getBoundingClientRect();
          const localX = e.clientX - rect.left;
@@ -4685,9 +5144,9 @@ function DayviewCanvasTrack({
                ) {
                   const resolvedInstructorId =
                      resolveInstructorIdForHit(item);
+                  if (!resolvedInstructorId) break;
                   const slotPayload = {
-                     instructorId:
-                        resolvedInstructorId ?? item.instructorId,
+                     instructorId: resolvedInstructorId,
                      actionInstructorId: resolvedInstructorId ?? null,
                      highlightInstructorId: item.instructorId,
                      slotStart: item.slotStart,
@@ -4699,8 +5158,7 @@ function DayviewCanvasTrack({
                   setGlobalSelection({ event: null, slot: slotPayload });
 
                   const payload = {
-                     instructorId:
-                        resolvedInstructorId ?? item.instructorId,
+                     instructorId: resolvedInstructorId,
                      start: new Date(item.slotStart),
                      end: new Date(item.slotEnd),
                   };
@@ -4722,6 +5180,7 @@ function DayviewCanvasTrack({
       resolveInstructorIdForHit,
       resolveEventFromHit,
       clearPendingClickCommit,
+      requestInteractiveHitMap,
    ]);
 
    useEffect(() => {
@@ -4811,6 +5270,9 @@ function DayviewCanvasTrack({
 
       const handleContextMenu = (e) => {
          e.preventDefault();
+         requestInteractiveHitMap({
+            keepMs: HITMAP_INTERACTION_KEEP_MS,
+         });
          const hit = getHitAtClient(e.clientX, e.clientY);
          openToolbarForHit(hit);
       };
@@ -4838,6 +5300,10 @@ function DayviewCanvasTrack({
          clearPendingClickCommit();
          if (e.pointerType) lastPointerTypeRef.current = e.pointerType;
          if (e.button !== 0 && e.button !== undefined) return;
+         requestInteractiveHitMap({
+            keepMs: HITMAP_INTERACTION_KEEP_MS,
+            forceRebuild: true,
+         });
 
          const hit = getHitAtClient(e.clientX, e.clientY);
          if (!hit) return;
@@ -4905,6 +5371,7 @@ function DayviewCanvasTrack({
       resolveInstructorIdForHit,
       resolveEventFromHit,
       clearPendingClickCommit,
+      requestInteractiveHitMap,
    ]);
 
    /* ================== UI overlay ================== */

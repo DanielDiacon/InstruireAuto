@@ -435,6 +435,25 @@ const HOURS_COL_W = 60;
 const COL_W = 220;
 const GROUP_GAP = 32;
 
+function getReservationIdFromSocketPayload(payload) {
+   return (
+      payload?.id ??
+      payload?.reservationId ??
+      payload?.reservation_id ??
+      payload?.rid ??
+      null
+   );
+}
+
+function isSocketReservationDelete(eventName, payload) {
+   const ev = String(eventName || "");
+   return (
+      /deleted|delete|removed|remove/i.test(ev) ||
+      payload?.type === "delete" ||
+      payload?.action === "delete"
+   );
+}
+
 /* ================= COMPONENT PRINCIPAL ================= */
 export default function ACalendarOptimized({
    date,
@@ -468,6 +487,105 @@ export default function ACalendarOptimized({
       },
       [dispatch],
    );
+
+   const socketBurstRafRef = useRef(0);
+   const socketBurstByIdRef = useRef(new Map());
+   const socketBurstMetaRef = useRef({
+      eventNames: new Set(),
+      hasDelete: false,
+      unknownCount: 0,
+   });
+
+   const flushSocketReservationsBurst = useCallback(() => {
+      socketBurstRafRef.current = 0;
+
+      const byId = socketBurstByIdRef.current;
+      const meta = socketBurstMetaRef.current;
+      const entries = Array.from(byId.values());
+      const ids = entries.map((entry) => entry.id).filter(Boolean);
+      const count = entries.length + Number(meta?.unknownCount || 0);
+      if (!count) return;
+
+      const hasDelete =
+         !!meta?.hasDelete || entries.some((entry) => !!entry?.isDelete);
+      const eventNames =
+         meta?.eventNames instanceof Set
+            ? Array.from(meta.eventNames).filter(Boolean)
+            : [];
+
+      socketBurstByIdRef.current = new Map();
+      socketBurstMetaRef.current = {
+         eventNames: new Set(),
+         hasDelete: false,
+         unknownCount: 0,
+      };
+
+      scheduleCalendarRefresh({
+         source: "socket",
+         type: hasDelete ? "reservations-batch-delete" : "reservations-batch",
+         count,
+         ids: ids.slice(0, 32),
+         eventNames: eventNames.slice(0, 12),
+         forceReload: false,
+      });
+
+      runReservationsRefresh(`socket-batch:${count}`);
+   }, [runReservationsRefresh]);
+
+   const queueSocketReservationsChanged = useCallback(
+      ({ eventName, payload }) => {
+         const ev = String(eventName || "");
+         const ridRaw = getReservationIdFromSocketPayload(payload);
+         const rid = ridRaw != null ? String(ridRaw) : "";
+         const isDelete = isSocketReservationDelete(ev, payload);
+
+         const meta = socketBurstMetaRef.current;
+         if (meta?.eventNames instanceof Set && ev) meta.eventNames.add(ev);
+         if (isDelete) meta.hasDelete = true;
+
+         if (rid) {
+            const prev = socketBurstByIdRef.current.get(rid);
+            const prevPriority = prev?.isDelete ? 2 : 1;
+            const nextPriority = isDelete ? 2 : 1;
+
+            if (!prev || nextPriority >= prevPriority) {
+               socketBurstByIdRef.current.set(rid, {
+                  id: rid,
+                  isDelete,
+                  eventName: ev,
+               });
+            }
+         } else {
+            meta.unknownCount = Number(meta.unknownCount || 0) + 1;
+         }
+
+         if (socketBurstRafRef.current) return;
+         if (typeof window === "undefined") {
+            flushSocketReservationsBurst();
+            return;
+         }
+
+         socketBurstRafRef.current = window.requestAnimationFrame(() => {
+            flushSocketReservationsBurst();
+         });
+      },
+      [flushSocketReservationsBurst],
+   );
+
+   useEffect(() => {
+      return () => {
+         if (socketBurstRafRef.current) {
+            cancelAnimationFrame(socketBurstRafRef.current);
+            socketBurstRafRef.current = 0;
+         }
+         socketBurstByIdRef.current = new Map();
+         socketBurstMetaRef.current = {
+            eventNames: new Set(),
+            hasDelete: false,
+            unknownCount: 0,
+         };
+      };
+   }, []);
    // ✅ înainte de currentDate
    const initialMonthKeyRef = useRef(null);
 
@@ -1146,6 +1264,17 @@ export default function ACalendarOptimized({
       ]),
 
       onConnect: () => {
+         if (socketBurstRafRef.current) {
+            cancelAnimationFrame(socketBurstRafRef.current);
+            socketBurstRafRef.current = 0;
+         }
+         socketBurstByIdRef.current = new Map();
+         socketBurstMetaRef.current = {
+            eventNames: new Set(),
+            hasDelete: false,
+            unknownCount: 0,
+         };
+
          setPresenceByReservationUsers(new Map());
          setCreateDraftBySlotUsers(new Map());
          activeDraftSlotByUserRef.current = new Map();
@@ -1154,6 +1283,17 @@ export default function ACalendarOptimized({
       },
 
       onDisconnect: () => {
+         if (socketBurstRafRef.current) {
+            cancelAnimationFrame(socketBurstRafRef.current);
+            socketBurstRafRef.current = 0;
+         }
+         socketBurstByIdRef.current = new Map();
+         socketBurstMetaRef.current = {
+            eventNames: new Set(),
+            hasDelete: false,
+            unknownCount: 0,
+         };
+
          setPresenceByReservationUsers(new Map());
          setCreateDraftBySlotUsers(new Map());
          activeDraftSlotByUserRef.current = new Map();
@@ -1170,42 +1310,14 @@ export default function ACalendarOptimized({
          applyCreateDraftPresence(payload, { forceClear: true }),
 
       onReservationsChanged: ({ eventName, payload }) => {
-         const ev = String(eventName || "");
+         const rid = getReservationIdFromSocketPayload(payload);
+         const isDelete = isSocketReservationDelete(eventName, payload);
 
-         const isDelete =
-            /deleted|delete|removed|remove/i.test(ev) ||
-            payload?.type === "delete" ||
-            payload?.action === "delete";
-
-         if (isDelete) {
-            const rid =
-               payload?.id ??
-               payload?.reservationId ??
-               payload?.reservation_id ??
-               null;
-
-            if (rid != null) {
-               dispatch(removeReservationLocal(rid));
-            }
-
-            scheduleCalendarRefresh({
-               source: "socket",
-               type: "delete",
-               id: rid != null ? String(rid) : undefined,
-               eventName: ev,
-            });
-
-            runReservationsRefresh("socket-delete");
-            return;
+         if (isDelete && rid != null) {
+            dispatch(removeReservationLocal(rid));
          }
 
-         scheduleCalendarRefresh({
-            source: "socket",
-            type: "reservations-changed",
-            eventName: ev,
-         });
-
-         runReservationsRefresh(`socket:${ev || "changed"}`);
+         queueSocketReservationsChanged({ eventName, payload });
       },
    });
 

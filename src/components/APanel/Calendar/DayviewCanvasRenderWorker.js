@@ -12,6 +12,9 @@ let renderCtx = null;
 let staticLayerCanvas = null;
 let staticLayerCtx = null;
 let staticLayerKey = null;
+let dynamicLayerCanvas = null;
+let dynamicLayerCtx = null;
+let dynamicLayerKey = null;
 let scene = null;
 let sceneReady = false;
 let sceneEventState = new Map();
@@ -59,6 +62,26 @@ function ensureStaticLayerContext(pixelWidth, pixelHeight) {
    if (!staticLayerCtx) staticLayerCtx = staticLayerCanvas.getContext("2d");
 
    return staticLayerCtx;
+}
+
+function ensureDynamicLayerContext(pixelWidth, pixelHeight) {
+   if (!renderCanvas) return null;
+
+   if (!dynamicLayerCanvas) {
+      if (typeof OffscreenCanvas === "undefined") return null;
+      dynamicLayerCanvas = new OffscreenCanvas(pixelWidth, pixelHeight);
+      dynamicLayerCtx = dynamicLayerCanvas.getContext("2d");
+      dynamicLayerKey = null;
+      return dynamicLayerCtx;
+   }
+
+   if (dynamicLayerCanvas.width !== pixelWidth)
+      dynamicLayerCanvas.width = pixelWidth;
+   if (dynamicLayerCanvas.height !== pixelHeight)
+      dynamicLayerCanvas.height = pixelHeight;
+   if (!dynamicLayerCtx) dynamicLayerCtx = dynamicLayerCanvas.getContext("2d");
+
+   return dynamicLayerCtx;
 }
 
 function updateCanvasSize(cssWidth, cssHeight, dpr) {
@@ -149,6 +172,7 @@ function applySceneEventReset(entries) {
       scene.events = serializeSceneEventsFromState();
       rebuildSceneRenderModel();
       staticLayerKey = null;
+      dynamicLayerKey = null;
    }
 }
 
@@ -175,6 +199,7 @@ function applySceneEventPatch(removals, upserts) {
       scene.events = serializeSceneEventsFromState();
       rebuildSceneRenderModel();
       staticLayerKey = null;
+      dynamicLayerKey = null;
    }
 }
 
@@ -197,6 +222,9 @@ self.onmessage = (event) => {
          staticLayerCanvas = null;
          staticLayerCtx = null;
          staticLayerKey = null;
+         dynamicLayerCanvas = null;
+         dynamicLayerCtx = null;
+         dynamicLayerKey = null;
          sceneEventState = new Map();
          lastHitMapSignature = "";
          if (payload.colorOverrides !== undefined) {
@@ -211,6 +239,7 @@ self.onmessage = (event) => {
          scene = payload.scene ? { ...payload.scene, events: [] } : null;
          sceneReady = !!scene;
          staticLayerKey = null;
+         dynamicLayerKey = null;
          sceneEventState = new Map();
          lastHitMapSignature = "";
          if (payload.colorOverrides !== undefined) {
@@ -256,6 +285,9 @@ self.onmessage = (event) => {
          staticLayerCanvas = null;
          staticLayerCtx = null;
          staticLayerKey = null;
+         dynamicLayerCanvas = null;
+         dynamicLayerCtx = null;
+         dynamicLayerKey = null;
          lastHitMapSignature = "";
          cameraState = {
             x: 0,
@@ -284,6 +316,7 @@ self.onmessage = (event) => {
       const buildHitMap = drawPayload.buildHitMap !== false;
       const forceHitMapTransfer = drawPayload.forceHitMapTransfer === true;
       const nextStaticLayerKey = String(payload.staticLayerKey || "");
+      const nextDynamicLayerKey = String(payload.dynamicLayerKey || "");
       const worldWidth = Math.max(1, toFiniteNumber(drawPayload.worldWidth, width));
       const worldHeight = Math.max(
          1,
@@ -297,6 +330,148 @@ self.onmessage = (event) => {
          0,
          toFiniteNumber(drawPayload.renderOriginY, 0),
       );
+      const staticOriginX = Math.max(
+         0,
+         toFiniteNumber(drawPayload.staticOriginX, renderOriginX),
+      );
+      const staticOriginY = Math.max(
+         0,
+         toFiniteNumber(drawPayload.staticOriginY, renderOriginY),
+      );
+      const staticSurfaceWidth = Math.max(
+         width,
+         toFiniteNumber(drawPayload.staticSurfaceWidth, width),
+      );
+      const staticSurfaceHeight = Math.max(
+         height,
+         toFiniteNumber(drawPayload.staticSurfaceHeight, height),
+      );
+      const staticSourceOffsetX = Math.max(
+         0,
+         toFiniteNumber(
+            drawPayload.staticSourceOffsetX,
+            Math.max(0, renderOriginX - staticOriginX),
+         ),
+      );
+      const staticSourceOffsetY = Math.max(
+         0,
+         toFiniteNumber(
+            drawPayload.staticSourceOffsetY,
+            Math.max(0, renderOriginY - staticOriginY),
+         ),
+      );
+      const dynamicOriginX = Math.max(
+         0,
+         toFiniteNumber(drawPayload.dynamicOriginX, renderOriginX),
+      );
+      const dynamicOriginY = Math.max(
+         0,
+         toFiniteNumber(drawPayload.dynamicOriginY, renderOriginY),
+      );
+      const dynamicSurfaceWidth = Math.max(
+         width,
+         toFiniteNumber(drawPayload.dynamicSurfaceWidth, width),
+      );
+      const dynamicSurfaceHeight = Math.max(
+         height,
+         toFiniteNumber(drawPayload.dynamicSurfaceHeight, height),
+      );
+      const dynamicSourceOffsetX = Math.max(
+         0,
+         toFiniteNumber(
+            drawPayload.dynamicSourceOffsetX,
+            Math.max(0, renderOriginX - dynamicOriginX),
+         ),
+      );
+      const dynamicSourceOffsetY = Math.max(
+         0,
+         toFiniteNumber(
+            drawPayload.dynamicSourceOffsetY,
+            Math.max(0, renderOriginY - dynamicOriginY),
+         ),
+      );
+      const sceneMaxRowIdx = Math.max(0, Number(scene?.rowsCount || 0) - 1);
+      const sceneMaxColIdx = Math.max(0, Number(scene?.colsPerRow || 0) - 1);
+      const staticVisibleRowStart = Math.max(
+         0,
+         Math.min(
+            sceneMaxRowIdx,
+            toFiniteNumber(
+               drawPayload.staticVisibleRowStart,
+               toFiniteNumber(drawPayload.visibleRowStart, 0),
+            ),
+         ),
+      );
+      const staticVisibleRowEnd = Math.max(
+         staticVisibleRowStart,
+         Math.min(
+            sceneMaxRowIdx,
+            toFiniteNumber(
+               drawPayload.staticVisibleRowEnd,
+               toFiniteNumber(drawPayload.visibleRowEnd, sceneMaxRowIdx),
+            ),
+         ),
+      );
+      const staticVisibleColStart = Math.max(
+         0,
+         Math.min(
+            sceneMaxColIdx,
+            toFiniteNumber(
+               drawPayload.staticVisibleColStart,
+               toFiniteNumber(drawPayload.visibleColStart, 0),
+            ),
+         ),
+      );
+      const staticVisibleColEnd = Math.max(
+         staticVisibleColStart,
+         Math.min(
+            sceneMaxColIdx,
+            toFiniteNumber(
+               drawPayload.staticVisibleColEnd,
+               toFiniteNumber(drawPayload.visibleColEnd, sceneMaxColIdx),
+            ),
+         ),
+      );
+      const dynamicVisibleRowStart = Math.max(
+         0,
+         Math.min(
+            sceneMaxRowIdx,
+            toFiniteNumber(
+               drawPayload.dynamicVisibleRowStart,
+               toFiniteNumber(drawPayload.visibleRowStart, 0),
+            ),
+         ),
+      );
+      const dynamicVisibleRowEnd = Math.max(
+         dynamicVisibleRowStart,
+         Math.min(
+            sceneMaxRowIdx,
+            toFiniteNumber(
+               drawPayload.dynamicVisibleRowEnd,
+               toFiniteNumber(drawPayload.visibleRowEnd, sceneMaxRowIdx),
+            ),
+         ),
+      );
+      const dynamicVisibleColStart = Math.max(
+         0,
+         Math.min(
+            sceneMaxColIdx,
+            toFiniteNumber(
+               drawPayload.dynamicVisibleColStart,
+               toFiniteNumber(drawPayload.visibleColStart, 0),
+            ),
+         ),
+      );
+      const dynamicVisibleColEnd = Math.max(
+         dynamicVisibleColStart,
+         Math.min(
+            sceneMaxColIdx,
+            toFiniteNumber(
+               drawPayload.dynamicVisibleColEnd,
+               toFiniteNumber(drawPayload.visibleColEnd, sceneMaxColIdx),
+            ),
+         ),
+      );
       const drawOverrides = { ...drawPayload };
       delete drawOverrides.buildHitMap;
       delete drawOverrides.forceHitMapTransfer;
@@ -304,19 +479,52 @@ self.onmessage = (event) => {
       delete drawOverrides.worldHeight;
       delete drawOverrides.renderOriginX;
       delete drawOverrides.renderOriginY;
+      delete drawOverrides.staticOriginX;
+      delete drawOverrides.staticOriginY;
+      delete drawOverrides.staticSurfaceWidth;
+      delete drawOverrides.staticSurfaceHeight;
+      delete drawOverrides.staticSourceOffsetX;
+      delete drawOverrides.staticSourceOffsetY;
+      delete drawOverrides.staticVisibleRowStart;
+      delete drawOverrides.staticVisibleRowEnd;
+      delete drawOverrides.staticVisibleColStart;
+      delete drawOverrides.staticVisibleColEnd;
+      delete drawOverrides.dynamicOriginX;
+      delete drawOverrides.dynamicOriginY;
+      delete drawOverrides.dynamicSurfaceWidth;
+      delete drawOverrides.dynamicSurfaceHeight;
+      delete drawOverrides.dynamicSourceOffsetX;
+      delete drawOverrides.dynamicSourceOffsetY;
+      delete drawOverrides.dynamicVisibleRowStart;
+      delete drawOverrides.dynamicVisibleRowEnd;
+      delete drawOverrides.dynamicVisibleColStart;
+      delete drawOverrides.dynamicVisibleColEnd;
 
       updateCanvasSize(width, height, dpr);
       const pixelWidth = renderCanvas.width || toPositiveInt(width * dpr, 1);
       const pixelHeight = renderCanvas.height || toPositiveInt(height * dpr, 1);
-      const staticCtx = ensureStaticLayerContext(pixelWidth, pixelHeight);
+      const staticPixelWidth =
+         toPositiveInt(staticSurfaceWidth * dpr, pixelWidth);
+      const staticPixelHeight =
+         toPositiveInt(staticSurfaceHeight * dpr, pixelHeight);
+      const staticCtx = ensureStaticLayerContext(staticPixelWidth, staticPixelHeight);
       const hasStaticLayer = !!(staticLayerCanvas && staticCtx);
+      const dynamicPixelWidth =
+         toPositiveInt(dynamicSurfaceWidth * dpr, pixelWidth);
+      const dynamicPixelHeight =
+         toPositiveInt(dynamicSurfaceHeight * dpr, pixelHeight);
+      const dynamicCtx = ensureDynamicLayerContext(
+         dynamicPixelWidth,
+         dynamicPixelHeight,
+      );
+      const hasDynamicLayer = !!(dynamicLayerCanvas && dynamicCtx);
 
       if (hasStaticLayer && staticLayerKey !== nextStaticLayerKey) {
          staticLayerKey = nextStaticLayerKey;
          staticCtx.setTransform(1, 0, 0, 1, 0, 0);
-         staticCtx.clearRect(0, 0, pixelWidth, pixelHeight);
+         staticCtx.clearRect(0, 0, staticPixelWidth, staticPixelHeight);
          staticCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-         staticCtx.translate(-renderOriginX, -renderOriginY);
+         staticCtx.translate(-staticOriginX, -staticOriginY);
          drawAll({
             ...scene,
             ...drawOverrides,
@@ -329,29 +537,121 @@ self.onmessage = (event) => {
             paintDynamic: false,
             clearCanvas: false,
             includeEventPayloadInHitMap: false,
+            visibleRowStart: staticVisibleRowStart,
+            visibleRowEnd: staticVisibleRowEnd,
+            visibleColStart: staticVisibleColStart,
+            visibleColEnd: staticVisibleColEnd,
+         });
+      }
+      if (!hasDynamicLayer) {
+         dynamicLayerCanvas = null;
+         dynamicLayerCtx = null;
+         dynamicLayerKey = null;
+      }
+
+      let hitMap = null;
+      const shouldRefreshDynamicLayer =
+         buildHitMap || dynamicLayerKey !== nextDynamicLayerKey;
+      if (hasDynamicLayer && shouldRefreshDynamicLayer) {
+         dynamicLayerKey = nextDynamicLayerKey;
+         dynamicCtx.setTransform(1, 0, 0, 1, 0, 0);
+         dynamicCtx.clearRect(0, 0, dynamicPixelWidth, dynamicPixelHeight);
+         dynamicCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+         dynamicCtx.translate(-dynamicOriginX, -dynamicOriginY);
+
+         hitMap = buildHitMap ? [] : null;
+         drawAll({
+            ...scene,
+            ...drawOverrides,
+            camera: cameraState,
+            ctx: dynamicCtx,
+            width: worldWidth,
+            height: worldHeight,
+            hitMap,
+            paintStatic: false,
+            paintDynamic: true,
+            clearCanvas: false,
+            includeEventPayloadInHitMap: false,
+            visibleRowStart: dynamicVisibleRowStart,
+            visibleRowEnd: dynamicVisibleRowEnd,
+            visibleColStart: dynamicVisibleColStart,
+            visibleColEnd: dynamicVisibleColEnd,
          });
       }
 
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, pixelWidth, pixelHeight);
-      if (hasStaticLayer) ctx.drawImage(staticLayerCanvas, 0, 0);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.translate(-renderOriginX, -renderOriginY);
-
-      const hitMap = buildHitMap ? [] : null;
-      drawAll({
-         ...scene,
-         ...drawOverrides,
-         camera: cameraState,
-         ctx,
-         width: worldWidth,
-         height: worldHeight,
-         hitMap,
-         paintStatic: !hasStaticLayer,
-         paintDynamic: true,
-         clearCanvas: false,
-         includeEventPayloadInHitMap: false,
-      });
+      if (hasStaticLayer) {
+         const sourceX = Math.max(
+            0,
+            Math.min(
+               Math.max(0, staticPixelWidth - pixelWidth),
+               Math.round(staticSourceOffsetX * dpr),
+            ),
+         );
+         const sourceY = Math.max(
+            0,
+            Math.min(
+               Math.max(0, staticPixelHeight - pixelHeight),
+               Math.round(staticSourceOffsetY * dpr),
+            ),
+         );
+         ctx.drawImage(
+            staticLayerCanvas,
+            sourceX,
+            sourceY,
+            pixelWidth,
+            pixelHeight,
+            0,
+            0,
+            pixelWidth,
+            pixelHeight,
+         );
+      }
+      if (hasDynamicLayer) {
+         const dynamicSourceX = Math.max(
+            0,
+            Math.min(
+               Math.max(0, dynamicPixelWidth - pixelWidth),
+               Math.round(dynamicSourceOffsetX * dpr),
+            ),
+         );
+         const dynamicSourceY = Math.max(
+            0,
+            Math.min(
+               Math.max(0, dynamicPixelHeight - pixelHeight),
+               Math.round(dynamicSourceOffsetY * dpr),
+            ),
+         );
+         ctx.drawImage(
+            dynamicLayerCanvas,
+            dynamicSourceX,
+            dynamicSourceY,
+            pixelWidth,
+            pixelHeight,
+            0,
+            0,
+            pixelWidth,
+            pixelHeight,
+         );
+      } else {
+         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+         ctx.translate(-renderOriginX, -renderOriginY);
+         hitMap = buildHitMap ? [] : null;
+         drawAll({
+            ...scene,
+            ...drawOverrides,
+            camera: cameraState,
+            ctx,
+            width: worldWidth,
+            height: worldHeight,
+            hitMap,
+            paintStatic: !hasStaticLayer,
+            paintDynamic: true,
+            clearCanvas: false,
+            includeEventPayloadInHitMap: false,
+         });
+      }
 
       let hitMapIncluded = false;
       let hitMapPayload;
