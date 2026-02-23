@@ -1,4 +1,4 @@
-// src/components/APanel/Calendar/ACalendarOptimized.jsx
+// src/components/APanel/CalendarPlus/ACalendarOptimized.jsx
 import React, {
    useMemo,
    useEffect,
@@ -6,7 +6,6 @@ import React, {
    useCallback,
    useRef,
    useLayoutEffect,
-   memo,
 } from "react";
 import { useDispatch, useSelector, shallowEqual } from "react-redux";
 
@@ -31,9 +30,6 @@ import {
    fetchInstructors,
 } from "../../../store/instructorsSlice";
 
-import { ReactSVG } from "react-svg";
-import searchIcon from "../../../assets/svg/search.svg";
-
 import {
    selectCalendarBaseData,
    selectCalendarDerivedData,
@@ -41,9 +37,9 @@ import {
 
 import { openPopup } from "../../Utils/popupStore";
 
-import DayviewCanvasTrack from "./DayviewCanvasTrack";
 import useInertialPan from "./useInertialPan";
-import DayOrderEditorModal from "./DayOrderEditorModal";
+import CalendarPlusToolbar from "./CalendarPlusToolbar";
+import CalendarPlusTrack from "./CalendarPlusTrack";
 
 import { useReservationSocket } from "../../../socket/useReservationSocket";
 import { getInstructorBlackouts } from "../../../api/instructorsService";
@@ -59,12 +55,12 @@ const IS_LOW_SPEC_DEVICE =
    ((Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 4) ||
       (Number(navigator.hardwareConcurrency) > 0 &&
          Number(navigator.hardwareConcurrency) <= 4));
-const VISIBLE_DAYS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 96 : 80;
+const VISIBLE_DAYS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 140 : 120;
 const TRACK_DAY_GAP_PX = 24;
-const VISIBLE_DAYS_OVERSCAN = IS_LOW_SPEC_DEVICE ? 2 : 3;
-const STICKY_VISIBLE_DAYS_LIMIT = IS_LOW_SPEC_DEVICE ? 10 : 14;
-const VISIBLE_ROWS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 80 : 64;
-const VIEWPORT_X_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 56 : 40;
+const VISIBLE_DAYS_OVERSCAN = IS_LOW_SPEC_DEVICE ? 1 : 2;
+const STICKY_VISIBLE_DAYS_LIMIT = IS_LOW_SPEC_DEVICE ? 6 : 8;
+const VISIBLE_ROWS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 130 : 110;
+const VIEWPORT_X_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 110 : 90;
 const INTERACTING_DAYS_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 72 : 52;
 const INTERACTING_VIEWPORT_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 34 : 24;
 const DISABLE_DAY_LAZY_LOAD = true;
@@ -289,84 +285,6 @@ function getUserIdFromToken(token) {
 
 const px = (v) => parseFloat(String(v || 0));
 
-function SimpleDropdown({
-   value,
-   onChange,
-   options,
-   placeholder = "",
-   className = "",
-   "aria-label": ariaLabel,
-}) {
-   const [open, setOpen] = useState(false);
-   const ref = useRef(null);
-
-   const handleToggle = useCallback(() => {
-      setOpen((v) => !v);
-   }, []);
-
-   const handleSelect = useCallback(
-      (val) => {
-         onChange?.(val);
-         setOpen(false);
-      },
-      [onChange],
-   );
-
-   useEffect(() => {
-      if (!open) return;
-      const onClickOutside = (e) => {
-         if (!ref.current) return;
-         if (!ref.current.contains(e.target)) setOpen(false);
-      };
-      document.addEventListener("click", onClickOutside, true);
-      return () => document.removeEventListener("click", onClickOutside, true);
-   }, [open]);
-
-   const current = options.find((o) => String(o.value) === String(value));
-   const label = current?.label ?? placeholder ?? "";
-
-   return (
-      <div
-         ref={ref}
-         className={`dv-dd dv-select ${className || ""}`}
-         aria-label={ariaLabel}
-      >
-         <button
-            type="button"
-            className="dv-dd__btn dv-dd__trigger"
-            onClick={handleToggle}
-            aria-haspopup="listbox"
-            aria-expanded={open ? "true" : "false"}
-         >
-            <span className="dv-dd__label">{label}</span>
-            <span className="dv-dd__chevron">▾</span>
-         </button>
-         {open && (
-            <div className="dv-dd__menu dv-dd__list" role="listbox">
-               {options.map((opt) => {
-                  const isActive = String(opt.value) === String(value);
-                  return (
-                     <button
-                        key={opt.value}
-                        type="button"
-                        className={
-                           "dv-dd__option dv-dd__item" +
-                           (isActive ? " dv-dd__option--active" : "")
-                        }
-                        onClick={() => handleSelect(opt.value)}
-                        role="option"
-                        aria-selected={isActive ? "true" : "false"}
-                     >
-                        {opt.label}
-                     </button>
-                  );
-               })}
-            </div>
-         )}
-      </div>
-   );
-}
-
 /* ===== Dummy data pentru render instant (10 instructori fake) ===== */
 const DUMMY_INSTRUCTORS = Array.from({ length: 10 }).map((_, idx) => {
    const n = idx + 1;
@@ -402,10 +320,7 @@ function closestZoomPercentFromZoom(zoomVal) {
    return best;
 }
 
-const EMPTY_EVENTS = [];
-const EMPTY_SLOTS = [];
 const EMPTY_RESERVATIONS = [];
-const EMPTY_MAP = new Map();
 
 function setsEqual(a, b) {
    if (a === b) return true;
@@ -418,8 +333,6 @@ function setsEqual(a, b) {
 }
 
 const MOLDOVA_TZ_ID = "Europe/Chisinau";
-const DEBUG_CANVAS_EMPTY = false;
-
 const TZ_PARTS_FMT_MAIN = new Intl.DateTimeFormat("en-GB", {
    timeZone: MOLDOVA_TZ_ID,
    hour12: false,
@@ -436,6 +349,7 @@ const EVENT_H = 48;
 const SLOT_H = 125;
 const HOURS_COL_W = 60;
 const COL_W = 220;
+const COL_GAP = 12;
 const GROUP_GAP = 32;
 
 function getReservationIdFromSocketPayload(payload) {
@@ -458,7 +372,7 @@ function isSocketReservationDelete(eventName, payload) {
 }
 
 /* ================= COMPONENT PRINCIPAL ================= */
-export default function ACalendarOptimized({
+export default function CalendarPlusOptimized({
    date,
    extraFilters,
    onMonthChange,
@@ -3061,7 +2975,10 @@ export default function ACalendarOptimized({
 
    const baseMetrics = useMemo(() => {
       const baseColw = px(COL_W) * zoom;
-      const baseDayWidth = maxColsPerGroup * baseColw;
+      const baseColGap = px(COL_GAP) * zoom;
+      const baseDayWidth =
+         maxColsPerGroup * baseColw +
+         Math.max(0, maxColsPerGroup - 1) * baseColGap;
       return { colw: baseColw, dayWidth: baseDayWidth };
    }, [zoom, maxColsPerGroup]);
 
@@ -3355,38 +3272,17 @@ export default function ACalendarOptimized({
                   schedulePersistScroll(left, top);
                }
 
-               const viewportXThreshold = isInteractingNow
-                  ? Math.max(
-                       Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 0.9),
-                       IS_LOW_SPEC_DEVICE ? 40 : 28,
-                    )
-                  : VIEWPORT_X_SCROLL_THRESHOLD_PX;
-               const rowsThreshold = isInteractingNow
-                  ? Math.max(
-                       Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 0.9),
-                       IS_LOW_SPEC_DEVICE ? 40 : 28,
-                    )
-                  : VISIBLE_ROWS_SCROLL_THRESHOLD_PX;
-               const prevTop = lastViewportScrollTopRef.current;
                const nextWidth = el.clientWidth || 0;
                const nextHeight = el.clientHeight || 0;
                setScrollViewport((prev) => {
-                  const leftDelta = Math.abs((prev.left || 0) - left);
-                  const topDelta = prevTop < 0 ? Infinity : Math.abs(top - prevTop);
-                  const shouldBumpLeft = leftDelta >= viewportXThreshold;
-                  const shouldBumpTop = topDelta >= rowsThreshold;
-                  const shouldBumpWidth = Math.abs((prev.width || 0) - nextWidth) > 1;
-                  const shouldBumpHeight = Math.abs((prev.height || 0) - nextHeight) > 1;
-
                   if (
-                     !shouldBumpLeft &&
-                     !shouldBumpTop &&
-                     !shouldBumpWidth &&
-                     !shouldBumpHeight
+                     prev.left === left &&
+                     prev.top === top &&
+                     prev.width === nextWidth &&
+                     prev.height === nextHeight
                   ) {
                      return prev;
                   }
-                  lastViewportScrollTopRef.current = top;
                   return {
                      left,
                      top,
@@ -3540,7 +3436,7 @@ export default function ACalendarOptimized({
    return (
       <div className="dayview__wrapper">
          <div className="dayview" style={layoutVars}>
-            <ACalendarToolbar
+            <CalendarPlusToolbar
                dataReady={dataReady}
                searchInputRef={searchInputRef}
                searchInput={searchInput}
@@ -3562,7 +3458,7 @@ export default function ACalendarOptimized({
                onSectorChange={setSectorFilter}
             />
 
-            <ACalendarTrack
+            <CalendarPlusTrack
                scrollRef={scrollRef}
                rowHeight={rowHeight}
                dayRefs={dayRefs}
@@ -3605,437 +3501,3 @@ export default function ACalendarOptimized({
       </div>
    );
 }
-
-/* ================== TOOLBAR ================== */
-
-function ACalendarToolbar({
-   dataReady,
-   searchInputRef,
-   searchInput,
-   onSearchInputChange,
-   onRunSearch,
-   onClearSearch,
-   onPrevHit,
-   onNextHit,
-   searchTotal,
-   searchIndex,
-   currentZoomValue,
-   zoomOptions,
-   onZoomChange,
-   currentMonthValue,
-   monthOptions,
-   onMonthChange,
-   sectorFilter,
-   sectorOptions,
-   onSectorChange,
-}) {
-   return (
-      <div className="dayview__header">
-         <SimpleDropdown
-            value={currentMonthValue}
-            onChange={onMonthChange}
-            options={monthOptions}
-            placeholder="Alege luna"
-            className="dv-dd--month"
-            aria-label="Alege luna"
-         />
-
-         <SimpleDropdown
-            value={sectorFilter}
-            onChange={onSectorChange}
-            options={sectorOptions}
-            placeholder="Sector"
-            className="dv-dd--sector"
-            aria-label="Filtrează după sector"
-         />
-
-         <div className="dv-search">
-            <div className="dv-search__input-wrapper">
-               <input
-                  ref={searchInputRef}
-                  className="dv-search__input"
-                  placeholder={
-                     dataReady
-                        ? "Caută după nume / telefon / notiță…"
-                        : "Se încarcă programările…"
-                  }
-                  disabled={!dataReady}
-                  value={searchInput}
-                  onChange={onSearchInputChange}
-                  onKeyDown={(e) => {
-                     if (e.key === "Enter") {
-                        onRunSearch();
-                     } else if (e.key === "ArrowLeft") {
-                        if (searchTotal) {
-                           e.preventDefault();
-                           onPrevHit();
-                        }
-                     } else if (e.key === "ArrowRight") {
-                        if (searchTotal) {
-                           e.preventDefault();
-                           onNextHit();
-                        }
-                     } else if (e.key === "Escape") {
-                        if (searchInput) {
-                           e.preventDefault();
-                           onClearSearch();
-                        }
-                     }
-                  }}
-               />
-               <button
-                  type="button"
-                  className="dv-search__btn-clear"
-                  disabled={!searchInput}
-                  onClick={onClearSearch}
-                  title="Șterge căutarea"
-               >
-                  ✕
-               </button>
-            </div>
-
-            <div className="dv-search__nav">
-               <button
-                  type="button"
-                  className="dv-search__btn"
-                  disabled={!dataReady}
-                  onClick={onRunSearch}
-                  title="Caută"
-               >
-                  <ReactSVG
-                     className="rbc-btn-group__icon react-icon"
-                     src={searchIcon}
-                  />
-               </button>
-            </div>
-
-            <div className="dv-search__count-wrapper">
-               <span className="dv-search__count">
-                  {searchTotal ? `${searchIndex + 1}/${searchTotal}` : "0/0"}
-               </span>
-
-               <button
-                  type="button"
-                  className="dv-search__btn-count"
-                  disabled={!searchTotal}
-                  onClick={onPrevHit}
-                  title="Rezultatul anterior"
-               >
-                  ◀
-               </button>
-
-               <button
-                  type="button"
-                  className="dv-search__btn-count"
-                  disabled={!searchTotal}
-                  onClick={onNextHit}
-                  title="Rezultatul următor"
-               >
-                  ▶
-               </button>
-            </div>
-         </div>
-
-         <SimpleDropdown
-            value={currentZoomValue}
-            onChange={onZoomChange}
-            options={zoomOptions}
-            placeholder="Zoom"
-            className="dv-dd--zoom"
-            aria-label="Nivel zoom"
-         />
-      </div>
-   );
-}
-
-/* ================== TRACK ================== */
-
-// ✅ ÎNLOCUIEȘTE COMPLET componenta ACalendarTrack cu asta (și nimic altceva)
-
-// ✅ ÎNLOCUIEȘTE COMPLET componenta ACalendarTrack cu asta (și nimic altceva)
-
-const ACalendarTrack = memo(function ACalendarTrack({
-   scrollRef,
-   rowHeight,
-   dayRefs,
-   loadedDays,
-   visibleDays,
-   stickyVisibleDays,
-   isPanInteracting,
-   isDummyMode,
-   allowedInstBySector,
-   baseMetrics,
-   maxColsPerGroup,
-   zoom,
-   timeMarks,
-   handleCreateFromEmpty,
-   activeEventId,
-   activeSearchEventId,
-   handleActiveEventRectChange,
-   cars,
-   instructors,
-   users,
-   canvasInstructorsA,
-   canvasInstructorsB,
-   viewportScrollLeft,
-   viewportScrollTop,
-   viewportWidth,
-   viewportHeight,
-   viewModel,
-   forceAllDaysVisible,
-   createDraftBySlotUsers,
-   createDraftBySlotColors,
-   presenceByReservationUsers,
-   presenceByReservationColors,
-
-   // ✅ NEW (le pasezi din ACalendarOptimized)
-   orderEditOpen,
-   onToggleOrderEdit,
-   onCloseOrderEdit,
-   onSaveOrder,
-}) {
-   const eventsByDay = viewModel?.eventsByDay ?? EMPTY_MAP;
-   const standardSlotsByDay = viewModel?.standardSlotsByDay ?? EMPTY_MAP;
-   const blackoutKeyMap = viewModel?.blackoutKeyMap || null;
-   const blackoutVer = viewModel?.blackoutVer ?? 0;
-
-   const eventsByDayForView = useMemo(() => {
-      if (!allowedInstBySector) return eventsByDay;
-
-      const filtered = new Map();
-      for (const [ts, evs] of eventsByDay.entries()) {
-         if (!Array.isArray(evs) || !evs.length) {
-            filtered.set(ts, EMPTY_EVENTS);
-            continue;
-         }
-         const arr = evs.filter((ev) =>
-            allowedInstBySector.has(String(ev?.instructorId ?? "__unknown")),
-         );
-         filtered.set(ts, arr.length ? arr : EMPTY_EVENTS);
-      }
-      return filtered;
-   }, [eventsByDay, allowedInstBySector]);
-
-   const labelFormatter = useMemo(
-      () =>
-         new Intl.DateTimeFormat("ro-RO", {
-            weekday: "short",
-            day: "2-digit",
-            month: "short",
-         }),
-      [],
-   );
-   const canvasLayout = useMemo(
-      () => ({
-         colWidth: baseMetrics.colw,
-         colGap: 12 * zoom,
-         headerHeight: 100 * zoom,
-         slotHeight: 125 * zoom,
-         colsPerRow: maxColsPerGroup,
-         rowGap: 24 * zoom,
-         dayWidth: baseMetrics.dayWidth,
-      }),
-      [baseMetrics.colw, baseMetrics.dayWidth, zoom, maxColsPerGroup],
-   );
-
-   const isGroupAForDate = useCallback((dateObj) => {
-      const dow = dateObj.getDay(); // 0=Sun,1=Mon,...6=Sat
-      return dow === 0 || dow === 2 || dow === 4; // ✅ Dum + Mar + Joi
-   }, []);
-
-   const dayEntries = useMemo(
-      () =>
-         loadedDays.map((d) => {
-            const ts = startOfDayTs(d);
-            const dayStartLocal = new Date(d);
-            dayStartLocal.setHours(7, 0, 0, 0);
-            const dayEndLocal = new Date(d);
-            dayEndLocal.setHours(21, 0, 0, 0);
-            return {
-               ts,
-               label: labelFormatter.format(d).replace(",", ""),
-               dayStartTs: dayStartLocal.getTime(),
-               dayEndTs: dayEndLocal.getTime(),
-               isGroupA: isGroupAForDate(d),
-            };
-         }),
-      [loadedDays, isGroupAForDate, labelFormatter],
-   );
-
-   return (
-      <div
-         className="dv-track-wrap"
-         style={{
-            position: "relative",
-            height: rowHeight ? `${rowHeight}px` : undefined,
-         }}
-      >
-         {/* ✅ UN SINGUR BUTON pe tot track-ul (sus-stânga) */}
-         <button
-            type="button"
-            data-dv-interactive="1"
-            className="dv-track-edit-btn"
-            onClick={onToggleOrderEdit}
-            title={
-               orderEditOpen
-                  ? "Înapoi la calendar"
-                  : "Editează ordinea instructorilor"
-            }
-         >
-            {orderEditOpen ? "Înapoi" : "Edit"}
-         </button>
-
-         <div
-            className="dayview__row dv-pan"
-            ref={scrollRef}
-            style={{
-               touchAction: orderEditOpen ? "auto" : "none",
-               height: "100%",
-               overflowX: "auto",
-               overflowY: "auto",
-               overscrollBehavior: "contain",
-               cursor: orderEditOpen ? "default" : "grab",
-               WebkitUserDrag: "none",
-               userSelect: "none",
-               willChange: "scroll-position",
-            }}
-         >
-            {orderEditOpen ? (
-               // ✅ EDIT MODE: Track dispare, editorul apare în loc
-               <DayOrderEditorModal
-                  open={true}
-                  inline={true}
-                  cars={cars}
-                  instructors={instructors} // ✅ din store (ordonat pt UI)
-                  onClose={onCloseOrderEdit}
-                  onSave={onSaveOrder}
-               />
-            ) : (
-               // ✅ NORMAL MODE: Track-ul normal (zilele)
-               <div
-                  className="dayview__track"
-                  style={{
-                     display: "flex",
-                     alignItems: "stretch",
-                     gap: `${TRACK_DAY_GAP_PX}px`,
-                     paddingRight: `${TRACK_DAY_GAP_PX}px`,
-                     height: "100%",
-                  }}
-               >
-                  {dayEntries.map((entry, dayIdx) => {
-                     const { ts, label, dayStartTs, dayEndTs, isGroupA } =
-                        entry;
-                     const dayOffsetLeft =
-                        dayIdx * (baseMetrics.dayWidth + TRACK_DAY_GAP_PX);
-                     const stickyAllowed = true;
-                     const isVisible =
-                        forceAllDaysVisible ||
-                        visibleDays.has(ts) ||
-                        (stickyAllowed && stickyVisibleDays?.has?.(ts));
-                     const dayInstructors = isGroupA
-                        ? canvasInstructorsA
-                        : canvasInstructorsB;
-                     let evs = EMPTY_EVENTS;
-                     let slots = EMPTY_SLOTS;
-
-                     if (isVisible) {
-                        evs = isDummyMode
-                           ? EMPTY_EVENTS
-                           : eventsByDayForView.get(ts) || EMPTY_EVENTS;
-
-                        slots = standardSlotsByDay.get(ts) || EMPTY_SLOTS;
-                     }
-
-                     return (
-                        <section
-                           key={ts}
-                           ref={(el) => {
-                              const map = dayRefs.current;
-                              if (el) {
-                                 map.set(ts, el);
-                                 el.dataset.dayTs = String(ts);
-                              } else {
-                                 map.delete(ts);
-                              }
-                           }}
-                           className="dayview__group-wrap cv-auto"
-                           data-active="1"
-                           data-day-ts={ts}
-                           style={{
-                              flex: "0 0 auto",
-                              width: `${baseMetrics.dayWidth}px`,
-                              minWidth: `${baseMetrics.dayWidth}px`,
-                              display: "flex",
-                              flexDirection: "column",
-                              contain: "layout paint",
-                           }}
-                        >
-                           <header className="dayview__group-header">
-                              <div className="dayview__group-title">
-                                 {label}
-                              </div>
-                           </header>
-
-                           <div
-                              className="dayview__group-content dayview__group-content--row"
-                              style={{ flex: "1 1 auto", minHeight: 0 }}
-                           >
-                              {isVisible ? (
-                                 <DayviewCanvasTrack
-                                    dayStart={dayStartTs}
-                                    dayEnd={dayEndTs}
-                                    instructors={dayInstructors} // ✅ A/B pe zi
-                                    events={DEBUG_CANVAS_EMPTY ? [] : evs}
-                                    slots={slots}
-                                    dayOffsetLeft={dayOffsetLeft}
-                                    viewportScrollLeft={viewportScrollLeft}
-                                    viewportScrollTop={viewportScrollTop}
-                                    viewportWidth={viewportWidth}
-                                    viewportHeight={viewportHeight}
-                                    layout={canvasLayout}
-                                    timeMarks={timeMarks}
-                                    onCreateSlot={handleCreateFromEmpty}
-                                    blockedKeyMap={
-                                       DEBUG_CANVAS_EMPTY
-                                          ? null
-                                          : isDummyMode
-                                            ? null
-                                            : blackoutKeyMap
-                                    }
-                                    blackoutVer={blackoutVer}
-                                    activeEventId={activeEventId}
-                                    activeSearchEventId={activeSearchEventId}
-                                    onActiveEventRectChange={
-                                       handleActiveEventRectChange
-                                    }
-                                    cars={cars}
-                                    instructorsFull={instructors}
-                                    users={users}
-                                    zoom={zoom / Z_BASE}
-                                    presenceByReservationUsers={
-                                       presenceByReservationUsers
-                                    }
-                                    presenceByReservationColors={
-                                       presenceByReservationColors
-                                    }
-                                    createDraftBySlotColors={
-                                       createDraftBySlotColors
-                                    }
-                                    createDraftBySlotUsers={
-                                       createDraftBySlotUsers
-                                    }
-                                    isPanInteracting={isPanInteracting}
-                                 />
-                              ) : (
-                                 <div className="dayview__skeleton" />
-                              )}
-                           </div>
-                        </section>
-                     );
-                  })}
-               </div>
-            )}
-         </div>
-      </div>
-   );
-});

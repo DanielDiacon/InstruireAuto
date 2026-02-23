@@ -144,7 +144,6 @@ const STATIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 40 : 56;
 const DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 104 : 148;
 const HITMAP_INTERACTION_KEEP_MS = 1600;
 const HITMAP_STALE_MAX_AGE_MS = IS_LOW_SPEC_DEVICE ? 520 : 360;
-const DISABLE_SECTION_VIRTUALIZATION = false;
 
 function computeSafeCanvasDpr(cssWidth, cssHeight, desiredDpr) {
    const width = Math.max(1, Number(cssWidth) || 1);
@@ -279,6 +278,17 @@ function reservationPrivateMessageFromAny(node) {
 
 function normalizeGearboxValue(value) {
    return String(value || "").toLowerCase() === "automat" ? "Automat" : "Manual";
+}
+
+function toLocalDateTimeString(value) {
+   const d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+   if (Number.isNaN(d.getTime())) return "";
+   const y = d.getFullYear();
+   const m = String(d.getMonth() + 1).padStart(2, "0");
+   const day = String(d.getDate()).padStart(2, "0");
+   const h = String(d.getHours()).padStart(2, "0");
+   const min = String(d.getMinutes()).padStart(2, "0");
+   return `${y}-${m}-${day}T${h}:${min}:00`;
 }
 
 function toSlotKeyForCompare(value) {
@@ -3275,8 +3285,6 @@ function DayviewCanvasTrack({
    ]);
 
    const isDayNearViewport = useMemo(() => {
-      if (DISABLE_SECTION_VIRTUALIZATION) return true;
-
       const viewWidth = Math.max(0, Number(viewportWidth) || 0);
       if (viewWidth <= 0) return true;
 
@@ -3298,9 +3306,6 @@ function DayviewCanvasTrack({
    const rowRenderRange = useMemo(() => {
       const rowsCount = Number(headerMetrics?.rowsCount || 0);
       if (!rowsCount) return { start: 0, end: 0 };
-      if (DISABLE_SECTION_VIRTUALIZATION) {
-         return { start: 0, end: rowsCount - 1 };
-      }
 
       const viewH = Number(viewportHeight) || 0;
       if (viewH <= 0) return { start: 0, end: rowsCount - 1 };
@@ -3350,9 +3355,6 @@ function DayviewCanvasTrack({
    const colRenderRange = useMemo(() => {
       const colsPerRow = Math.max(1, Number(headerMetrics?.colsPerRow || 0));
       if (!colsPerRow) return { start: 0, end: 0 };
-      if (DISABLE_SECTION_VIRTUALIZATION) {
-         return { start: 0, end: colsPerRow - 1 };
-      }
 
       const viewW = Number(viewportWidth) || 0;
       if (viewW <= 0) return { start: 0, end: colsPerRow - 1 };
@@ -4975,8 +4977,15 @@ function DayviewCanvasTrack({
       async (copy, slot) => {
          if (!copy || !slot) return;
 
+         const slotStartDate = new Date(slot.slotStart);
+         if (Number.isNaN(slotStartDate.getTime())) return;
+
          const startTimeToSend = buildStartTimeForSlot(slot.slotStart);
          if (!startTimeToSend) return;
+
+         // Preview optimist: păstrăm exact ora slotului selectat (fără shift).
+         const optimisticStartTime =
+            toLocalDateTimeString(slotStartDate) || startTimeToSend;
 
          let instructorIdNum = Number(
             slot.actionInstructorId ?? slot.instructorId,
@@ -5006,7 +5015,7 @@ function DayviewCanvasTrack({
             id: optimisticId,
             userId: userIdNum,
             instructorId: instructorIdNum,
-            startTime: startTimeToSend,
+            startTime: optimisticStartTime,
             sector: fallbackSector,
             gearbox: fallbackGearbox,
             privateMessage: fallbackPrivateMessage,

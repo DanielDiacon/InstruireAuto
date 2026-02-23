@@ -45,7 +45,7 @@ const GROUP_TOKEN_FIXED = "ABCD1234";
 const EMAIL_DOMAIN = "instrauto.com";
 const MOLDOVA_TZ = "Europe/Chisinau";
 const SEARCH_RESULTS_LIMIT = 10;
-const OUTSIDE_CLOSE_GUARD_MS = 280;
+const OUTSIDE_CLOSE_GUARD_MS = 120;
 const EMPTY_USERS = [];
 
 function hasUserRole(u) {
@@ -1109,6 +1109,94 @@ export default function CreateRezervation({
       } catch {}
    }, []);
 
+   const runPostCreateSync = useCallback(
+      ({ createResult, startTimeToSend, studentIdNum, instructorIdNum }) => {
+         // rulează după close, ca UI-ul să rămână instant
+         setTimeout(() => {
+            const sync = async () => {
+               try {
+                  const targetLocalKey = busyLocalKeyFromStored(startTimeToSend);
+                  let createdCandidates = extractCreatedReservations(
+                     createResult,
+                  ).filter(
+                     (row) =>
+                        (!Number.isFinite(row.userId) ||
+                           row.userId === studentIdNum) &&
+                        (!row.startRaw ||
+                           !targetLocalKey ||
+                           busyLocalKeyFromStored(row.startRaw) ===
+                              targetLocalKey),
+                  );
+
+                  if (!createdCandidates.length) {
+                     try {
+                        const fromUserRaw = await getUserReservations(studentIdNum);
+                        const fromUser = Array.isArray(fromUserRaw)
+                           ? fromUserRaw
+                           : Array.isArray(fromUserRaw?.items)
+                             ? fromUserRaw.items
+                             : [];
+
+                        createdCandidates = fromUser
+                           .map((row) => ({
+                              id: Number(reservationIdFromAny(row)),
+                              instructorId: Number(
+                                 reservationInstructorIdFromAny(row),
+                              ),
+                              userId: Number(reservationUserIdFromAny(row)),
+                              startRaw: String(reservationStartFromAny(row) || ""),
+                           }))
+                           .filter(
+                              (row) =>
+                                 Number.isFinite(row.id) &&
+                                 (!Number.isFinite(row.userId) ||
+                                    row.userId === studentIdNum) &&
+                                 (!row.startRaw ||
+                                    !targetLocalKey ||
+                                    busyLocalKeyFromStored(row.startRaw) ===
+                                       targetLocalKey),
+                           );
+                     } catch {}
+                  }
+
+                  const toFixIds = createdCandidates
+                     .filter(
+                        (row) =>
+                           Number.isFinite(row.id) &&
+                           (!Number.isFinite(row.instructorId) ||
+                              row.instructorId !== instructorIdNum),
+                     )
+                     .map((row) => Number(row.id));
+
+                  if (toFixIds.length) {
+                     await Promise.all(
+                        toFixIds.map((rid) =>
+                           patchReservation(rid, {
+                              instructorId: instructorIdNum,
+                           }).catch(() => null),
+                        ),
+                     );
+                  }
+
+                  notifyBlackoutsChanged(instructorIdNum);
+
+                  try {
+                     await (dispatch(fetchReservationsDelta()).unwrap?.() ??
+                        dispatch(fetchReservationsDelta()));
+                  } catch {}
+
+                  try {
+                     triggerCalendarRefresh();
+                  } catch {}
+               } catch {}
+            };
+
+            sync();
+         }, 0);
+      },
+      [dispatch, notifyBlackoutsChanged],
+   );
+
    const onSave = useCallback(async () => {
       if (saving) return;
       if (!studentId) return pushPill("Selectează/creează elevul.");
@@ -1134,107 +1222,56 @@ export default function CreateRezervation({
       const startTimeToSend =
          BUSY_KEYS_MODE === "local-match" ? isoForDbMatchLocalHour(iso) : iso;
 
+      const payload = {
+         userId: studentIdNum,
+         instructorId: instructorIdNum,
+         reservations: [
+            {
+               startTime: startTimeToSend,
+               sector: sector || "Botanica",
+               gearbox:
+                  (gearbox || "Manual").toLowerCase() === "automat"
+                     ? "Automat"
+                     : "Manual",
+               privateMessage: privateMessage || "",
+               // ✅ CHANGE: culoare + tichete
+               color: colorToken || "--black-t",
+               isFavorite: !!isFavorite,
+               isImportant: !!isImportant,
+               instructorId: instructorIdNum,
+            },
+         ],
+      };
+
       setSaving(true);
-      try {
-         const payload = {
-            userId: studentIdNum,
-            instructorId: instructorIdNum,
-            reservations: [
-               {
-                  startTime: startTimeToSend,
-                  sector: sector || "Botanica",
-                  gearbox:
-                     (gearbox || "Manual").toLowerCase() === "automat"
-                        ? "Automat"
-                        : "Manual",
-                  privateMessage: privateMessage || "",
-                  // ✅ CHANGE: culoare + tichete
-                  color: colorToken || "--black-t",
-                  isFavorite: !!isFavorite,
-                  isImportant: !!isImportant,
-                  instructorId: instructorIdNum,
-               },
-            ],
-         };
+      closeSelf();
 
-         const createResult = await createReservationsForUser(payload);
-
-         const targetLocalKey = busyLocalKeyFromStored(startTimeToSend);
-         let createdCandidates = extractCreatedReservations(createResult).filter(
-            (row) =>
-               (!Number.isFinite(row.userId) || row.userId === studentIdNum) &&
-               (!row.startRaw ||
-                  !targetLocalKey ||
-                  busyLocalKeyFromStored(row.startRaw) === targetLocalKey),
-         );
-
-         if (!createdCandidates.length) {
+      void (async () => {
+         try {
+            const createResult = await createReservationsForUser(payload);
             try {
-               const fromUserRaw = await getUserReservations(studentIdNum);
-               const fromUser = Array.isArray(fromUserRaw)
-                  ? fromUserRaw
-                  : Array.isArray(fromUserRaw?.items)
-                    ? fromUserRaw.items
-                    : [];
-
-               createdCandidates = fromUser
-                  .map((row) => ({
-                     id: Number(reservationIdFromAny(row)),
-                     instructorId: Number(reservationInstructorIdFromAny(row)),
-                     userId: Number(reservationUserIdFromAny(row)),
-                     startRaw: String(reservationStartFromAny(row) || ""),
-                  }))
-                  .filter(
-                     (row) =>
-                        Number.isFinite(row.id) &&
-                        (!Number.isFinite(row.userId) || row.userId === studentIdNum) &&
-                        (!row.startRaw ||
-                           !targetLocalKey ||
-                           busyLocalKeyFromStored(row.startRaw) === targetLocalKey),
-                  );
+               triggerCalendarRefresh();
             } catch {}
+            runPostCreateSync({
+               createResult,
+               startTimeToSend,
+               studentIdNum,
+               instructorIdNum,
+            });
+         } catch (e) {
+            console.error("[CreateRezervation] create failed:", e);
+            try {
+               scheduleCalendarRefresh({
+                  source: "popup",
+                  type: "create-failed",
+                  instructorId: String(instructorIdNum),
+                  forceReload: true,
+               });
+            } catch {}
+         } finally {
+            setSaving(false);
          }
-
-         const toFixIds = createdCandidates
-            .filter(
-               (row) =>
-                  Number.isFinite(row.id) &&
-                  (!Number.isFinite(row.instructorId) ||
-                     row.instructorId !== instructorIdNum),
-            )
-            .map((row) => Number(row.id));
-
-         if (toFixIds.length) {
-            await Promise.all(
-               toFixIds.map((rid) =>
-                  patchReservation(rid, { instructorId: instructorIdNum }).catch(
-                     () => null,
-                  ),
-               ),
-            );
-         }
-
-         notifyBlackoutsChanged(instructorIdNum);
-
-         setMessages([
-            { id: Date.now(), type: "success", text: "Programare creată." },
-         ]);
-
-         try {
-            await (dispatch(fetchReservationsDelta()).unwrap?.() ??
-               dispatch(fetchReservationsDelta()));
-         } catch {}
-
-         try {
-            triggerCalendarRefresh();
-         } catch {}
-
-         closeSelf();
-      } catch (e) {
-         pushPill(e?.message || "Nu am putut crea programarea.");
-      } finally {
-         setSaving(false);
-      }
+      })();
    }, [
       saving,
       studentId,
@@ -1247,10 +1284,9 @@ export default function CreateRezervation({
       colorToken,
       isFavorite,
       isImportant,
-      dispatch,
       pushPill,
       closeSelf,
-      notifyBlackoutsChanged,
+      runPostCreateSync,
    ]);
 
    const validNewName = newFullName.trim().split(/\s+/).length >= 2;

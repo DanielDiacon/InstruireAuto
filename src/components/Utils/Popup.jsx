@@ -1,5 +1,12 @@
 // src/components/Utils/Popup.jsx
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, {
+   useEffect,
+   useState,
+   useRef,
+   useCallback,
+   lazy,
+   Suspense,
+} from "react";
 import {
    subscribePopup,
    getCurrentPopup,
@@ -8,28 +15,75 @@ import {
    closeSubPopup as requestCloseSubPopup,
 } from "./popupStore";
 
-import AAddProg from "../Popups/AAddProg";
-import SAddProg from "../Popups/SAddProg";
-import AddInstr from "../Popups/AddInstr";
-import ADayInfoPopup from "../Popups/ADayInfo";
-import StudentInfo from "../Popups/StudentInfo";
-import ReservationEdit from "../Popups/EditReservation";
 import { ReactSVG } from "react-svg";
 import addIcon from "../../assets/svg/add-s.svg";
-import Profile from "../Popups/Profile";
-import EventInfoPopup from "../Popups/EventInfo";
-import InstrEventInfoPopup from "../Popups/InstrEventInfo";
-import AddManager from "../Popups/AddManager";
-import StudentsMultiSelectPopup from "../Popups/StudentsMultiSelectPopup";
-import CreateRezervation from "../Popups/CreateRezervation";
-import QuestionCategoriesPopup from "../Popups/QuestionCategories";
-import AddProfessor from "../Popups/AddProfessor";
 
 const DEFERRED_POPUP_TYPES = new Set([
    "studentDetails",
    "reservationEdit",
    "createRezervation",
 ]);
+
+function lazyWithPreload(factory) {
+   const Component = lazy(factory);
+   Component.preload = factory;
+   return Component;
+}
+
+const AAddProg = lazyWithPreload(() => import("../Popups/AAddProg"));
+const SAddProg = lazyWithPreload(() => import("../Popups/SAddProg"));
+const AddInstr = lazyWithPreload(() => import("../Popups/AddInstr"));
+const ADayInfoPopup = lazyWithPreload(() => import("../Popups/ADayInfo"));
+const StudentInfo = lazyWithPreload(() => import("../Popups/StudentInfo"));
+const ReservationEdit = lazyWithPreload(
+   () => import("../Popups/EditReservation"),
+);
+const Profile = lazyWithPreload(() => import("../Popups/Profile"));
+const EventInfoPopup = lazyWithPreload(() => import("../Popups/EventInfo"));
+const InstrEventInfoPopup = lazyWithPreload(
+   () => import("../Popups/InstrEventInfo"),
+);
+const AddManager = lazyWithPreload(() => import("../Popups/AddManager"));
+const StudentsMultiSelectPopup = lazyWithPreload(
+   () => import("../Popups/StudentsMultiSelectPopup"),
+);
+const CreateRezervation = lazyWithPreload(
+   () => import("../Popups/CreateRezervation"),
+);
+const QuestionCategoriesPopup = lazyWithPreload(
+   () => import("../Popups/QuestionCategories"),
+);
+const AddProfessor = lazyWithPreload(() => import("../Popups/AddProfessor"));
+
+const POPUP_COMPONENT_BY_TYPE = {
+   addProg: AAddProg,
+   sAddProg: SAddProg,
+   addInstr: AddInstr,
+   dayInfo: ADayInfoPopup,
+   studentDetails: StudentInfo,
+   reservationEdit: ReservationEdit,
+   profile: Profile,
+   eventInfo: EventInfoPopup,
+   instrEventInfo: InstrEventInfoPopup,
+   addManager: AddManager,
+   addProfessor: AddProfessor,
+   startExam: StudentsMultiSelectPopup,
+   createRezervation: CreateRezervation,
+   questionCategories: QuestionCategoriesPopup,
+};
+
+const IDLE_PRELOAD_POPUPS = [
+   "createRezervation",
+   "reservationEdit",
+   "studentDetails",
+   "addProg",
+];
+
+function preloadPopupByType(type) {
+   const key = String(type || "");
+   if (!key) return;
+   POPUP_COMPONENT_BY_TYPE[key]?.preload?.();
+}
 
 export default function Popup() {
    const [popupState, setPopupState] = useState({
@@ -43,6 +97,11 @@ export default function Popup() {
 
    // 🔑 cheie care forțează remount pe fiecare OPEN
    const [openKey, setOpenKey] = useState(0);
+   const loadingFallback = (
+      <div className="popupui popupui__content">
+         <div className="popupui__disclaimer">Se încarcă...</div>
+      </div>
+   );
 
    // --- mobil doar (pentru back care închide popup-ul)
    const isMobile = () =>
@@ -132,7 +191,7 @@ export default function Popup() {
       return window.confirm("Sigur doriți să ieșiți din acest popup?");
    }, [popupState?.type]);
 
-   const handleCloseClick = useCallback(() => {
+   const handleCloseClick = () => {
       if (!confirmCloseCurrentPopup()) return;
 
       // dacă ai subpopup (stack), îl închizi separat
@@ -147,7 +206,7 @@ export default function Popup() {
       // pe mobil, scoatem dummy-ul doar dacă e pe top
       const sid = sessionIdRef.current;
       maybePopPopupDummy(sid);
-   }, [confirmCloseCurrentPopup]);
+   };
 
    // ✅ Back hardware / gesture: dacă popup e deschis, îl închidem
    useEffect(() => {
@@ -180,6 +239,37 @@ export default function Popup() {
    }, [confirmCloseCurrentPopup]);
 
    useEffect(() => {
+      if (typeof window === "undefined") return undefined;
+      let timeoutId = null;
+      let idleId = null;
+      let canceled = false;
+
+      const runPreload = () => {
+         if (canceled) return;
+         IDLE_PRELOAD_POPUPS.forEach((type) => preloadPopupByType(type));
+      };
+
+      if (typeof window.requestIdleCallback === "function") {
+         idleId = window.requestIdleCallback(runPreload, { timeout: 1200 });
+      } else {
+         timeoutId = window.setTimeout(runPreload, 350);
+      }
+
+      return () => {
+         canceled = true;
+         if (
+            idleId != null &&
+            typeof window.cancelIdleCallback === "function"
+         ) {
+            window.cancelIdleCallback(idleId);
+         }
+         if (timeoutId != null) {
+            window.clearTimeout(timeoutId);
+         }
+      };
+   }, []);
+
+   useEffect(() => {
       const unsubscribe = subscribePopup(({ detail }) => {
          if (detail) {
             // ===== OPEN =====
@@ -190,6 +280,7 @@ export default function Popup() {
             sessionIdRef.current += 1;
             const sid = sessionIdRef.current;
             const popupType = detail.type;
+            preloadPopupByType(popupType);
             const deferHeavyMount = DEFERRED_POPUP_TYPES.has(popupType);
 
             didPopHistoryRef.current = false;
@@ -338,11 +429,9 @@ export default function Popup() {
             />
             <div className="popup-panel__inner">
                {contentReady ? (
-                  renderContent()
+                  <Suspense fallback={loadingFallback}>{renderContent()}</Suspense>
                ) : (
-                  <div className="popupui popupui__content">
-                     <div className="popupui__disclaimer">Se încarcă...</div>
-                  </div>
+                  loadingFallback
                )}
             </div>
          </div>

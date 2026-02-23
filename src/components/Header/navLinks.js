@@ -75,6 +75,7 @@ export function getLinksForRole(roleRaw) {
       ADMIN: [
          { link: "/admin", text: "Acasă", icon: homeIcon },
          { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
+         { link: "/admin/calendarplus", text: "Calendar Plus", icon: addIcon },
          { popup: "addProg", text: "Programare", icon: addIcon },
          { popup: "addInstr", text: "Instructori", icon: instrIcon },
          { popup: "addProfessor", text: "Profesori", icon: instrIcon },

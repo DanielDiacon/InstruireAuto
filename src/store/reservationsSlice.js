@@ -346,6 +346,15 @@ const reservationsSlice = createSlice({
       },
 
       // 🔥 NEW: ștergere instant locală (optimistic)
+      addReservationLocal(state, action) {
+         const row = action.payload;
+         if (!row || row.id == null) return;
+
+         const id = String(row.id);
+         const idx = state.list.findIndex((r) => String(r.id) === id);
+         if (idx === -1) state.list.unshift(row);
+         else state.list[idx] = { ...state.list[idx], ...row };
+      },
       removeReservationLocal(state, action) {
          const id = String(action.payload);
          state.list = state.list.filter((r) => String(r.id) !== id);
@@ -592,6 +601,7 @@ export const {
    resetBusy,
    clearStudentReservations,
    setActiveRange,
+   addReservationLocal,
    removeReservationLocal,
    patchReservationLocal,
 } = reservationsSlice.actions;

@@ -22,6 +22,7 @@ import SPCalendar from "./pages/SPages/SPCalendar";
 import APanel from "./pages/APanel";
 import APGroups from "./pages/APages/APGroups";
 import APCalendar from "./pages/APages/APCalendar";
+import APCalendarPlus from "./pages/APages/APCalendarPlus";
 import APHistory from "./pages/APages/APHistory";
 import APInstrGroups from "./pages/APages/APInstrGroups";
 
@@ -143,6 +144,22 @@ const App = () => {
                      element={
                         <ProtectedRoute allowedRoles={["ADMIN"]}>
                            <APCalendar />
+                        </ProtectedRoute>
+                     }
+                  />
+                  <Route
+                     path="/calendarplus"
+                     element={
+                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                           <APCalendarPlus />
+                        </ProtectedRoute>
+                     }
+                  />
+                  <Route
+                     path="/admin/calendarplus"
+                     element={
+                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                           <APCalendarPlus />
                         </ProtectedRoute>
                      }
                   />
