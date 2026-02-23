@@ -132,7 +132,7 @@ const WORKER_COLOR_TOKENS_BASE = [
 const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
 const CLICK_COMMIT_DELAY_MS = 90;
-const DAY_OFFSCREEN_MARGIN_BASE_PX = 320;
+const DAY_OFFSCREEN_MARGIN_BASE_PX = IS_LOW_SPEC_DEVICE ? 460 : 620;
 const CANVAS_MAX_EDGE_PX = IS_LOW_SPEC_DEVICE ? 8192 : 12288;
 const CANVAS_MAX_TOTAL_PIXELS = IS_LOW_SPEC_DEVICE ? 8_000_000 : 16_000_000;
 const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
@@ -1410,6 +1410,7 @@ function DayviewCanvasTrack({
    cars = [],
    instructorsFull = [],
    users = [],
+   sharedLookups = null,
    zoom = 1,
    preGrid,
    onManualSelection,
@@ -1767,16 +1768,54 @@ function DayviewCanvasTrack({
    // ===== users index (fast lookup) =====
    const normPhone = (p) => String(p || "").replace(/\D+/g, "");
 
+   const sharedUsersById =
+      sharedLookups?.usersById instanceof Map ? sharedLookups.usersById : null;
+   const sharedUsersByPhone =
+      sharedLookups?.usersByPhone instanceof Map
+         ? sharedLookups.usersByPhone
+         : null;
+   const sharedUsersByNormName =
+      sharedLookups?.usersByNormName instanceof Map
+         ? sharedLookups.usersByNormName
+         : null;
+   const sharedInstructorsFullById =
+      sharedLookups?.instructorsFullById instanceof Map
+         ? sharedLookups.instructorsFullById
+         : null;
+   const sharedCarsByInstructorId =
+      sharedLookups?.carsByInstructorId instanceof Map
+         ? sharedLookups.carsByInstructorId
+         : null;
+   const sharedInstructorUsersByNormName =
+      sharedLookups?.instructorUsersByNormName instanceof Map
+         ? sharedLookups.instructorUsersByNormName
+         : null;
+   const sharedUserColorById =
+      sharedLookups?.userColorById instanceof Map
+         ? sharedLookups.userColorById
+         : null;
+   const sharedDesiredInstructorBadgeByUserId =
+      sharedLookups?.desiredInstructorBadgeByUserId instanceof Map
+         ? sharedLookups.desiredInstructorBadgeByUserId
+         : null;
+   const sharedMapsForHistory =
+      sharedLookups?.mapsForHistory?.userById instanceof Map &&
+      sharedLookups?.mapsForHistory?.instrById instanceof Map
+         ? sharedLookups.mapsForHistory
+         : null;
+
    const usersById = useMemo(() => {
+      if (sharedUsersById) return sharedUsersById;
       const m = new Map();
       (users || []).forEach((u) => {
          if (u?.id == null) return;
          m.set(String(u.id), u);
       });
       return m;
-   }, [users]);
+   }, [sharedUsersById, users]);
 
    const usersByPhone = useMemo(() => {
+      if (sharedUsersByPhone) return sharedUsersByPhone;
       const m = new Map();
       (users || []).forEach((u) => {
          if (u?.id == null) return;
@@ -1786,9 +1825,10 @@ function DayviewCanvasTrack({
          if (!m.has(k)) m.set(k, u);
       });
       return m;
-   }, [users]);
+   }, [sharedUsersByPhone, users]);
 
    const usersByNormName = useMemo(() => {
+      if (sharedUsersByNormName) return sharedUsersByNormName;
       const m = new Map();
       (users || []).forEach((u) => {
          const key = norm(`${u?.firstName ?? ""} ${u?.lastName ?? ""}`);
@@ -1796,18 +1836,20 @@ function DayviewCanvasTrack({
          m.set(key, u);
       });
       return m;
-   }, [users]);
+   }, [sharedUsersByNormName, users]);
 
    const instructorsFullById = useMemo(() => {
+      if (sharedInstructorsFullById) return sharedInstructorsFullById;
       const m = new Map();
       (instructorsFull || []).forEach((inst) => {
          if (inst?.id == null) return;
          m.set(String(inst.id), inst);
       });
       return m;
-   }, [instructorsFull]);
+   }, [sharedInstructorsFullById, instructorsFull]);
 
    const carsByInstructorId = useMemo(() => {
+      if (sharedCarsByInstructorId) return sharedCarsByInstructorId;
       const m = new Map();
       (cars || []).forEach((car) => {
          const iid = car?.instructorId ?? car?.instructor_id ?? null;
@@ -1815,9 +1857,10 @@ function DayviewCanvasTrack({
          m.set(String(iid), car);
       });
       return m;
-   }, [cars]);
+   }, [sharedCarsByInstructorId, cars]);
 
    const instructorUsersByNormName = useMemo(() => {
+      if (sharedInstructorUsersByNormName) return sharedInstructorUsersByNormName;
       const m = new Map();
       (users || []).forEach((u) => {
          if (String(u?.role ?? "").toUpperCase() !== "INSTRUCTOR") return;
@@ -1826,7 +1869,7 @@ function DayviewCanvasTrack({
          m.set(key, u);
       });
       return m;
-   }, [users]);
+   }, [sharedInstructorUsersByNormName, users]);
 
    const pickUserFromStore = useCallback(
       (userIdRaw, phoneRaw, firstNameSeed, lastNameSeed) => {
@@ -1911,6 +1954,7 @@ function DayviewCanvasTrack({
 
    // ✅ A) Culori user + culori prezență per rezervare
    const userColorById = useMemo(() => {
+      if (sharedUserColorById) return sharedUserColorById;
       const m = new Map();
       (users || []).forEach((u) => {
          if (u?.id == null) return;
@@ -1920,7 +1964,7 @@ function DayviewCanvasTrack({
          if (c) m.set(String(u.id), c);
       });
       return m;
-   }, [users]);
+   }, [sharedUserColorById, users]);
 
    const presenceColorsByReservation = useMemo(() => {
       const src = presenceByReservationColors;
@@ -2116,10 +2160,10 @@ function DayviewCanvasTrack({
    const [rangeHistLoading, setRangeHistLoading] = useState(false);
    const [rangeHistError, setRangeHistError] = useState("");
 
-   const mapsForHistory = useMemo(
-      () => buildNameMaps({ users, instructorsFull }),
-      [users, instructorsFull],
-   );
+   const mapsForHistory = useMemo(() => {
+      if (sharedMapsForHistory) return sharedMapsForHistory;
+      return buildNameMaps({ users, instructorsFull });
+   }, [sharedMapsForHistory, users, instructorsFull]);
 
    function initialsFromName(full) {
       const parts = String(full || "")
@@ -2133,6 +2177,9 @@ function DayviewCanvasTrack({
    }
 
    const desiredInstructorBadgeByUserId = useMemo(() => {
+      if (sharedDesiredInstructorBadgeByUserId) {
+         return sharedDesiredInstructorBadgeByUserId;
+      }
       const instrInitialsById = new Map();
 
       (instructorsFull || []).forEach((i) => {
@@ -2159,7 +2206,7 @@ function DayviewCanvasTrack({
       });
 
       return out;
-   }, [users, instructorsFull]);
+   }, [sharedDesiredInstructorBadgeByUserId, users, instructorsFull]);
 
    const desiredBadgeSig = useMemo(() => {
       if (
@@ -3289,7 +3336,7 @@ function DayviewCanvasTrack({
 
       const margin = Math.max(
          DAY_OFFSCREEN_MARGIN_BASE_PX,
-         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.25 : 0.4)),
+         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.45 : 0.65)),
       );
 
       return !(dayRight < viewLeft - margin || dayLeft > viewRight + margin);
@@ -3309,7 +3356,10 @@ function DayviewCanvasTrack({
       const rowHeights = headerMetrics?.rowHeights || [];
       const headerH = Number(headerMetrics?.headerHeight || 0);
       const fallbackWorldHeight = Number(headerMetrics?.worldHeight || 0);
-      const overscanPx = Math.max(120, Math.round(viewH * 0.25));
+      const overscanPx = Math.max(
+         IS_LOW_SPEC_DEVICE ? 210 : 290,
+         Math.round(viewH * (IS_LOW_SPEC_DEVICE ? 0.5 : 0.7)),
+      );
 
       const viewTop = Math.max(0, Number(viewportScrollTop) || 0);
       const viewBottom = viewTop + viewH;
@@ -3367,7 +3417,10 @@ function DayviewCanvasTrack({
             : 0;
 
       const stride = Math.max(1, colWidth + colGap);
-      const overscanPx = Math.max(180, Math.round(colWidth * 1.5));
+      const overscanPx = Math.max(
+         IS_LOW_SPEC_DEVICE ? 320 : 420,
+         Math.round(colWidth * (IS_LOW_SPEC_DEVICE ? 2.3 : 3.0)),
+      );
 
       const globalViewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
       const localDayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
@@ -3995,11 +4048,11 @@ function DayviewCanvasTrack({
       const viewW = Math.max(0, Number(viewportWidth) || 0);
       const viewH = Math.max(0, Number(viewportHeight) || 0);
       const overscanX = isPanInteracting
-         ? Math.max(56, Math.round(colWidth * 0.45))
-         : Math.max(80, Math.round(colWidth * 0.75));
+         ? Math.max(110, Math.round(colWidth * 0.8))
+         : Math.max(160, Math.round(colWidth * 1.2));
       const overscanY = isPanInteracting
-         ? Math.max(84, Math.round(slotHeight * 1.0))
-         : Math.max(120, Math.round(slotHeight * 1.5));
+         ? Math.max(150, Math.round(slotHeight * 1.6))
+         : Math.max(220, Math.round(slotHeight * 2.2));
       const canWindow = shouldRenderScene && viewW > 0 && viewH > 0;
       const renderSurfaceWidth = canWindow
          ? Math.max(1, Math.min(width, Math.round(viewW + overscanX * 2)))

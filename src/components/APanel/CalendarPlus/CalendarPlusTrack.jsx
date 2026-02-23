@@ -5,6 +5,11 @@ import DayviewDomTrack from "./DayviewDomTrack";
 
 const TRACK_DAY_GAP_PX = 24;
 const Z_BASE = 0.6;
+const IS_LOW_SPEC_DEVICE =
+   typeof navigator !== "undefined" &&
+   ((Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 4) ||
+      (Number(navigator.hardwareConcurrency) > 0 &&
+         Number(navigator.hardwareConcurrency) <= 4));
 
 const EMPTY_EVENTS = [];
 const EMPTY_SLOTS = [];
@@ -98,6 +103,39 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
       [baseMetrics.colw, baseMetrics.dayWidth, zoom, maxColsPerGroup],
    );
 
+   const dayViewportOverscanPx = useMemo(() => {
+      const dayW = Math.max(1, Number(baseMetrics?.dayWidth) || 1);
+      const vw = Math.max(0, Number(viewportWidth) || 0);
+
+      if (vw <= 0) return dayW * (IS_LOW_SPEC_DEVICE ? 4 : 5);
+
+      return Math.max(
+         dayW * (IS_LOW_SPEC_DEVICE ? 2.6 : 3.2),
+         Math.round(vw * (IS_LOW_SPEC_DEVICE ? 1.0 : 1.25)),
+      );
+   }, [baseMetrics?.dayWidth, viewportWidth]);
+
+   const isDayInViewportWindow = useCallback(
+      (dayLeft, dayWidth, dayIdx) => {
+         const vw = Math.max(0, Number(viewportWidth) || 0);
+         if (vw <= 0) {
+            return dayIdx < (IS_LOW_SPEC_DEVICE ? 5 : 7);
+         }
+
+         const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+         const viewRight = viewLeft + vw;
+         const left = Math.max(0, Number(dayLeft) || 0);
+         const width = Math.max(1, Number(dayWidth) || 1);
+         const right = left + width;
+
+         return !(
+            right < viewLeft - dayViewportOverscanPx ||
+            left > viewRight + dayViewportOverscanPx
+         );
+      },
+      [viewportWidth, viewportScrollLeft, dayViewportOverscanPx],
+   );
+
    const isGroupAForDate = useCallback((dateObj) => {
       const dow = dateObj.getDay();
       return dow === 0 || dow === 2 || dow === 4;
@@ -184,26 +222,15 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                         entry;
                      const dayOffsetLeft =
                         dayIdx * (baseMetrics.dayWidth + TRACK_DAY_GAP_PX);
-                     const viewLeft = Math.max(
-                        0,
-                        Number(viewportScrollLeft) || 0,
-                     );
-                     const viewWidth = Math.max(0, Number(viewportWidth) || 0);
-                     const viewRight = viewLeft + viewWidth;
-                     const dayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
-                     const dayRight = dayLeft + Math.max(0, baseMetrics.dayWidth);
-                     const isDayInViewport =
-                        viewWidth <= 0 ||
-                        !(
-                           dayRight < viewLeft - TRACK_DAY_GAP_PX ||
-                           dayLeft > viewRight + TRACK_DAY_GAP_PX
-                        );
                      const stickyAllowed = !isPanInteracting;
-                     const isVisible =
-                        forceAllDaysVisible ||
-                        isDayInViewport ||
-                        visibleDays.has(ts) ||
-                        (stickyAllowed && stickyVisibleDays?.has?.(ts));
+                     const isVisible = forceAllDaysVisible
+                        ? isDayInViewportWindow(
+                             dayOffsetLeft,
+                             baseMetrics.dayWidth,
+                             dayIdx,
+                          )
+                        : visibleDays.has(ts) ||
+                          (stickyAllowed && stickyVisibleDays?.has?.(ts));
                      const dayInstructors = isGroupA
                         ? canvasInstructorsA
                         : canvasInstructorsB;

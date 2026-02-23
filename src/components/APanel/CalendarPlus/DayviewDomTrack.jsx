@@ -51,12 +51,12 @@ import {
 } from "./globals";
 
 const PAD_IDS = new Set(["__pad_1", "__pad_2", "__pad_3", "__pad_4"]);
-const DAY_OFFSCREEN_MARGIN_BASE_PX = 320;
 const IS_LOW_SPEC_DEVICE =
    typeof navigator !== "undefined" &&
    ((Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 4) ||
       (Number(navigator.hardwareConcurrency) > 0 &&
          Number(navigator.hardwareConcurrency) <= 4));
+const DAY_OFFSCREEN_MARGIN_BASE_PX = IS_LOW_SPEC_DEVICE ? 520 : 680;
 
 function normalizeColorToken(input) {
    const raw = String(input || DEFAULT_EVENT_COLOR_TOKEN).trim();
@@ -521,7 +521,7 @@ export default memo(function DayviewDomTrack({
 
       const margin = Math.max(
          DAY_OFFSCREEN_MARGIN_BASE_PX,
-         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.25 : 0.4)),
+         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.55 : 0.8)),
       );
 
       return !(dayRight < viewLeft - margin || dayLeft > viewRight + margin);
@@ -536,7 +536,10 @@ export default memo(function DayviewDomTrack({
 
       const viewTop = Math.max(0, Number(viewportScrollTop) || 0);
       const viewBottom = viewTop + viewH;
-      const overscanPx = Math.max(120, Math.round(viewH * 0.25));
+      const overscanPx = Math.max(
+         IS_LOW_SPEC_DEVICE ? 220 : 300,
+         Math.round(viewH * (IS_LOW_SPEC_DEVICE ? 0.55 : 0.75)),
+      );
 
       let start = 0;
       let end = rowsCount - 1;
@@ -567,7 +570,10 @@ export default memo(function DayviewDomTrack({
       if (viewW <= 0) return { start: 0, end: colsPerRow - 1 };
 
       const stride = Math.max(1, colWidth + colGap);
-      const overscanPx = Math.max(180, Math.round(colWidth * 1.5));
+      const overscanPx = Math.max(
+         IS_LOW_SPEC_DEVICE ? 320 : 420,
+         Math.round(colWidth * (IS_LOW_SPEC_DEVICE ? 2.4 : 3.2)),
+      );
       const globalViewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
       const localDayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
       const localViewLeft = Math.max(0, globalViewLeft - localDayLeft);

@@ -76,7 +76,6 @@ const IDLE_PRELOAD_POPUPS = [
    "createRezervation",
    "reservationEdit",
    "studentDetails",
-   "addProg",
 ];
 
 function preloadPopupByType(type) {
@@ -249,10 +248,10 @@ export default function Popup() {
          IDLE_PRELOAD_POPUPS.forEach((type) => preloadPopupByType(type));
       };
 
+      timeoutId = window.setTimeout(runPreload, 2400);
+
       if (typeof window.requestIdleCallback === "function") {
-         idleId = window.requestIdleCallback(runPreload, { timeout: 1200 });
-      } else {
-         timeoutId = window.setTimeout(runPreload, 350);
+         idleId = window.requestIdleCallback(runPreload, { timeout: 3500 });
       }
 
       return () => {

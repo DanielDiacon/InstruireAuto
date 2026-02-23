@@ -46,8 +46,8 @@ const GROUP_SLOT_LIMIT = 3;
 // limită totală lecții în sistem
 const MAX_TOTAL_LESSONS = 30;
 
-// LIVE refresh interval (ms)
-const LIVE_REFRESH_MS = 15 * 60_000;
+// la Ciocana: primele 7 lecții pe instructorul din Botanica
+const CIOCANA_BOTANICA_FIRST_LESSONS = 7;
 
 const oreDisponibile = [
    { eticheta: "07:00", oraStart: "07:00" },
@@ -227,6 +227,74 @@ const addMonths = (d, n) => {
 const asStr = (v) => (v == null ? "" : String(v));
 const asStrLower = (v) => asStr(v).trim().toLowerCase();
 
+function toPositiveIntOrNull(v) {
+   const n = Number(v);
+   return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function normalizeInstructorIds(ids) {
+   const out = [];
+   const seen = new Set();
+   for (const raw of Array.isArray(ids) ? ids : []) {
+      const id = toPositiveIntOrNull(raw);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+   }
+   return out;
+}
+
+const PRIVILEGED_FOR_USER_ROLES = new Set(["ADMIN", "MANAGER", "INSTRUCTOR"]);
+
+function userCanUseForUserEndpoint(userLike) {
+   const role = asStr(userLike?.role).trim().toUpperCase();
+   return PRIVILEGED_FOR_USER_ROLES.has(role);
+}
+
+function getUserIdFromContext(userLike) {
+   return toPositiveIntOrNull(
+      userLike?.id ??
+         userLike?.userId ??
+         userLike?.user?.id ??
+         userLike?.sub ??
+         null,
+   );
+}
+
+const getInstructorIdFromReservation = (r) =>
+   toPositiveIntOrNull(r?.instructorId ?? r?.instructor?.id ?? null);
+
+const getInstructorSectorFromReservation = (r) =>
+   asStrLower(r?.instructorSector ?? r?.instructor?.sector ?? "");
+
+function detectBotanicaInstructorFromReservations(
+   reservations = [],
+   candidateIds = [],
+) {
+   const scores = new Map(); // instructorId -> botanica hits
+   const allowed = new Set(normalizeInstructorIds(candidateIds));
+
+   for (const r of reservations || []) {
+      const iid = getInstructorIdFromReservation(r);
+      if (!iid) continue;
+      if (allowed.size && !allowed.has(iid)) continue;
+
+      const sec = getInstructorSectorFromReservation(r);
+      if (!sec.includes("botanica")) continue;
+      scores.set(iid, (scores.get(iid) || 0) + 1);
+   }
+
+   let bestId = null;
+   let bestScore = -1;
+   for (const [iid, score] of scores.entries()) {
+      if (score > bestScore) {
+         bestId = iid;
+         bestScore = score;
+      }
+   }
+   return bestId;
+}
+
 const getStartFromReservation = (r) =>
    r?.startTime ?? r?.start ?? r?.dateTime ?? r?.datetime ?? r?.begin ?? null;
 
@@ -299,12 +367,12 @@ async function fetchInstructorBlackoutsSafe(instructorId, range) {
    const fn = InstructorsAPI?.getInstructorBlackouts;
    if (typeof fn !== "function") return { data: [] };
    try {
-      return await fn({ instructorId, ...range });
+      return await fn(instructorId, range || {});
    } catch (e1) {
       try {
-         return await fn(instructorId, range);
-      } catch (e2) {
          return await fn(instructorId);
+      } catch (e2) {
+         return { data: [] };
       }
    }
 }
@@ -369,7 +437,14 @@ function expandBlackoutToStartTimes(b) {
 
 /* ================== maps builders (busy/blocked) ================== */
 
-function buildBusyCountMapFromReservations(reservations = []) {
+function buildBusyCountMapFromReservations(reservations = [], opts = {}) {
+   const includeIds = new Set(
+      normalizeInstructorIds(opts?.includeInstructorIds).map(String),
+   );
+   const excludeIds = new Set(
+      normalizeInstructorIds(opts?.excludeInstructorIds).map(String),
+   );
+
    const setMap = new Map(); // key -> Set(iid)
    const extraCountMap = new Map(); // key -> count
    for (const r of reservations || []) {
@@ -379,7 +454,11 @@ function buildBusyCountMapFromReservations(reservations = []) {
       const hhmm = key.slice(-5);
       if (!SLOT_LABELS.has(hhmm)) continue;
 
-      const iid = r?.instructorId ?? r?.instructor?.id ?? null;
+      const iid = getInstructorIdFromReservation(r);
+      if (iid != null && excludeIds.has(String(iid))) continue;
+      if (includeIds.size && (iid == null || !includeIds.has(String(iid))))
+         continue;
+
       if (iid != null) {
          const s = setMap.get(key) || new Set();
          s.add(String(iid));
@@ -394,6 +473,18 @@ function buildBusyCountMapFromReservations(reservations = []) {
    for (const [key, c] of extraCountMap.entries())
       out.set(key, (out.get(key) || 0) + c);
    return out;
+}
+
+function filterBusyMapToRange(busyMapAll, minDay, maxDay) {
+   const busyMap = new Map();
+   for (const [key, count] of busyMapAll.entries()) {
+      const day = key.slice(0, 10);
+      const hhmm = key.slice(-5);
+      if (day < minDay || day > maxDay) continue;
+      if (!SLOT_LABELS.has(hhmm)) continue;
+      busyMap.set(key, count);
+   }
+   return busyMap;
 }
 
 async function buildBlockedCountMapFromInstructorIds(
@@ -569,6 +660,10 @@ export default function SAddProg({ onClose }) {
    }, [sector, tip]);
 
    const backendWantGroup = backendType === "group";
+   const isCiocanaSplitScenario = useMemo(
+      () => sector === "Ciocana" && backendWantGroup,
+      [sector, backendWantGroup],
+   );
 
    useEffect(() => {
       if (sector === "Ciocana" && tip !== "single") setTip("single");
@@ -594,6 +689,23 @@ export default function SAddProg({ onClose }) {
    const [serverBlockedCountByKey, setServerBlockedCountByKey] = useState(
       () => new Map(),
    );
+
+   // Ciocana split (Etapa 1 Botanica, Etapa 2 Ciocana fără Botanica)
+   const [ciocanaBotanicaInstructorId, setCiocanaBotanicaInstructorId] =
+      useState(null);
+   const [ciocanaRemainingInstructorIds, setCiocanaRemainingInstructorIds] =
+      useState([]);
+   const [ciocanaPhase1BusyCountByKey, setCiocanaPhase1BusyCountByKey] =
+      useState(() => new Map());
+   const [ciocanaPhase1BlockedCountByKey, setCiocanaPhase1BlockedCountByKey] =
+      useState(() => new Map());
+   const [ciocanaPhase1Capacity, setCiocanaPhase1Capacity] = useState(1);
+   const [ciocanaPhase2BusyCountByKey, setCiocanaPhase2BusyCountByKey] =
+      useState(() => new Map());
+   const [ciocanaPhase2BlockedCountByKey, setCiocanaPhase2BlockedCountByKey] =
+      useState(() => new Map());
+   const [ciocanaPhase2Capacity, setCiocanaPhase2Capacity] = useState(1);
+   const ciocanaPhaseByKeyRef = useRef(new Map()); // key -> 1 | 2
 
    // user reservations (pt 1/zi + total 30)
    const [userReservations, setUserReservations] = useState([]);
@@ -641,6 +753,17 @@ export default function SAddProg({ onClose }) {
    const requiredSubmitCount = useMemo(
       () => Math.min(Number(numarLectii) || 0, remainingTo30),
       [numarLectii, remainingTo30],
+   );
+   const ciocanaPhase1Target = useMemo(
+      () =>
+         isCiocanaSplitScenario
+            ? Math.min(CIOCANA_BOTANICA_FIRST_LESSONS, requiredSubmitCount)
+            : 0,
+      [isCiocanaSplitScenario, requiredSubmitCount],
+   );
+   const ciocanaPhase2Target = useMemo(
+      () => Math.max(0, requiredSubmitCount - ciocanaPhase1Target),
+      [requiredSubmitCount, ciocanaPhase1Target],
    );
 
    // ✅ AUTO anchor ca în OldSAddProg
@@ -703,15 +826,112 @@ export default function SAddProg({ onClose }) {
       return map;
    }, [selectedDates]);
 
+   useEffect(() => {
+      if (!isCiocanaSplitScenario) {
+         ciocanaPhaseByKeyRef.current.clear();
+         return;
+      }
+
+      const keep = new Set(
+         selectedDates.map((iso) =>
+            localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ),
+         ),
+      );
+      for (const key of Array.from(ciocanaPhaseByKeyRef.current.keys())) {
+         if (!keep.has(key)) ciocanaPhaseByKeyRef.current.delete(key);
+      }
+   }, [selectedDates, isCiocanaSplitScenario]);
+
+   const ciocanaSelectedPhase1Count = useMemo(() => {
+      if (!isCiocanaSplitScenario) return 0;
+      let count = 0;
+      for (const iso of selectedDates) {
+         const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+         if (ciocanaPhaseByKeyRef.current.get(key) === 1) count += 1;
+      }
+      return count;
+   }, [selectedDates, isCiocanaSplitScenario]);
+
+   const ciocanaSelectedPhase2Count = useMemo(() => {
+      if (!isCiocanaSplitScenario) return 0;
+      let count = 0;
+      for (const iso of selectedDates) {
+         const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+         if (ciocanaPhaseByKeyRef.current.get(key) === 2) count += 1;
+      }
+      return count;
+   }, [selectedDates, isCiocanaSplitScenario]);
+
+   const ciocanaSplitReady = useMemo(() => {
+      if (!isCiocanaSplitScenario) return false;
+      if (!assignedGroupId) return false;
+      if (!toPositiveIntOrNull(ciocanaBotanicaInstructorId)) return false;
+      if (ciocanaPhase2Target <= 0) return true;
+      return (ciocanaRemainingInstructorIds || []).length > 0;
+   }, [
+      isCiocanaSplitScenario,
+      assignedGroupId,
+      ciocanaBotanicaInstructorId,
+      ciocanaRemainingInstructorIds,
+      ciocanaPhase2Target,
+   ]);
+
+   const ciocanaCurrentPhase = useMemo(() => {
+      if (!ciocanaSplitReady) return 0;
+      return ciocanaSelectedPhase1Count < ciocanaPhase1Target ? 1 : 2;
+   }, [ciocanaSplitReady, ciocanaSelectedPhase1Count, ciocanaPhase1Target]);
+
+   const activeBusyCountByKey = useMemo(() => {
+      if (ciocanaSplitReady && ciocanaCurrentPhase === 1)
+         return ciocanaPhase1BusyCountByKey;
+      if (ciocanaSplitReady && ciocanaCurrentPhase === 2)
+         return ciocanaPhase2BusyCountByKey;
+      return serverBusyCountByKey;
+   }, [
+      ciocanaSplitReady,
+      ciocanaCurrentPhase,
+      ciocanaPhase1BusyCountByKey,
+      ciocanaPhase2BusyCountByKey,
+      serverBusyCountByKey,
+   ]);
+
+   const activeBlockedCountByKey = useMemo(() => {
+      if (ciocanaSplitReady && ciocanaCurrentPhase === 1)
+         return ciocanaPhase1BlockedCountByKey;
+      if (ciocanaSplitReady && ciocanaCurrentPhase === 2)
+         return ciocanaPhase2BlockedCountByKey;
+      return serverBlockedCountByKey;
+   }, [
+      ciocanaSplitReady,
+      ciocanaCurrentPhase,
+      ciocanaPhase1BlockedCountByKey,
+      ciocanaPhase2BlockedCountByKey,
+      serverBlockedCountByKey,
+   ]);
+
+   const activeCapacity = useMemo(() => {
+      if (ciocanaSplitReady && ciocanaCurrentPhase === 1)
+         return ciocanaPhase1Capacity || 1;
+      if (ciocanaSplitReady && ciocanaCurrentPhase === 2)
+         return ciocanaPhase2Capacity || 1;
+      return capacity || 1;
+   }, [
+      ciocanaSplitReady,
+      ciocanaCurrentPhase,
+      ciocanaPhase1Capacity,
+      ciocanaPhase2Capacity,
+      capacity,
+   ]);
+
    // meta per slot
    const getSlotMeta = useCallback(
       (key) => {
-         const usedServer = key ? serverBusyCountByKey.get(key) || 0 : 0;
+         const usedServer = key ? activeBusyCountByKey.get(key) || 0 : 0;
          const usedSelected = key ? selectedCountByKey.get(key) || 0 : 0;
          const used = usedServer + usedSelected;
 
-         const blocked = key ? serverBlockedCountByKey.get(key) || 0 : 0;
-         const total = capacity || 1;
+         const blocked = key ? activeBlockedCountByKey.get(key) || 0 : 0;
+         const total = activeCapacity || 1;
          const sum = used + blocked;
 
          const full = sum >= total;
@@ -729,29 +949,29 @@ export default function SAddProg({ onClose }) {
          };
       },
       [
-         serverBusyCountByKey,
-         serverBlockedCountByKey,
+         activeBusyCountByKey,
+         activeBlockedCountByKey,
          selectedCountByKey,
-         capacity,
+         activeCapacity,
       ],
    );
 
    // full-day set: dacă TOATE sloturile sunt full
    const fullyBlockedDaySet = useMemo(() => {
       const set = new Set();
-      const total = capacity || 1;
+      const total = activeCapacity || 1;
 
       const dayToFullSlots = new Map();
       const keys = new Set([
-         ...serverBusyCountByKey.keys(),
-         ...serverBlockedCountByKey.keys(),
+         ...activeBusyCountByKey.keys(),
+         ...activeBlockedCountByKey.keys(),
          ...selectedCountByKey.keys(),
       ]);
 
       for (const key of keys) {
-         const usedServer = serverBusyCountByKey.get(key) || 0;
+         const usedServer = activeBusyCountByKey.get(key) || 0;
          const usedSelected = selectedCountByKey.get(key) || 0;
-         const blocked = serverBlockedCountByKey.get(key) || 0;
+         const blocked = activeBlockedCountByKey.get(key) || 0;
          const sum = usedServer + usedSelected + blocked;
 
          if (sum >= total) {
@@ -765,10 +985,10 @@ export default function SAddProg({ onClose }) {
       }
       return set;
    }, [
-      serverBusyCountByKey,
-      serverBlockedCountByKey,
+      activeBusyCountByKey,
+      activeBlockedCountByKey,
       selectedCountByKey,
-      capacity,
+      activeCapacity,
    ]);
 
    // init: încarcă rezervările userului
@@ -810,12 +1030,168 @@ export default function SAddProg({ onClose }) {
       setServerBlockedCountByKey(new Map());
       setCapacity(1);
       setActiveInstructorIds([]);
+      setCiocanaBotanicaInstructorId(null);
+      setCiocanaRemainingInstructorIds([]);
+      setCiocanaPhase1BusyCountByKey(new Map());
+      setCiocanaPhase1BlockedCountByKey(new Map());
+      setCiocanaPhase1Capacity(1);
+      setCiocanaPhase2BusyCountByKey(new Map());
+      setCiocanaPhase2BlockedCountByKey(new Map());
+      setCiocanaPhase2Capacity(1);
+      ciocanaPhaseByKeyRef.current.clear();
 
       setAssignedGroupId(null);
       setAssignedInstructorId(null);
 
       setLastLiveRefreshAt(null);
    }, []);
+
+   const clearCiocanaSplitState = useCallback(() => {
+      setCiocanaBotanicaInstructorId(null);
+      setCiocanaRemainingInstructorIds([]);
+      setCiocanaPhase1BusyCountByKey(new Map());
+      setCiocanaPhase1BlockedCountByKey(new Map());
+      setCiocanaPhase1Capacity(1);
+      setCiocanaPhase2BusyCountByKey(new Map());
+      setCiocanaPhase2BlockedCountByKey(new Map());
+      setCiocanaPhase2Capacity(1);
+      ciocanaPhaseByKeyRef.current.clear();
+   }, []);
+
+   const buildCiocanaSplitAvailabilityFromBusyItem = useCallback(
+      async (busyItem, groupId) => {
+         const reservations = Array.isArray(busyItem?.reservations)
+            ? busyItem.reservations
+            : [];
+
+         const idsFromBusy = normalizeInstructorIds(busyItem?.instructorsIds);
+         const idsFromReservations = normalizeInstructorIds(
+            reservations.map((r) => getInstructorIdFromReservation(r)),
+         );
+         const allInstructorIds = normalizeInstructorIds([
+            ...idsFromBusy,
+            ...idsFromReservations,
+         ]);
+
+         if (!allInstructorIds.length) {
+            throw new Error(
+               `Grupul ${groupId} nu are instructori în payload-ul busy.`,
+            );
+         }
+
+         let botanicaId = detectBotanicaInstructorFromReservations(
+            reservations,
+            allInstructorIds,
+         );
+
+         if (!botanicaId && typeof InstructorsAPI?.getInstructors === "function") {
+            try {
+               const allInstructors = await InstructorsAPI.getInstructors();
+               const arr = Array.isArray(allInstructors)
+                  ? allInstructors
+                  : Array.isArray(allInstructors?.items)
+                    ? allInstructors.items
+                    : [];
+               botanicaId =
+                  arr
+                     .filter((i) =>
+                        allInstructorIds.includes(
+                           toPositiveIntOrNull(i?.id) || -1,
+                        ),
+                     )
+                     .find((i) => asStrLower(i?.sector).includes("botanica"))
+                     ?.id ?? null;
+               botanicaId = toPositiveIntOrNull(botanicaId);
+            } catch {
+               botanicaId = null;
+            }
+         }
+
+         if (!botanicaId) {
+            throw new Error(
+               `Nu am putut identifica instructorul de Botanica în grupul ${groupId}.`,
+            );
+         }
+
+         const remainingInstructorIds = allInstructorIds.filter(
+            (id) => id !== botanicaId,
+         );
+         if (ciocanaPhase2Target > 0 && !remainingInstructorIds.length) {
+            throw new Error(
+               `Grupul ${groupId} nu are instructori rămași pentru etapa Ciocana.`,
+            );
+         }
+
+         const range = {
+            start: new Date(minSelectableDate).toISOString(),
+            end: new Date(maxSelectableDate).toISOString(),
+            from: minDay,
+            to: maxDay,
+            dateFrom: minDay,
+            dateTo: maxDay,
+         };
+
+         const phase1BusyMapAll = buildBusyCountMapFromReservations(
+            reservations,
+            { includeInstructorIds: [botanicaId] },
+         );
+         const phase1BusyMap = filterBusyMapToRange(
+            phase1BusyMapAll,
+            minDay,
+            maxDay,
+         );
+
+         const phase2BusyMapAll = buildBusyCountMapFromReservations(
+            reservations,
+            { includeInstructorIds: remainingInstructorIds },
+         );
+         const phase2BusyMap = filterBusyMapToRange(
+            phase2BusyMapAll,
+            minDay,
+            maxDay,
+         );
+
+         const [phase1BlockedMap, phase2BlockedMap] = await Promise.all([
+            buildBlockedCountMapFromInstructorIds(
+               [botanicaId],
+               range,
+               minDay,
+               maxDay,
+            ),
+            ciocanaPhase2Target > 0 && remainingInstructorIds.length
+               ? buildBlockedCountMapFromInstructorIds(
+                    remainingInstructorIds,
+                    range,
+                    minDay,
+                    maxDay,
+                 )
+               : Promise.resolve(new Map()),
+         ]);
+
+         const phase2CapRaw = Math.max(1, remainingInstructorIds.length || 1);
+         const phase2Cap = Math.min(GROUP_SLOT_LIMIT, phase2CapRaw);
+
+         return {
+            groupId: toPositiveIntOrNull(groupId),
+            allInstructorIds,
+            botanicaId,
+            remainingInstructorIds,
+            phase1BusyMap,
+            phase1BlockedMap,
+            phase1Cap: 1,
+            phase2BusyMap,
+            phase2BlockedMap,
+            phase2Cap,
+         };
+      },
+      [
+         minSelectableDate,
+         maxSelectableDate,
+         minDay,
+         maxDay,
+         ciocanaPhase2Target,
+      ],
+   );
 
    // ✅ Loader generic: încarcă disponibilitatea pentru ACELAȘI group/instructor (anchor)
    const loadAvailabilityForAnchor = useCallback(
@@ -829,6 +1205,7 @@ export default function SAddProg({ onClose }) {
          const sectorArg = String(opts.sector ?? sector);
 
          const wantGroup = type === "group";
+         clearCiocanaSplitState();
 
          // fixăm contextul UI
          setTip(wantGroup ? "group" : "single");
@@ -971,6 +1348,7 @@ export default function SAddProg({ onClose }) {
          dispatch,
          cutie,
          sector,
+         clearCiocanaSplitState,
          minSelectableDate,
          maxSelectableDate,
          minDay,
@@ -1099,6 +1477,7 @@ export default function SAddProg({ onClose }) {
       const best = candidates[0];
 
       setAutoFlowActive(false); // manual
+      ciocanaPhaseByKeyRef.current.clear();
 
       if (best.entityType === "group") {
          setAssignedGroupId(best.id);
@@ -1119,6 +1498,30 @@ export default function SAddProg({ onClose }) {
 
       setActiveInstructorIds(ids);
 
+      if (isCiocanaSplitScenario && best.entityType === "group") {
+         const split = await buildCiocanaSplitAvailabilityFromBusyItem(
+            best.item,
+            best.id,
+         );
+
+         setCiocanaBotanicaInstructorId(split.botanicaId);
+         setCiocanaRemainingInstructorIds(split.remainingInstructorIds);
+         setCiocanaPhase1BusyCountByKey(split.phase1BusyMap);
+         setCiocanaPhase1BlockedCountByKey(split.phase1BlockedMap);
+         setCiocanaPhase1Capacity(split.phase1Cap);
+         setCiocanaPhase2BusyCountByKey(split.phase2BusyMap);
+         setCiocanaPhase2BlockedCountByKey(split.phase2BlockedMap);
+         setCiocanaPhase2Capacity(split.phase2Cap);
+
+         setActiveInstructorIds(split.allInstructorIds);
+         setCapacity(split.phase1Cap);
+         setServerBusyCountByKey(split.phase1BusyMap);
+         setServerBlockedCountByKey(split.phase1BlockedMap);
+         setLastLiveRefreshAt(Date.now());
+         return;
+      }
+
+      clearCiocanaSplitState();
       const capRaw =
          best.entityType === "group" ? Math.max(1, ids.length || 1) : 1;
       const cap =
@@ -1129,15 +1532,7 @@ export default function SAddProg({ onClose }) {
          ? best.item.reservations
          : [];
       const busyMapAll = buildBusyCountMapFromReservations(reservations);
-
-      const busyMap = new Map();
-      for (const [key, count] of busyMapAll.entries()) {
-         const day = key.slice(0, 10);
-         const hhmm = key.slice(-5);
-         if (day < minDay || day > maxDay) continue;
-         if (!SLOT_LABELS.has(hhmm)) continue;
-         busyMap.set(key, count);
-      }
+      const busyMap = filterBusyMapToRange(busyMapAll, minDay, maxDay);
       setServerBusyCountByKey(busyMap);
 
       const range = {
@@ -1162,7 +1557,11 @@ export default function SAddProg({ onClose }) {
       numarLectii,
       cutie,
       sector,
-      tip,
+      backendType,
+      backendWantGroup,
+      isCiocanaSplitScenario,
+      clearCiocanaSplitState,
+      buildCiocanaSplitAvailabilityFromBusyItem,
       minSelectableDate,
       maxSelectableDate,
       minDay,
@@ -1260,16 +1659,22 @@ export default function SAddProg({ onClose }) {
       const reservations = Array.isArray(busyItem?.reservations)
          ? busyItem.reservations
          : [];
-      const busyMapAll = buildBusyCountMapFromReservations(reservations);
 
-      const busyMap = new Map();
-      for (const [key, count] of busyMapAll.entries()) {
-         const day = key.slice(0, 10);
-         const hhmm = key.slice(-5);
-         if (day < minDay || day > maxDay) continue;
-         if (!SLOT_LABELS.has(hhmm)) continue;
-         busyMap.set(key, count);
+      if (isCiocanaSplitScenario && type === "group") {
+         const split = await buildCiocanaSplitAvailabilityFromBusyItem(
+            busyItem,
+            chosenId,
+         );
+         return {
+            split: true,
+            type,
+            chosenId,
+            ...split,
+         };
       }
+
+      const busyMapAll = buildBusyCountMapFromReservations(reservations);
+      const busyMap = filterBusyMapToRange(busyMapAll, minDay, maxDay);
 
       let ids =
          type === "group"
@@ -1291,7 +1696,7 @@ export default function SAddProg({ onClose }) {
          maxDay,
       );
 
-      return { type, chosenId, ids, cap, busyMap, blockedMap };
+      return { split: false, type, chosenId, ids, cap, busyMap, blockedMap };
    }, [
       assignedGroupId,
       assignedInstructorId,
@@ -1299,6 +1704,8 @@ export default function SAddProg({ onClose }) {
       numarLectii,
       cutie,
       sector,
+      isCiocanaSplitScenario,
+      buildCiocanaSplitAvailabilityFromBusyItem,
       minSelectableDate,
       maxSelectableDate,
       minDay,
@@ -1318,10 +1725,27 @@ export default function SAddProg({ onClose }) {
          refreshInFlightRef.current = true;
          try {
             const live = await fetchLiveMapsForAssigned();
-            setCapacity(live.cap);
-            setActiveInstructorIds(live.ids);
-            setServerBusyCountByKey(live.busyMap);
-            setServerBlockedCountByKey(live.blockedMap);
+
+            if (live?.split) {
+               setCiocanaBotanicaInstructorId(live.botanicaId);
+               setCiocanaRemainingInstructorIds(live.remainingInstructorIds);
+               setCiocanaPhase1BusyCountByKey(live.phase1BusyMap);
+               setCiocanaPhase1BlockedCountByKey(live.phase1BlockedMap);
+               setCiocanaPhase1Capacity(live.phase1Cap);
+               setCiocanaPhase2BusyCountByKey(live.phase2BusyMap);
+               setCiocanaPhase2BlockedCountByKey(live.phase2BlockedMap);
+               setCiocanaPhase2Capacity(live.phase2Cap);
+               setActiveInstructorIds(live.allInstructorIds);
+               setCapacity(live.phase1Cap);
+               setServerBusyCountByKey(live.phase1BusyMap);
+               setServerBlockedCountByKey(live.phase1BlockedMap);
+            } else {
+               clearCiocanaSplitState();
+               setCapacity(live.cap);
+               setActiveInstructorIds(live.ids);
+               setServerBusyCountByKey(live.busyMap);
+               setServerBlockedCountByKey(live.blockedMap);
+            }
             setLastLiveRefreshAt(Date.now());
          } catch (e) {
             if (!silent) {
@@ -1341,6 +1765,7 @@ export default function SAddProg({ onClose }) {
          assignedGroupId,
          assignedInstructorId,
          notify,
+         clearCiocanaSplitState,
       ],
    );
 
@@ -1362,8 +1787,6 @@ export default function SAddProg({ onClose }) {
    // ====== Preflight live (sloturi luate între timp) ======
    const preflightSelectedLive = useCallback(
       async (datesISO, latestUserReservationsArr) => {
-         const { cap, busyMap, blockedMap } = await fetchLiveMapsForAssigned();
-
          const bookedDays = new Set();
          for (const r of latestUserReservationsArr || []) {
             const st = getStartFromReservation(r);
@@ -1373,6 +1796,8 @@ export default function SAddProg({ onClose }) {
          const daysInBatch = new Set();
          const ok = [];
          const conflicts = [];
+         let keptPhase1 = 0;
+         let keptPhase2 = 0;
 
          for (const iso of datesISO || []) {
             const day = localDateStrTZ(new Date(iso), MOLDOVA_TZ);
@@ -1393,9 +1818,57 @@ export default function SAddProg({ onClose }) {
                continue;
             }
 
-            const used = busyMap.get(key) || 0;
-            const blocked = blockedMap.get(key) || 0;
-            const full = used + blocked >= (cap || 1);
+            let used = 0;
+            let blocked = 0;
+            let cap = 1;
+            let resolvedPhase = 0;
+
+            if (ciocanaSplitReady) {
+               const fromMap = ciocanaPhaseByKeyRef.current.get(key);
+               let phase = fromMap === 1 || fromMap === 2 ? fromMap : null;
+               if (phase == null) {
+                  phase = keptPhase1 < ciocanaPhase1Target ? 1 : 2;
+               }
+               resolvedPhase = phase;
+
+               if (phase === 1) {
+                  if (keptPhase1 >= ciocanaPhase1Target) {
+                     conflicts.push({
+                        iso,
+                        reason:
+                           "Depășești etapa Botanica (primele 7 lecții).",
+                     });
+                     continue;
+                  }
+                  used = ciocanaPhase1BusyCountByKey.get(key) || 0;
+                  blocked = ciocanaPhase1BlockedCountByKey.get(key) || 0;
+                  cap = ciocanaPhase1Capacity || 1;
+               } else {
+                  if (ciocanaPhase2Target <= 0) {
+                     conflicts.push({
+                        iso,
+                        reason: "Nu mai sunt lecții pentru etapa Ciocana.",
+                     });
+                     continue;
+                  }
+                  if (keptPhase2 >= ciocanaPhase2Target) {
+                     conflicts.push({
+                        iso,
+                        reason: "Depășești etapa Ciocana.",
+                     });
+                     continue;
+                  }
+                  used = ciocanaPhase2BusyCountByKey.get(key) || 0;
+                  blocked = ciocanaPhase2BlockedCountByKey.get(key) || 0;
+                  cap = ciocanaPhase2Capacity || 1;
+               }
+            } else {
+               used = activeBusyCountByKey.get(key) || 0;
+               blocked = activeBlockedCountByKey.get(key) || 0;
+               cap = activeCapacity || 1;
+            }
+
+            const full = used + blocked >= cap;
 
             if (full) {
                conflicts.push({
@@ -1407,11 +1880,28 @@ export default function SAddProg({ onClose }) {
 
             ok.push(iso);
             daysInBatch.add(day);
+            if (ciocanaSplitReady) {
+               if (resolvedPhase === 1) keptPhase1 += 1;
+               else keptPhase2 += 1;
+            }
          }
 
          return { ok, conflicts };
       },
-      [fetchLiveMapsForAssigned],
+      [
+         ciocanaSplitReady,
+         ciocanaPhase1Target,
+         ciocanaPhase2Target,
+         ciocanaPhase1BusyCountByKey,
+         ciocanaPhase1BlockedCountByKey,
+         ciocanaPhase1Capacity,
+         ciocanaPhase2BusyCountByKey,
+         ciocanaPhase2BlockedCountByKey,
+         ciocanaPhase2Capacity,
+         activeBusyCountByKey,
+         activeBlockedCountByKey,
+         activeCapacity,
+      ],
    );
 
    const mergeRejected = (prev, next) => {
@@ -1423,6 +1913,33 @@ export default function SAddProg({ onClose }) {
          reason,
       }));
    };
+
+   const confirmSlotsPersistedForUser = useCallback(
+      async (userId, expectedIsoDates) => {
+         const uid = toPositiveIntOrNull(userId);
+         const expected = Array.isArray(expectedIsoDates) ? expectedIsoDates : [];
+         if (!uid || !expected.length) return false;
+
+         const latest = await dispatch(fetchUserReservations(uid))
+            .unwrap()
+            .catch(() => []);
+         const arr = Array.isArray(latest) ? latest : [];
+
+         const existingKeys = new Set();
+         for (const r of arr) {
+            const st = getStartFromReservation(r);
+            if (!st) continue;
+            existingKeys.add(busyLocalKeyFromStored(st));
+         }
+
+         for (const iso of expected) {
+            const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+            if (!existingKeys.has(key)) return false;
+         }
+         return true;
+      },
+      [dispatch],
+   );
 
    // ====== adaugă programare (UI) ======
    const reachedPackLimit = selectedDates.length >= requiredSubmitCount;
@@ -1469,6 +1986,16 @@ export default function SAddProg({ onClose }) {
       const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
       if (selectedKeySet.has(key)) return;
 
+      let phaseForNew = 0;
+      if (ciocanaSplitReady) {
+         phaseForNew =
+            ciocanaSelectedPhase1Count < ciocanaPhase1Target ? 1 : 2;
+         if (phaseForNew === 2 && ciocanaPhase2Target <= 0) {
+            notify("warn", "Nu mai sunt sloturi pentru etapa Ciocana.");
+            return;
+         }
+      }
+
       const { full, used, blocked, sum, total } = getSlotMeta(key);
       if (full) {
          notify(
@@ -1477,6 +2004,9 @@ export default function SAddProg({ onClose }) {
          );
          return;
       }
+
+      if (phaseForNew) ciocanaPhaseByKeyRef.current.set(key, phaseForNew);
+      else ciocanaPhaseByKeyRef.current.delete(key);
 
       setSelectedDates((prev) => sortIsoAsc([...prev, iso]));
       notify(
@@ -1511,8 +2041,11 @@ export default function SAddProg({ onClose }) {
             const daysTaken = new Set(bookedDaySet);
             const keysTaken = new Set(selectedKeySet);
             const tmpSelCount = new Map(selectedCountByKey);
+            let tmpPhase1Count = ciocanaSelectedPhase1Count;
+            let tmpPhase2Count = ciocanaSelectedPhase2Count;
 
             const additions = [];
+            const additionsMeta = [];
 
             // iterăm zilele (max ~92)
             for (
@@ -1531,22 +2064,58 @@ export default function SAddProg({ onClose }) {
                   const key = `${dayStr}|${ora.oraStart}`;
                   if (keysTaken.has(key)) continue;
 
-                  const usedServer = serverBusyCountByKey.get(key) || 0;
+                  const phase =
+                     ciocanaSplitReady && tmpPhase1Count < ciocanaPhase1Target
+                        ? 1
+                        : ciocanaSplitReady
+                          ? 2
+                          : 0;
+
+                  if (
+                     phase === 2 &&
+                     (ciocanaPhase2Target <= 0 ||
+                        tmpPhase2Count >= ciocanaPhase2Target)
+                  ) {
+                     continue;
+                  }
+
+                  const mapBusy =
+                     phase === 1
+                        ? ciocanaPhase1BusyCountByKey
+                        : phase === 2
+                          ? ciocanaPhase2BusyCountByKey
+                          : activeBusyCountByKey;
+                  const mapBlocked =
+                     phase === 1
+                        ? ciocanaPhase1BlockedCountByKey
+                        : phase === 2
+                          ? ciocanaPhase2BlockedCountByKey
+                          : activeBlockedCountByKey;
+                  const total =
+                     phase === 1
+                        ? ciocanaPhase1Capacity || 1
+                        : phase === 2
+                          ? ciocanaPhase2Capacity || 1
+                          : activeCapacity || 1;
+
+                  const usedServer = mapBusy.get(key) || 0;
                   const usedTmp = tmpSelCount.get(key) || 0;
-                  const blocked = serverBlockedCountByKey.get(key) || 0;
-                  const total = capacity || 1;
+                  const blocked = mapBlocked.get(key) || 0;
 
                   if (usedServer + usedTmp + blocked >= total) continue;
 
                   const iso = toUtcIsoFromMoldova(d, ora.oraStart);
-                  found = { iso, key, dayStr };
+                  found = { iso, key, dayStr, phase };
                   break;
                }
 
                if (found) {
                   additions.push(found.iso);
+                  additionsMeta.push({ key: found.key, phase: found.phase });
                   daysTaken.add(found.dayStr);
                   keysTaken.add(found.key);
+                  if (found.phase === 1) tmpPhase1Count += 1;
+                  if (found.phase === 2) tmpPhase2Count += 1;
                   tmpSelCount.set(
                      found.key,
                      (tmpSelCount.get(found.key) || 0) + 1,
@@ -1566,6 +2135,12 @@ export default function SAddProg({ onClose }) {
 
             if (alsoClearConflicts) {
                setRejected([]);
+            }
+
+            for (const meta of additionsMeta) {
+               if (meta?.phase === 1 || meta?.phase === 2) {
+                  ciocanaPhaseByKeyRef.current.set(meta.key, meta.phase);
+               }
             }
 
             setSelectedDates((prev) => sortIsoAsc([...prev, ...additions]));
@@ -1591,9 +2166,20 @@ export default function SAddProg({ onClose }) {
          minSelectableDate,
          maxSelectableDate,
          doLiveRefresh,
-         serverBusyCountByKey,
-         serverBlockedCountByKey,
-         capacity,
+         activeBusyCountByKey,
+         activeBlockedCountByKey,
+         activeCapacity,
+         ciocanaSplitReady,
+         ciocanaPhase1Target,
+         ciocanaPhase2Target,
+         ciocanaPhase1BusyCountByKey,
+         ciocanaPhase1BlockedCountByKey,
+         ciocanaPhase1Capacity,
+         ciocanaPhase2BusyCountByKey,
+         ciocanaPhase2BlockedCountByKey,
+         ciocanaPhase2Capacity,
+         ciocanaSelectedPhase1Count,
+         ciocanaSelectedPhase2Count,
          notify,
       ],
    );
@@ -1602,6 +2188,8 @@ export default function SAddProg({ onClose }) {
    const makeKey = (iso, idx) => `${iso}__${idx}`;
 
    const stergeSelected = (iso) => {
+      const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+      ciocanaPhaseByKeyRef.current.delete(key);
       setSelectedDates((prev) => prev.filter((x) => x !== iso));
       setConfirmDeleteKey(null);
       notify("info", `Șters: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`);
@@ -1711,37 +2299,146 @@ export default function SAddProg({ onClose }) {
          const normalizedGearbox =
             (cutie || "").toLowerCase() === "automat" ? "Automat" : "Manual";
 
-         const topLevel =
-            type === "group"
-               ? { instructorsGroupId: Number(chosenId) }
-               : { instructorId: Number(chosenId) };
-
-         const payload = {
-            ...topLevel,
-            reservations: ok.map((isoDate) => ({
-               startTime:
-                  BUSY_KEYS_MODE === "local-match"
-                     ? isoForDbMatchLocalHour(isoDate)
-                     : isoDate,
-               sector: String(sector || "Botanica"),
-               gearbox: normalizedGearbox,
-               isImportant: true,
-               privateMessage: "",
-               color: "--black-t",
-            })),
-         };
-
          notify("info", "Trimit programările...");
-         const createFn =
-            ReservationsAPI?.createReservations ||
-            ReservationsAPI?.createReservationsForUser;
-         if (typeof createFn !== "function") {
-            throw new Error(
-               "createReservations nu există în reservationsService.",
-            );
+         const createFnForUser = ReservationsAPI?.createReservationsForUser;
+         const createFnSelf = ReservationsAPI?.createReservations;
+
+         const canUseForUser = userCanUseForUserEndpoint(user);
+         if (canUseForUser && typeof createFnForUser !== "function") {
+            throw new Error("createReservationsForUser nu există.");
+         }
+         if (!canUseForUser && typeof createFnSelf !== "function") {
+            throw new Error("createReservations nu există.");
          }
 
-         await createFn(payload);
+         const userIdNum = getUserIdFromContext(user);
+         if (canUseForUser && !userIdNum) {
+            throw new Error(
+               "userId invalid. Trimiterea prin /reservations/for-user cere userId.",
+            );
+         }
+         const mapReservationPayload = (isoDate, forcedSector) => ({
+            startTime:
+               BUSY_KEYS_MODE === "local-match"
+                  ? isoForDbMatchLocalHour(isoDate)
+                  : isoDate,
+            sector: String(forcedSector || sector || "Botanica"),
+            gearbox: normalizedGearbox,
+            isFavorite: false,
+            isImportant: true,
+            privateMessage: "",
+            color: "--black-t",
+         });
+
+         if (isCiocanaSplitScenario && type === "group") {
+            const groupIdNum = toPositiveIntOrNull(chosenId);
+            const botanicaId = toPositiveIntOrNull(ciocanaBotanicaInstructorId);
+            const excludedFromGroup = normalizeInstructorIds([
+               ciocanaBotanicaInstructorId,
+            ]);
+            const excludedFromBotanica = normalizeInstructorIds(
+               ciocanaRemainingInstructorIds,
+            );
+
+            if (!groupIdNum || !botanicaId) {
+               throw new Error(
+                  "Date incomplete pentru split Ciocana (groupId/botanica instructor).",
+               );
+            }
+
+            const firstTarget = Math.min(
+               CIOCANA_BOTANICA_FIRST_LESSONS,
+               mustSubmitExactly,
+            );
+            const secondTarget = Math.max(0, mustSubmitExactly - firstTarget);
+
+            const phase1 = [];
+            const phase2 = [];
+            for (const isoDate of ok) {
+               const key = localKeyFromTs(
+                  new Date(isoDate).getTime(),
+                  MOLDOVA_TZ,
+               );
+               const phase = ciocanaPhaseByKeyRef.current.get(key);
+               if (phase === 1) phase1.push(isoDate);
+               else if (phase === 2) phase2.push(isoDate);
+               else if (phase1.length < firstTarget) phase1.push(isoDate);
+               else phase2.push(isoDate);
+            }
+
+            if (phase1.length !== firstTarget || phase2.length !== secondTarget) {
+               notify(
+                  "warn",
+                  `Split invalid: Botanica ${phase1.length}/${firstTarget}, Ciocana ${phase2.length}/${secondTarget}.`,
+               );
+               setShowList(true);
+               return;
+            }
+
+            const payloadPhase1 = {
+               instructorsGroupId: groupIdNum,
+               instructorId: botanicaId,
+               excludedInstructorIds: excludedFromBotanica,
+               reservations: phase1.map((isoDate) =>
+                  mapReservationPayload(isoDate, "Botanica"),
+               ),
+            };
+            if (canUseForUser && userIdNum) payloadPhase1.userId = userIdNum;
+
+            const payloadPhase2 = {
+               instructorsGroupId: groupIdNum,
+               instructorId: null,
+               excludedInstructorIds: excludedFromGroup,
+               reservations: phase2.map((isoDate) =>
+                  mapReservationPayload(isoDate, "Ciocana"),
+               ),
+            };
+            if (canUseForUser && userIdNum) payloadPhase2.userId = userIdNum;
+
+            if (canUseForUser) await createFnForUser(payloadPhase1);
+            else await createFnSelf(payloadPhase1);
+
+            // Etapa 2 pornește doar după confirmarea în DB a tuturor sloturilor din etapa 1.
+            const phase1Confirmed = await confirmSlotsPersistedForUser(
+               userIdNum,
+               phase1,
+            );
+            if (!phase1Confirmed) {
+               notify(
+                  "error",
+                  "Primele lecții (Botanica) nu au fost confirmate integral. Etapa 2 nu se trimite.",
+               );
+               setShowList(true);
+               return;
+            }
+
+            if (payloadPhase2.reservations.length > 0) {
+               if (canUseForUser) await createFnForUser(payloadPhase2);
+               else await createFnSelf(payloadPhase2);
+            }
+         } else {
+            const topLevel =
+               type === "group"
+                  ? {
+                       instructorsGroupId: Number(chosenId),
+                       instructorId: null,
+                    }
+                  : {
+                       instructorsGroupId: null,
+                       instructorId: Number(chosenId),
+                    };
+
+            const payload = {
+               ...topLevel,
+               reservations: ok.map((isoDate) =>
+                  mapReservationPayload(isoDate, sector),
+               ),
+            };
+            if (canUseForUser && userIdNum) payload.userId = userIdNum;
+
+            if (canUseForUser) await createFnForUser(payload);
+            else await createFnSelf(payload);
+         }
 
          // set desired instructor doar dacă lipsește
          try {
@@ -1798,28 +2495,7 @@ export default function SAddProg({ onClose }) {
       } catch (e) {
          notify("error", "A apărut o eroare la trimitere.");
          if (e?.message) notify("alert", `Detalii: ${e.message}`);
-
-         // fallback: încearcă să detecteze conflictele după eroare
-         try {
-            await doLiveRefresh(true);
-            const latestArr = Array.isArray(userReservations)
-               ? userReservations
-               : [];
-            const { ok, conflicts } = await preflightSelectedLive(
-               selectedDates,
-               latestArr,
-            );
-
-            if (conflicts.length) {
-               setRejected((prev) => mergeRejected(prev, conflicts));
-               setSelectedDates(ok);
-               setShowList(true);
-               notify(
-                  "warn",
-                  `Am detectat sloturi ocupate între timp (${conflicts.length}). Le poți șterge și înlocui (sau Auto-complete).`,
-               );
-            }
-         } catch {}
+         setShowList(true);
       } finally {
          setLoading(false);
          submitGuardRef.current = false;
@@ -1863,6 +2539,21 @@ export default function SAddProg({ onClose }) {
          minute: "2-digit",
       });
    }, [lastLiveRefreshAt]);
+
+   const ciocanaPhaseStatusText = useMemo(() => {
+      if (!ciocanaSplitReady) return null;
+      if (ciocanaCurrentPhase === 1) {
+         return `Etapa 1/2 (Botanica): ${ciocanaSelectedPhase1Count}/${ciocanaPhase1Target}`;
+      }
+      return `Etapa 2/2 (Ciocana): ${ciocanaSelectedPhase2Count}/${ciocanaPhase2Target}`;
+   }, [
+      ciocanaSplitReady,
+      ciocanaCurrentPhase,
+      ciocanaSelectedPhase1Count,
+      ciocanaSelectedPhase2Count,
+      ciocanaPhase1Target,
+      ciocanaPhase2Target,
+   ]);
 
    return (
       <>
@@ -1994,7 +2685,6 @@ export default function SAddProg({ onClose }) {
                               value="Ciocana"
                               checked={sector === "Ciocana"}
                               onChange={(e) => setSector(e.target.value)}
-                              disabled
                            />
                            Ciocana
                         </label>
@@ -2050,12 +2740,21 @@ export default function SAddProg({ onClose }) {
             ) : (
                <>
                   {/* ====== PICK ====== */}
-                  {/*<div
+                  <div
                      className="saddprogramari__muted-note"
                      style={{ marginBottom: 8 }}
                   >
                      Live refresh: <b>{liveRefreshLabel}</b>
-                  </div>*/}
+                  </div>
+                  {isCiocanaSplitScenario && (
+                     <div
+                        className="saddprogramari__muted-note"
+                        style={{ marginBottom: 8 }}
+                     >
+                        {ciocanaPhaseStatusText ||
+                           "Pregătesc split-ul Ciocana (Botanica + Ciocana)..."}
+                     </div>
+                  )}
 
                   {!showList ? (
                      <>
@@ -2147,7 +2846,7 @@ export default function SAddProg({ onClose }) {
                                           : {
                                                used: 0,
                                                blocked: 0,
-                                               total: capacity || 1,
+                                               total: activeCapacity || 1,
                                                full: false,
                                                sum: 0,
                                             };
@@ -2392,6 +3091,14 @@ export default function SAddProg({ onClose }) {
                                        const key = makeKey(iso, i);
                                        const isConfirming =
                                           confirmDeleteKey === key;
+                                       const localKey = localKeyFromTs(
+                                          new Date(iso).getTime(),
+                                          MOLDOVA_TZ,
+                                       );
+                                       const phaseTag =
+                                          ciocanaPhaseByKeyRef.current.get(
+                                             localKey,
+                                          );
 
                                        return (
                                           <li
@@ -2415,6 +3122,20 @@ export default function SAddProg({ onClose }) {
                                                       <span className="saddprogramari__added-item-time">
                                                          {formatTimeRO(iso)}
                                                       </span>
+                                                      {isCiocanaSplitScenario &&
+                                                         phaseTag === 1 && (
+                                                            <span className="saddprogramari__muted-note">
+                                                               {" "}
+                                                               · Botanica
+                                                            </span>
+                                                         )}
+                                                      {isCiocanaSplitScenario &&
+                                                         phaseTag === 2 && (
+                                                            <span className="saddprogramari__muted-note">
+                                                               {" "}
+                                                               · Ciocana
+                                                            </span>
+                                                         )}
                                                    </div>
 
                                                    <ReactSVG

@@ -65,8 +65,6 @@ const VISIBLE_DAYS_OVERSCAN = IS_LOW_SPEC_DEVICE ? 2 : 3;
 const STICKY_VISIBLE_DAYS_LIMIT = IS_LOW_SPEC_DEVICE ? 10 : 14;
 const VISIBLE_ROWS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 80 : 64;
 const VIEWPORT_X_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 56 : 40;
-const INTERACTING_DAYS_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 72 : 52;
-const INTERACTING_VIEWPORT_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 34 : 24;
 const DISABLE_DAY_LAZY_LOAD = true;
 
 function safeReadScrollStateMap() {
@@ -645,7 +643,6 @@ export default function ACalendarOptimized({
    const dayRefs = useRef(new Map());
    const scrollLazyRafRef = useRef(null);
    const lastVisibleDaysScrollLeftRef = useRef(-1);
-   const lastVisibleDaysUpdateTsRef = useRef(0);
    const lastViewportScrollTopRef = useRef(-1);
    const lastViewportUpdateTsRef = useRef(0);
    const isPanVirtualizationLockedRef = useRef(false);
@@ -1490,29 +1487,7 @@ export default function ACalendarOptimized({
    const sectorFilterNorm = sectorFilter.toLowerCase();
 
    const hasPrefetchedAllRef = useRef(false);
-   useEffect(() => {
-      if (hasPrefetchedAllRef.current) return;
-      hasPrefetchedAllRef.current = true;
-      (async () => {
-         try {
-            await Promise.all([
-               dispatch(fetchInstructors()),
-               //dispatch(fetchInstructorsGroups()),
-               dispatch(fetchStudents()),
-               dispatch(
-                  fetchReservationsForMonth({
-                     date: currentDate,
-                     extraFilters: extraFilters || {},
-                  }),
-               ),
-               dispatch(fetchCars()),
-               dispatch(fetchUsers()),
-            ]);
-         } finally {
-            // no-op
-         }
-      })();
-   }, [dispatch, currentDate, extraFilters]);
+   const hasPrefetchedLookupDataRef = useRef(false);
 
    const {
       reservations: reservationsLive,
@@ -1522,6 +1497,117 @@ export default function ACalendarOptimized({
       cars,
       users,
    } = useSelector(selectCalendarBaseData, shallowEqual);
+   const reservationsActiveRange = useSelector(
+      (state) => state?.reservations?.activeRange ?? null,
+      shallowEqual,
+   );
+
+   const hasReservationsForCurrentMonth = useMemo(() => {
+      const list = Array.isArray(reservationsLive) ? reservationsLive : [];
+      if (!list.length) return false;
+
+      const fromRaw = reservationsActiveRange?.startDateFrom;
+      const toRaw = reservationsActiveRange?.startDateTo;
+      if (!fromRaw || !toRaw) return false;
+
+      const from = new Date(fromRaw);
+      const to = new Date(toRaw);
+      if (isNaN(from) || isNaN(to)) return false;
+
+      const y = currentDate.getFullYear();
+      const m = currentDate.getMonth();
+
+      return (
+         from.getFullYear() === y &&
+         from.getMonth() === m &&
+         to.getFullYear() === y &&
+         to.getMonth() === m
+      );
+   }, [reservationsLive, reservationsActiveRange, currentDate]);
+
+   useEffect(() => {
+      if (hasPrefetchedAllRef.current) return;
+      hasPrefetchedAllRef.current = true;
+
+      const jobs = [];
+
+      if (!Array.isArray(instructors) || instructors.length === 0) {
+         jobs.push(dispatch(fetchInstructors()));
+      }
+      if (!Array.isArray(cars) || cars.length === 0) {
+         jobs.push(dispatch(fetchCars()));
+      }
+      if (!hasReservationsForCurrentMonth) {
+         jobs.push(
+            dispatch(
+               fetchReservationsForMonth({
+                  date: currentDate,
+                  extraFilters: extraFilters || {},
+               }),
+            ),
+         );
+      }
+
+      if (!jobs.length) return;
+      Promise.all(jobs).catch(() => {});
+   }, [
+      dispatch,
+      currentDate,
+      extraFilters,
+      instructors,
+      cars,
+      hasReservationsForCurrentMonth,
+   ]);
+
+   useEffect(() => {
+      if (hasPrefetchedLookupDataRef.current) return;
+
+      const hasCriticalData =
+         (reservationsLive?.length ?? 0) > 0 || (instructors?.length ?? 0) > 0;
+      if (!hasCriticalData) return;
+
+      hasPrefetchedLookupDataRef.current = true;
+
+      let timeoutId = null;
+      let idleId = null;
+      let canceled = false;
+
+      const runLookupPrefetch = () => {
+         if (canceled) return;
+         if (!Array.isArray(students) || students.length === 0) {
+            dispatch(fetchStudents());
+         }
+         if (!Array.isArray(users) || users.length === 0) {
+            dispatch(fetchUsers());
+         }
+      };
+
+      if (typeof window !== "undefined") {
+         if (typeof window.requestIdleCallback === "function") {
+            idleId = window.requestIdleCallback(runLookupPrefetch, {
+               timeout: 800,
+            });
+         } else {
+            timeoutId = window.setTimeout(runLookupPrefetch, 250);
+         }
+      } else {
+         runLookupPrefetch();
+      }
+
+      return () => {
+         canceled = true;
+         if (
+            idleId != null &&
+            typeof window !== "undefined" &&
+            typeof window.cancelIdleCallback === "function"
+         ) {
+            window.cancelIdleCallback(idleId);
+         }
+         if (timeoutId != null && typeof window !== "undefined") {
+            window.clearTimeout(timeoutId);
+         }
+      };
+   }, [dispatch, reservationsLive?.length, instructors?.length, students, users]);
 
    const handleSaveOrder = useCallback(
       async (changes) => {
@@ -2386,8 +2472,6 @@ export default function ACalendarOptimized({
          isPanVirtualizationLockedRef.current = true;
          setIsPanInteracting(true);
          lastVisibleDaysScrollLeftRef.current = -1;
-         lastVisibleDaysUpdateTsRef.current = 0;
-         lastViewportUpdateTsRef.current = 0;
 
          // Păstrăm viewport-ul sincronizat și în pan, fără a forța full redraw pe Y.
          const left = el.scrollLeft || 0;
@@ -2410,17 +2494,15 @@ export default function ACalendarOptimized({
          // În pan actualizăm rapid fereastra de zile cu un overscan mic.
          recomputeVisibleDays({
             expandOnly: false,
-            extraOverscan: 0,
-            extraOverscanBefore: 0,
-            extraOverscanAfter: 0,
+            extraOverscan: IS_LOW_SPEC_DEVICE ? 1 : 2,
+            extraOverscanBefore: IS_LOW_SPEC_DEVICE ? 1 : 2,
+            extraOverscanAfter: IS_LOW_SPEC_DEVICE ? 1 : 2,
          });
       };
 
       const unlockPanVirtualization = () => {
          isPanVirtualizationLockedRef.current = false;
          setIsPanInteracting(false);
-         lastVisibleDaysUpdateTsRef.current = 0;
-         lastViewportUpdateTsRef.current = 0;
 
          const left = el.scrollLeft || 0;
          const top = el.scrollTop || 0;
@@ -2693,7 +2775,7 @@ export default function ACalendarOptimized({
 
    useEffect(() => {
       if (!instIdsAll.length) return;
-      if (!DISABLE_DAY_LAZY_LOAD && !visibleDaysCount) return;
+      if (!visibleDaysCount) return;
 
       instIdsAll.forEach((iid) => {
          ensureBlackoutsFor(iid);
@@ -3345,6 +3427,8 @@ export default function ACalendarOptimized({
             const left = el.scrollLeft || 0;
             const top = el.scrollTop || 0;
             const nowMs = performance.now();
+            const prevScrollPos = scrollPosRef.current || { x: left, y: top };
+            const deltaXSinceLastFrame = left - (Number(prevScrollPos.x) || 0);
             const isInteractingNow =
                !!suspendFlagsRef.current?.isInteracting ||
                isPanVirtualizationLockedRef.current;
@@ -3357,14 +3441,14 @@ export default function ACalendarOptimized({
 
                const viewportXThreshold = isInteractingNow
                   ? Math.max(
-                       Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 0.9),
-                       IS_LOW_SPEC_DEVICE ? 40 : 28,
+                       Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 1.1),
+                       IS_LOW_SPEC_DEVICE ? 52 : 40,
                     )
                   : VIEWPORT_X_SCROLL_THRESHOLD_PX;
                const rowsThreshold = isInteractingNow
                   ? Math.max(
-                       Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 0.9),
-                       IS_LOW_SPEC_DEVICE ? 40 : 28,
+                       Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 1.1),
+                       IS_LOW_SPEC_DEVICE ? 52 : 40,
                     )
                   : VISIBLE_ROWS_SCROLL_THRESHOLD_PX;
                const prevTop = lastViewportScrollTopRef.current;
@@ -3377,6 +3461,10 @@ export default function ACalendarOptimized({
                   const shouldBumpTop = topDelta >= rowsThreshold;
                   const shouldBumpWidth = Math.abs((prev.width || 0) - nextWidth) > 1;
                   const shouldBumpHeight = Math.abs((prev.height || 0) - nextHeight) > 1;
+                  const throttledByPan =
+                     isInteractingNow &&
+                     nowMs - (lastViewportUpdateTsRef.current || 0) <
+                        (IS_LOW_SPEC_DEVICE ? 44 : 28);
 
                   if (
                      !shouldBumpLeft &&
@@ -3386,7 +3474,12 @@ export default function ACalendarOptimized({
                   ) {
                      return prev;
                   }
+                  if (throttledByPan && !shouldBumpWidth && !shouldBumpHeight) {
+                     return prev;
+                  }
+
                   lastViewportScrollTopRef.current = top;
+                  lastViewportUpdateTsRef.current = nowMs;
                   return {
                      left,
                      top,
@@ -3397,50 +3490,53 @@ export default function ACalendarOptimized({
                return;
             }
 
-            const prevScrollPos = scrollPosRef.current || { x: left, y: top };
-            const deltaXSinceLastFrame = left - (Number(prevScrollPos.x) || 0);
             scrollPosRef.current = { x: left, y: top };
             if (!isInteractingNow) {
                schedulePersistScroll(left, top);
             }
             const daysThreshold = isInteractingNow
                ? Math.max(
-                    Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.9),
-                    IS_LOW_SPEC_DEVICE ? 72 : 56,
+                    Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.65),
+                    IS_LOW_SPEC_DEVICE ? 32 : 24,
                  )
                : VISIBLE_DAYS_SCROLL_THRESHOLD_PX;
             const viewportXThreshold = isInteractingNow
                ? Math.max(
-                    Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 1.1),
-                    IS_LOW_SPEC_DEVICE ? 96 : 80,
+                    Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 0.9),
+                    IS_LOW_SPEC_DEVICE ? 40 : 28,
                  )
                : VIEWPORT_X_SCROLL_THRESHOLD_PX;
             const rowsThreshold = isInteractingNow
                ? Math.max(
-                    Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 1.1),
-                    IS_LOW_SPEC_DEVICE ? 96 : 80,
+                    Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 0.9),
+                    IS_LOW_SPEC_DEVICE ? 40 : 28,
                  )
                : VISIBLE_ROWS_SCROLL_THRESHOLD_PX;
 
             const prevLeft = lastVisibleDaysScrollLeftRef.current;
-            const crossedDaysThreshold =
-               prevLeft < 0 || Math.abs(left - prevLeft) >= daysThreshold;
-            const enoughTimeForDaysUpdate =
-               !isInteractingNow ||
-               nowMs - (lastVisibleDaysUpdateTsRef.current || 0) >=
-                  INTERACTING_DAYS_UPDATE_MIN_MS;
             const shouldRecomputeDays =
-               crossedDaysThreshold && enoughTimeForDaysUpdate;
+               isInteractingNow ||
+               prevLeft < 0 ||
+               Math.abs(left - prevLeft) >= daysThreshold;
             if (shouldRecomputeDays) {
                lastVisibleDaysScrollLeftRef.current = left;
-               lastVisibleDaysUpdateTsRef.current = nowMs;
                const absDx = Math.abs(deltaXSinceLastFrame);
                let extraOverscanBefore = 0;
                let extraOverscanAfter = 0;
                if (isInteractingNow && absDx > 0.1) {
                   const leadOverscan =
-                     absDx > 560 ? (IS_LOW_SPEC_DEVICE ? 1 : 2) : 1;
-                  const trailOverscan = 0;
+                     absDx > 560
+                        ? IS_LOW_SPEC_DEVICE
+                           ? 2
+                           : 4
+                        : absDx > 260
+                          ? IS_LOW_SPEC_DEVICE
+                             ? 1
+                             : 2
+                          : IS_LOW_SPEC_DEVICE
+                            ? 1
+                            : 1;
+                  const trailOverscan = 1;
                   if (deltaXSinceLastFrame >= 0) {
                      extraOverscanAfter = leadOverscan;
                      extraOverscanBefore = trailOverscan;
@@ -3451,7 +3547,11 @@ export default function ACalendarOptimized({
                }
                recomputeVisibleDays({
                   expandOnly: false,
-                  extraOverscan: 0,
+                  extraOverscan: isInteractingNow
+                     ? IS_LOW_SPEC_DEVICE
+                        ? 0
+                        : 1
+                     : 0,
                   extraOverscanBefore,
                   extraOverscanAfter,
                });
@@ -3470,10 +3570,6 @@ export default function ACalendarOptimized({
                const shouldBumpTop = topDelta >= rowsThreshold;
                const shouldBumpWidth = Math.abs((prev.width || 0) - nextWidth) > 1;
                const shouldBumpHeight = Math.abs((prev.height || 0) - nextHeight) > 1;
-               const throttledByPan =
-                  isInteractingNow &&
-                  nowMs - (lastViewportUpdateTsRef.current || 0) <
-                     INTERACTING_VIEWPORT_UPDATE_MIN_MS;
 
                if (
                   !shouldBumpLeft &&
@@ -3483,11 +3579,7 @@ export default function ACalendarOptimized({
                ) {
                   return prev;
                }
-               if (throttledByPan && !shouldBumpWidth && !shouldBumpHeight) {
-                  return prev;
-               }
                lastViewportScrollTopRef.current = nextTop;
-               lastViewportUpdateTsRef.current = nowMs;
                return {
                   left: nextLeft,
                   top: nextTop,
@@ -3798,6 +3890,111 @@ const ACalendarTrack = memo(function ACalendarTrack({
    const standardSlotsByDay = viewModel?.standardSlotsByDay ?? EMPTY_MAP;
    const blackoutKeyMap = viewModel?.blackoutKeyMap || null;
    const blackoutVer = viewModel?.blackoutVer ?? 0;
+   const sharedLookups = useMemo(() => {
+      const usersById = new Map();
+      const usersByPhone = new Map();
+      const usersByNormName = new Map();
+      const instructorUsersByNormName = new Map();
+      const instructorsFullById = new Map();
+      const carsByInstructorId = new Map();
+      const userColorById = new Map();
+      const historyUserById = new Map();
+      const historyInstructorById = new Map();
+      const instructorInitialsById = new Map();
+
+      for (const inst of Array.isArray(instructors) ? instructors : []) {
+         const idRaw = inst?.id;
+         if (idRaw == null) continue;
+         const id = String(idRaw);
+
+         instructorsFullById.set(id, inst);
+
+         const fullName =
+            `${inst?.firstName || ""} ${inst?.lastName || ""}`.trim() ||
+            String(inst?.name || "").trim();
+         if (fullName) {
+            historyInstructorById.set(id, fullName);
+            const parts = fullName.split(/\s+/).filter(Boolean);
+            const initials = parts
+               .slice(0, 2)
+               .map((p) => String(p || "").charAt(0).toUpperCase())
+               .join("");
+            if (initials) instructorInitialsById.set(id, initials);
+         }
+      }
+
+      for (const car of Array.isArray(cars) ? cars : []) {
+         const iidRaw = car?.instructorId ?? car?.instructor_id ?? null;
+         if (iidRaw == null) continue;
+         carsByInstructorId.set(String(iidRaw), car);
+      }
+
+      for (const user of Array.isArray(users) ? users : []) {
+         const idRaw = user?.id;
+         if (idRaw != null) {
+            const id = String(idRaw);
+            usersById.set(id, user);
+
+            const historyName =
+               `${user?.firstName || ""} ${user?.lastName || ""}`.trim();
+            if (historyName && !historyUserById.has(id)) {
+               historyUserById.set(id, historyName);
+            }
+
+            const color = String(
+               user?.color ?? user?.profileColor ?? user?.colour ?? "",
+            ).trim();
+            if (color && !userColorById.has(id)) {
+               userColorById.set(id, color);
+            }
+         }
+
+         const phoneKey = digitsOnly(user?.phone);
+         if (phoneKey && !usersByPhone.has(phoneKey)) {
+            usersByPhone.set(phoneKey, user);
+         }
+
+         const normName = norm(`${user?.firstName ?? ""} ${user?.lastName ?? ""}`);
+         if (normName && !usersByNormName.has(normName)) {
+            usersByNormName.set(normName, user);
+         }
+         if (
+            normName &&
+            String(user?.role ?? "").toUpperCase() === "INSTRUCTOR" &&
+            !instructorUsersByNormName.has(normName)
+         ) {
+            instructorUsersByNormName.set(normName, user);
+         }
+      }
+
+      const desiredInstructorBadgeByUserId = new Map();
+      for (const user of Array.isArray(users) ? users : []) {
+         const uidRaw = user?.id;
+         if (uidRaw == null) continue;
+         const desiredIdRaw = user?.desiredInstructorId;
+         if (desiredIdRaw == null) continue;
+
+         const badge = instructorInitialsById.get(String(desiredIdRaw)) || "";
+         if (badge) {
+            desiredInstructorBadgeByUserId.set(String(uidRaw), badge);
+         }
+      }
+
+      return {
+         usersById,
+         usersByPhone,
+         usersByNormName,
+         instructorUsersByNormName,
+         instructorsFullById,
+         carsByInstructorId,
+         userColorById,
+         desiredInstructorBadgeByUserId,
+         mapsForHistory: {
+            userById: historyUserById,
+            instrById: historyInstructorById,
+         },
+      };
+   }, [users, instructors, cars]);
 
    const eventsByDayForView = useMemo(() => {
       if (!allowedInstBySector) return eventsByDay;
@@ -3836,6 +4033,39 @@ const ACalendarTrack = memo(function ACalendarTrack({
          dayWidth: baseMetrics.dayWidth,
       }),
       [baseMetrics.colw, baseMetrics.dayWidth, zoom, maxColsPerGroup],
+   );
+
+   const dayViewportOverscanPx = useMemo(() => {
+      const dayW = Math.max(1, Number(baseMetrics?.dayWidth) || 1);
+      const vw = Math.max(0, Number(viewportWidth) || 0);
+
+      if (vw <= 0) return dayW * (IS_LOW_SPEC_DEVICE ? 4 : 5);
+
+      return Math.max(
+         dayW * (IS_LOW_SPEC_DEVICE ? 2.2 : 2.8),
+         Math.round(vw * (IS_LOW_SPEC_DEVICE ? 0.9 : 1.1)),
+      );
+   }, [baseMetrics?.dayWidth, viewportWidth]);
+
+   const isDayInViewportWindow = useCallback(
+      (dayLeft, dayWidth, dayIdx) => {
+         const vw = Math.max(0, Number(viewportWidth) || 0);
+         if (vw <= 0) {
+            return dayIdx < (IS_LOW_SPEC_DEVICE ? 5 : 7);
+         }
+
+         const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+         const viewRight = viewLeft + vw;
+         const left = Math.max(0, Number(dayLeft) || 0);
+         const width = Math.max(1, Number(dayWidth) || 1);
+         const right = left + width;
+
+         return !(
+            right < viewLeft - dayViewportOverscanPx ||
+            left > viewRight + dayViewportOverscanPx
+         );
+      },
+      [viewportWidth, viewportScrollLeft, dayViewportOverscanPx],
    );
 
    const isGroupAForDate = useCallback((dateObj) => {
@@ -3928,10 +4158,14 @@ const ACalendarTrack = memo(function ACalendarTrack({
                      const dayOffsetLeft =
                         dayIdx * (baseMetrics.dayWidth + TRACK_DAY_GAP_PX);
                      const stickyAllowed = true;
-                     const isVisible =
-                        forceAllDaysVisible ||
-                        visibleDays.has(ts) ||
-                        (stickyAllowed && stickyVisibleDays?.has?.(ts));
+                     const isVisible = forceAllDaysVisible
+                        ? isDayInViewportWindow(
+                             dayOffsetLeft,
+                             baseMetrics.dayWidth,
+                             dayIdx,
+                          )
+                        : visibleDays.has(ts) ||
+                          (stickyAllowed && stickyVisibleDays?.has?.(ts));
                      const dayInstructors = isGroupA
                         ? canvasInstructorsA
                         : canvasInstructorsB;
@@ -4011,6 +4245,7 @@ const ACalendarTrack = memo(function ACalendarTrack({
                                     cars={cars}
                                     instructorsFull={instructors}
                                     users={users}
+                                    sharedLookups={sharedLookups}
                                     zoom={zoom / Z_BASE}
                                     presenceByReservationUsers={
                                        presenceByReservationUsers
