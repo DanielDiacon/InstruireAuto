@@ -574,6 +574,131 @@ export function buildWaitNotesSignature(waitNotes) {
    return out;
 }
 
+export function buildDayRenderModel({
+   events = [],
+   slotGeoms = [],
+   overlapEventsByInst = null,
+   canceledSlotKeysByInst = null,
+} = {}) {
+   const eventsSafe = Array.isArray(events) ? events : [];
+   const slotGeomsSafe = Array.isArray(slotGeoms) ? slotGeoms : [];
+
+   let eventsWithColor = LAST_EVENTS_WITH_COLOR;
+   let eventsByInst = LAST_EVENTS_BY_INST;
+   if (LAST_EVENTS_REF !== eventsSafe) {
+      eventsWithColor = eventsSafe.map((ev) => {
+         const token = normalizeEventColor(ev.color);
+         const resolved = resolveColor(token);
+         return {
+            ...ev,
+            _colorToken: token,
+            _resolvedColor: resolved,
+         };
+      });
+
+      eventsByInst = {};
+      eventsWithColor.forEach((ev) => {
+         let iid = "";
+         if (ev.instructorId != null) iid = String(ev.instructorId);
+         else if (ev.raw?.instructorId != null)
+            iid = String(ev.raw.instructorId);
+         else if (ev.raw?.instructor_id != null)
+            iid = String(ev.raw.instructor_id);
+
+         const padIndex =
+            typeof ev._padColumnIndex === "number" ? ev._padColumnIndex : -1;
+         const key = padIndex >= 0 ? `${iid}#${padIndex}` : `${iid}#default`;
+         if (!eventsByInst[key]) eventsByInst[key] = [];
+         eventsByInst[key].push(ev);
+      });
+
+      LAST_EVENTS_REF = eventsSafe;
+      LAST_EVENTS_WITH_COLOR = eventsWithColor;
+      LAST_EVENTS_BY_INST = eventsByInst;
+   }
+
+   let overlapMap;
+   if (overlapEventsByInst && overlapEventsByInst instanceof Map) {
+      overlapMap = overlapEventsByInst;
+   } else if (LAST_OVERLAP_SOURCE_REF === eventsSafe) {
+      overlapMap = LAST_OVERLAP_MAP || new Map();
+   } else {
+      overlapMap = new Map();
+      eventsWithColor.forEach((ev) => {
+         if (isCanceledReservation(ev)) return;
+         let iid = "";
+         if (ev.instructorId != null) iid = String(ev.instructorId);
+         else if (ev.raw?.instructorId != null)
+            iid = String(ev.raw.instructorId);
+         else if (ev.raw?.instructor_id != null)
+            iid = String(ev.raw.instructor_id);
+         if (!iid) return;
+
+         if (!overlapMap.has(iid)) overlapMap.set(iid, []);
+         overlapMap.get(iid).push({
+            start:
+               ev.start instanceof Date ? ev.start : new Date(ev.start || 0),
+            end: ev.end instanceof Date ? ev.end : new Date(ev.end || 0),
+         });
+      });
+      LAST_OVERLAP_SOURCE_REF = eventsSafe;
+      LAST_OVERLAP_MAP = overlapMap;
+   }
+
+   let canceledMap;
+   if (canceledSlotKeysByInst && canceledSlotKeysByInst instanceof Map) {
+      canceledMap = canceledSlotKeysByInst;
+   } else if (LAST_CANCELED_SOURCE_REF === eventsSafe) {
+      canceledMap = LAST_CANCELED_MAP || new Map();
+   } else {
+      canceledMap = new Map();
+      eventsWithColor.forEach((ev) => {
+         if (!isCanceledReservation(ev)) return;
+
+         const raw = ev.raw || {};
+         const instId = String(
+            raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? "",
+         );
+         if (!instId) return;
+
+         const start =
+            ev.start instanceof Date ? ev.start : new Date(ev.start || 0);
+         const startMs = start.getTime();
+         if (!Number.isFinite(startMs)) return;
+
+         const localKey = localKeyFromTs(start);
+         if (!localKey) return;
+
+         let set = canceledMap.get(instId);
+         if (!set) {
+            set = new Set();
+            canceledMap.set(instId, set);
+         }
+         set.add(localKey);
+      });
+      LAST_CANCELED_SOURCE_REF = eventsSafe;
+      LAST_CANCELED_MAP = canceledMap;
+   }
+
+   let slotIndexByLabel = LAST_SLOT_INDEX_BY_LABEL;
+   if (LAST_SLOT_GEOMS_REF !== slotGeomsSafe || !slotIndexByLabel) {
+      slotIndexByLabel = new Map();
+      slotGeomsSafe.forEach((sg, idx) => {
+         if (sg.label) slotIndexByLabel.set(sg.label, idx);
+      });
+      LAST_SLOT_GEOMS_REF = slotGeomsSafe;
+      LAST_SLOT_INDEX_BY_LABEL = slotIndexByLabel;
+   }
+
+   return {
+      eventsWithColor,
+      eventsByInst,
+      overlapMap,
+      canceledMap,
+      slotIndexByLabel,
+   };
+}
+
 /* ================== DRAW ================== */
 
 export function drawAll({
@@ -613,6 +738,7 @@ export function drawAll({
    createDraftBySlotColors = null,
    activeSearchEventId = null,
    denseMode = false,
+   dayRenderModel = null,
    visibleRowStart = 0,
    visibleRowEnd = null,
    visibleColStart = 0,
@@ -637,114 +763,31 @@ export function drawAll({
       worldHeight,
    );
 
-   let eventsWithColor = LAST_EVENTS_WITH_COLOR;
-   let eventsByInst = LAST_EVENTS_BY_INST;
-   if (LAST_EVENTS_REF !== events) {
-      eventsWithColor = (events || []).map((ev) => {
-         const token = normalizeEventColor(ev.color);
-         const resolved = resolveColor(token);
-         return {
-            ...ev,
-            _colorToken: token,
-            _resolvedColor: resolved,
-         };
-      });
-
-      // grupare după instructor + pad column index
-      eventsByInst = {};
-      eventsWithColor.forEach((ev) => {
-         let iid = "";
-         if (ev.instructorId != null) iid = String(ev.instructorId);
-         else if (ev.raw?.instructorId != null)
-            iid = String(ev.raw.instructorId);
-         else if (ev.raw?.instructor_id != null)
-            iid = String(ev.raw.instructor_id);
-
-         const padIndex =
-            typeof ev._padColumnIndex === "number" ? ev._padColumnIndex : -1;
-         const key = padIndex >= 0 ? `${iid}#${padIndex}` : `${iid}#default`;
-         if (!eventsByInst[key]) eventsByInst[key] = [];
-         eventsByInst[key].push(ev);
-      });
-
-      LAST_EVENTS_REF = events;
-      LAST_EVENTS_WITH_COLOR = eventsWithColor;
-      LAST_EVENTS_BY_INST = eventsByInst;
-   }
-
-   // hartă ocupare reală pe instructor (Map instId -> [{start,end}])
-   let overlapMap;
-   if (overlapEventsByInst && overlapEventsByInst instanceof Map) {
-      overlapMap = overlapEventsByInst;
-   } else if (LAST_OVERLAP_SOURCE_REF === events) {
-      overlapMap = LAST_OVERLAP_MAP || new Map();
-   } else {
-      overlapMap = new Map();
-      eventsWithColor.forEach((ev) => {
-         if (isCanceledReservation(ev)) return;
-         let iid = "";
-         if (ev.instructorId != null) iid = String(ev.instructorId);
-         else if (ev.raw?.instructorId != null)
-            iid = String(ev.raw.instructorId);
-         else if (ev.raw?.instructor_id != null)
-            iid = String(ev.raw.instructor_id);
-         if (!iid) return;
-
-         if (!overlapMap.has(iid)) overlapMap.set(iid, []);
-         overlapMap.get(iid).push({
-            start:
-               ev.start instanceof Date ? ev.start : new Date(ev.start || 0),
-            end: ev.end instanceof Date ? ev.end : new Date(ev.end || 0),
-         });
-      });
-      LAST_OVERLAP_SOURCE_REF = events;
-      LAST_OVERLAP_MAP = overlapMap;
-   }
-
-   let canceledMap;
-   if (canceledSlotKeysByInst && canceledSlotKeysByInst instanceof Map) {
-      canceledMap = canceledSlotKeysByInst;
-   } else if (LAST_CANCELED_SOURCE_REF === events) {
-      canceledMap = LAST_CANCELED_MAP || new Map();
-   } else {
-      canceledMap = new Map();
-      eventsWithColor.forEach((ev) => {
-         if (!isCanceledReservation(ev)) return;
-
-         const raw = ev.raw || {};
-         const instId = String(
-            raw.instructorId ?? raw.instructor_id ?? ev.instructorId ?? "",
-         );
-         if (!instId) return;
-
-         const start =
-            ev.start instanceof Date ? ev.start : new Date(ev.start || 0);
-         const startMs = start.getTime();
-         if (!Number.isFinite(startMs)) return;
-
-         const localKey = localKeyFromTs(start);
-         if (!localKey) return;
-
-         let set = canceledMap.get(instId);
-         if (!set) {
-            set = new Set();
-            canceledMap.set(instId, set);
-         }
-         set.add(localKey);
-      });
-      LAST_CANCELED_SOURCE_REF = events;
-      LAST_CANCELED_MAP = canceledMap;
-   }
-
-   let slotIndexByLabel = LAST_SLOT_INDEX_BY_LABEL;
-   if (LAST_SLOT_GEOMS_REF !== slotGeoms || !slotIndexByLabel) {
-      slotIndexByLabel = new Map();
-      slotGeoms.forEach((sg, idx) => {
-         if (sg.label) slotIndexByLabel.set(sg.label, idx);
-      });
-      LAST_SLOT_GEOMS_REF = slotGeoms;
-      LAST_SLOT_INDEX_BY_LABEL = slotIndexByLabel;
-   }
+   const resolvedModel =
+      dayRenderModel && typeof dayRenderModel === "object"
+         ? dayRenderModel
+         : buildDayRenderModel({
+              events,
+              slotGeoms,
+              overlapEventsByInst,
+              canceledSlotKeysByInst,
+           });
+   const eventsByInst =
+      resolvedModel?.eventsByInst && typeof resolvedModel.eventsByInst === "object"
+         ? resolvedModel.eventsByInst
+         : {};
+   const overlapMap =
+      resolvedModel?.overlapMap instanceof Map
+         ? resolvedModel.overlapMap
+         : new Map();
+   const canceledMap =
+      resolvedModel?.canceledMap instanceof Map
+         ? resolvedModel.canceledMap
+         : new Map();
+   const slotIndexByLabel =
+      resolvedModel?.slotIndexByLabel instanceof Map
+         ? resolvedModel.slotIndexByLabel
+         : new Map();
 
    const baseBg = resolveColor("--black-p");
    const emptySlotBgPads = resolveColor(NO_COLOR_TOKEN);
@@ -752,7 +795,6 @@ export function drawAll({
 
    const emptySlotTextColor = resolveColor("--white-s");
    const blackoutFillColor = resolveColor("--event-red");
-   const blackoutBorderColor = baseBg;
    const eventTextColor = resolveColor("--white-p");
    const activeBorderColor = resolveColor("--white-p");
 
@@ -1133,21 +1175,6 @@ export function drawAll({
                drawRoundRect(ctx, slotX, slotY, slotW, slotH, slotRadius);
                ctx.fill();
 
-               // border blackout
-               if (isBlocked || isSlot19_30) {
-                  ctx.lineWidth = 1;
-                  ctx.strokeStyle = blackoutBorderColor;
-                  drawRoundRect(
-                     ctx,
-                     slotX + 1,
-                     slotY + 1,
-                     slotW - 2,
-                     slotH - 2,
-                     Math.max(0, slotRadius - 1.5 * fontScale),
-                  );
-                  ctx.stroke();
-               }
-
                // text
                let slotTextColor = emptySlotTextColor;
                if (isCancelledHere) slotTextColor = cancelSlotTextColor;
@@ -1329,23 +1356,6 @@ export function drawAll({
             const raw = ev.raw || {};
             const studentPhone = getStudentPhoneFromEv(ev);
 
-            const evLocalKey =
-               ev.localSlotKey || (ev.start ? localKeyFromTs(ev.start) : null);
-
-            let isBlockedEvent = false;
-            if (blockedKeyMap && evLocalKey) {
-               if (instBlockedSet) {
-                  if (instBlockedSet instanceof Set)
-                     isBlockedEvent = instBlockedSet.has(evLocalKey);
-                  else if (Array.isArray(instBlockedSet))
-                     isBlockedEvent = instBlockedSet.includes(evLocalKey);
-                  else if (typeof instBlockedSet === "object")
-                     isBlockedEvent = !!instBlockedSet[evLocalKey];
-               }
-            }
-
-            if (ev._movedToCancelPad) isBlockedEvent = false;
-
             const isHighlighted =
                highlightEventIdForRender &&
                String(ev.id) === String(highlightEventIdForRender);
@@ -1507,20 +1517,6 @@ export function drawAll({
                   presenceColors,
                   eventRadius,
                );
-            }
-
-            if (isBlockedEvent) {
-               ctx.lineWidth = 1.3;
-               ctx.strokeStyle = blackoutBorderColor;
-               drawRoundRect(
-                  ctx,
-                  cardX + 1,
-                  cardY + 1,
-                  cardW - 2,
-                  cardH - 2,
-                  eventBorderRadius,
-               );
-               ctx.stroke();
             }
 
             if (isHighlighted) {

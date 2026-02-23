@@ -1980,7 +1980,40 @@ export default function ACalendarOptimized({
          if (ev) map.get(ts).push(ev);
       });
 
-      map.forEach((arr) => arr.sort((a, b) => a.start - b.start));
+      map.forEach((arr) =>
+         arr.sort((a, b) => {
+            const aStartMs =
+               a?.start instanceof Date
+                  ? a.start.getTime()
+                  : new Date(a?.start || 0).getTime();
+            const bStartMs =
+               b?.start instanceof Date
+                  ? b.start.getTime()
+                  : new Date(b?.start || 0).getTime();
+
+            const safeAStart = Number.isFinite(aStartMs) ? aStartMs : 0;
+            const safeBStart = Number.isFinite(bStartMs) ? bStartMs : 0;
+            if (safeAStart !== safeBStart) return safeAStart - safeBStart;
+
+            const aInstId = String(
+               a?.instructorId ?? a?.raw?.instructorId ?? a?.raw?.instructor_id ?? "",
+            );
+            const bInstId = String(
+               b?.instructorId ?? b?.raw?.instructorId ?? b?.raw?.instructor_id ?? "",
+            );
+            if (aInstId !== bInstId) return aInstId < bInstId ? -1 : 1;
+
+            const aId = String(a?.id ?? a?.raw?.id ?? "");
+            const bId = String(b?.id ?? b?.raw?.id ?? "");
+            if (aId !== bId) return aId < bId ? -1 : 1;
+
+            const aLocalSlot = String(a?.localSlotKey || "");
+            const bLocalSlot = String(b?.localSlotKey || "");
+            if (aLocalSlot !== bLocalSlot) return aLocalSlot < bLocalSlot ? -1 : 1;
+
+            return 0;
+         }),
+      );
       return map;
    }, [reservationsForCurrentMonth, mapReservationToEvent, isDummyMode]);
 

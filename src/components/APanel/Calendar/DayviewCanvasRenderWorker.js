@@ -1,6 +1,11 @@
 /* eslint-env worker */
 /* eslint-disable no-restricted-globals */
-import { drawAll, clearColorCache, setStaticColorOverrides } from "./render";
+import {
+   drawAll,
+   buildDayRenderModel,
+   clearColorCache,
+   setStaticColorOverrides,
+} from "./render";
 
 let renderCanvas = null;
 let renderCtx = null;
@@ -119,6 +124,14 @@ function serializeSceneEventsFromState() {
       .filter(Boolean);
 }
 
+function rebuildSceneRenderModel() {
+   if (!scene) return;
+   scene.dayRenderModel = buildDayRenderModel({
+      events: scene.events || [],
+      slotGeoms: scene.slotGeoms || [],
+   });
+}
+
 function applySceneEventReset(entries) {
    const safeEntries = Array.isArray(entries) ? entries : [];
    sceneEventState = new Map();
@@ -134,6 +147,7 @@ function applySceneEventReset(entries) {
 
    if (scene) {
       scene.events = serializeSceneEventsFromState();
+      rebuildSceneRenderModel();
       staticLayerKey = null;
    }
 }
@@ -159,6 +173,7 @@ function applySceneEventPatch(removals, upserts) {
 
    if (scene) {
       scene.events = serializeSceneEventsFromState();
+      rebuildSceneRenderModel();
       staticLayerKey = null;
    }
 }
@@ -198,13 +213,15 @@ self.onmessage = (event) => {
          staticLayerKey = null;
          sceneEventState = new Map();
          lastHitMapSignature = "";
-         if (Array.isArray(payload.eventEntries)) {
-            applySceneEventReset(payload.eventEntries);
-         }
          if (payload.colorOverrides !== undefined) {
             setStaticColorOverrides(payload.colorOverrides || null);
          }
          if (payload.clearCaches) clearColorCache();
+         if (Array.isArray(payload.eventEntries)) {
+            applySceneEventReset(payload.eventEntries);
+         } else if (scene) {
+            rebuildSceneRenderModel();
+         }
          return;
       }
 

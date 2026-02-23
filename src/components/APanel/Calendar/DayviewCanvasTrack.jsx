@@ -87,6 +87,7 @@ import {
 
 import {
    drawAll,
+   buildDayRenderModel,
    computeWorldHeight,
    getColorRoot,
    clearColorCache,
@@ -272,8 +273,6 @@ function hasAnyPresence(v) {
 }
 
 const CANVAS_EVENTS_SIGNATURE_CACHE = new WeakMap();
-const WORKER_EVENT_PATCH_MIN_RESET_CHANGES = 120;
-const WORKER_EVENT_PATCH_RESET_RATIO = 0.6;
 
 function buildCanvasEventSignaturePart(ev) {
    if (!ev) return "";
@@ -393,11 +392,9 @@ function buildWorkerEventState(events) {
       const dupCount = dupCounters.get(baseKey) || 0;
       dupCounters.set(baseKey, dupCount + 1);
       const key = `${baseKey}#${dupCount}`;
-      const rev = `${index}|${buildCanvasEventSignaturePart(ev)}`;
 
       state.set(key, {
          index,
-         rev,
          event: ev,
       });
    }
@@ -418,36 +415,6 @@ function serializeWorkerEventState(state) {
       });
    }
    return entries;
-}
-
-function diffWorkerEventState(prevState, nextState) {
-   const removals = [];
-   const upserts = [];
-
-   const prev = prevState instanceof Map ? prevState : new Map();
-   const next = nextState instanceof Map ? nextState : new Map();
-
-   for (const [key, nextEntry] of next.entries()) {
-      const prevEntry = prev.get(key);
-      if (!prevEntry || prevEntry.rev !== nextEntry.rev) {
-         upserts.push({
-            key,
-            index: Number(nextEntry.index) || 0,
-            event: nextEntry.event || null,
-         });
-      }
-   }
-
-   for (const key of prev.keys()) {
-      if (!next.has(key)) removals.push(key);
-   }
-
-   return {
-      removals,
-      upserts,
-      totalChanges: removals.length + upserts.length,
-      nextCount: next.size,
-   };
 }
 
 /**
@@ -3283,9 +3250,35 @@ function DayviewCanvasTrack({
       const maxSlotsTotal = padSlots.length * padCancelColumns.length;
 
       const canceledSorted = canceled.slice().sort((a, b) => {
-         const as = a.start instanceof Date ? a.start : new Date(a.start || 0);
-         const bs = b.start instanceof Date ? b.start : new Date(b.start || 0);
-         return as - bs;
+         const aStartMs =
+            a.start instanceof Date
+               ? a.start.getTime()
+               : new Date(a.start || 0).getTime();
+         const bStartMs =
+            b.start instanceof Date
+               ? b.start.getTime()
+               : new Date(b.start || 0).getTime();
+         const safeAStart = Number.isFinite(aStartMs) ? aStartMs : 0;
+         const safeBStart = Number.isFinite(bStartMs) ? bStartMs : 0;
+         if (safeAStart !== safeBStart) return safeAStart - safeBStart;
+
+         const aInstId = String(
+            a?.instructorId ?? a?.raw?.instructorId ?? a?.raw?.instructor_id ?? "",
+         );
+         const bInstId = String(
+            b?.instructorId ?? b?.raw?.instructorId ?? b?.raw?.instructor_id ?? "",
+         );
+         if (aInstId !== bInstId) return aInstId < bInstId ? -1 : 1;
+
+         const aId = String(a?.id ?? a?.raw?.id ?? "");
+         const bId = String(b?.id ?? b?.raw?.id ?? "");
+         if (aId !== bId) return aId < bId ? -1 : 1;
+
+         const aLocalSlot = String(a?.localSlotKey || "");
+         const bLocalSlot = String(b?.localSlotKey || "");
+         if (aLocalSlot !== bLocalSlot) return aLocalSlot < bLocalSlot ? -1 : 1;
+
+         return 0;
       });
 
       canceledSorted.slice(0, maxSlotsTotal).forEach((ev, idx) => {
@@ -3488,6 +3481,25 @@ function DayviewCanvasTrack({
    const waitSig = useMemo(
       () => buildWaitNotesSignature(waitNotes),
       [waitNotes],
+   );
+
+   const dayRenderModel = useMemo(
+      () => {
+         void themeTick;
+         return buildDayRenderModel({
+            events: eventsForCanvas,
+            slotGeoms,
+            overlapEventsByInst,
+            canceledSlotKeysByInst,
+         });
+      },
+      [
+         eventsForCanvas,
+         slotGeoms,
+         overlapEventsByInst,
+         canceledSlotKeysByInst,
+         themeTick,
+      ],
    );
 
    /* ================== draw effect ================== */
@@ -3836,36 +3848,13 @@ function DayviewCanvasTrack({
             workerEventsSigRef.current !== eventsSig ||
             workerEventsSourceRef.current !== eventsSafe
          ) {
-            const prevWorkerEventState = workerEventsStateRef.current;
-            const diff = diffWorkerEventState(
-               prevWorkerEventState,
-               nextWorkerEventState,
-            );
-            const prevCount =
-               prevWorkerEventState && prevWorkerEventState.size
-                  ? prevWorkerEventState.size
-                  : 0;
-
-            if (diff.totalChanges > 0) {
-               const resetThreshold = Math.max(
-                  WORKER_EVENT_PATCH_MIN_RESET_CHANGES,
-                  Math.round(diff.nextCount * WORKER_EVENT_PATCH_RESET_RATIO),
-               );
-               const shouldReset = prevCount === 0 || diff.totalChanges > resetThreshold;
-
+            const eventsSigChanged = workerEventsSigRef.current !== eventsSig;
+            if (eventsSigChanged) {
                try {
-                  worker.postMessage(
-                     shouldReset
-                        ? {
-                             type: "scene-events-reset",
-                             entries: serializeWorkerEventState(nextWorkerEventState),
-                          }
-                        : {
-                             type: "scene-events-patch",
-                             removals: diff.removals,
-                             upserts: diff.upserts,
-                          },
-                  );
+                  worker.postMessage({
+                     type: "scene-events-reset",
+                     entries: serializeWorkerEventState(nextWorkerEventState),
+                  });
                } catch (error) {
                   markWorkerFatal(error?.message || error);
                   return;
@@ -3982,6 +3971,7 @@ function DayviewCanvasTrack({
             desiredInstructorBadgeByUserId,
             createDraftBySlotUsers,
             createDraftBySlotColors,
+            dayRenderModel,
             activeSearchEventId: null,
             denseMode: denseRenderMode,
             visibleRowStart: visibleRowStartForDraw,
@@ -4038,6 +4028,7 @@ function DayviewCanvasTrack({
          desiredInstructorBadgeByUserId,
          createDraftBySlotUsers,
          createDraftBySlotColors,
+         dayRenderModel,
          activeSearchEventId,
          denseMode: denseRenderMode,
          visibleRowStart: visibleRowStartForDraw,
@@ -4085,6 +4076,7 @@ function DayviewCanvasTrack({
       slotsSig,
       blockedSig,
       waitSig,
+      dayRenderModel,
       overlapEventsByInst,
       canceledSlotKeysByInst,
       presenceReservationIds,
