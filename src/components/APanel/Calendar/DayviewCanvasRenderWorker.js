@@ -15,6 +15,7 @@ let staticLayerKey = null;
 let dynamicLayerCanvas = null;
 let dynamicLayerCtx = null;
 let dynamicLayerKey = null;
+const ENABLE_DYNAMIC_LAYER_CACHE = false;
 let scene = null;
 let sceneReady = false;
 let sceneEventState = new Map();
@@ -513,11 +514,11 @@ self.onmessage = (event) => {
          toPositiveInt(dynamicSurfaceWidth * dpr, pixelWidth);
       const dynamicPixelHeight =
          toPositiveInt(dynamicSurfaceHeight * dpr, pixelHeight);
-      const dynamicCtx = ensureDynamicLayerContext(
-         dynamicPixelWidth,
-         dynamicPixelHeight,
-      );
-      const hasDynamicLayer = !!(dynamicLayerCanvas && dynamicCtx);
+      const dynamicCtx = ENABLE_DYNAMIC_LAYER_CACHE
+         ? ensureDynamicLayerContext(dynamicPixelWidth, dynamicPixelHeight)
+         : null;
+      const hasDynamicLayer =
+         ENABLE_DYNAMIC_LAYER_CACHE && !!(dynamicLayerCanvas && dynamicCtx);
 
       if (hasStaticLayer && staticLayerKey !== nextStaticLayerKey) {
          staticLayerKey = nextStaticLayerKey;

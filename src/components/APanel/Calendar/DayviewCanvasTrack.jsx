@@ -105,9 +105,9 @@ const IS_LOW_SPEC_DEVICE =
       (Number(navigator.hardwareConcurrency) > 0 &&
          Number(navigator.hardwareConcurrency) <= 4));
 const DPR_LIMIT = 2;
-// În CRA dev + react-refresh, module workers pot arunca importScripts chunk errors.
-// Worker-ul rămâne activ în production unde avem nevoie de performanță maximă.
-const ENABLE_CANVAS_WORKER = process.env.NODE_ENV === "production";
+// Stabilitate/acuratețe > throughput:
+// dezactivăm worker-ul până eliminăm complet mismatch-urile de hitMap din prod.
+const ENABLE_CANVAS_WORKER = false;
 const WORKER_COLOR_TOKENS_BASE = [
    "--black-p",
    "--black-t",
@@ -134,6 +134,7 @@ const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
    ? 6_000_000
    : 10_000_000;
 const CANVAS_MIN_DPR = 0.01;
+const ENABLE_DYNAMIC_LAYER_CACHE = false;
 const STATIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 40 : 56;
 const DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 104 : 148;
 const HITMAP_INTERACTION_KEEP_MS = 1600;
@@ -291,8 +292,6 @@ function hasAnyPresence(v) {
    return false;
 }
 
-const CANVAS_EVENTS_SIGNATURE_CACHE = new WeakMap();
-
 function buildCanvasEventSignaturePart(ev) {
    if (!ev) return "";
 
@@ -436,6 +435,26 @@ function serializeWorkerEventState(state) {
    return entries;
 }
 
+function hasWorkerEventStateDiff(prevState, nextState) {
+   if (prevState === nextState) return false;
+   if (!(prevState instanceof Map) || !(nextState instanceof Map)) return true;
+   if (prevState.size !== nextState.size) return true;
+
+   for (const [key, nextValue] of nextState.entries()) {
+      const prevValue = prevState.get(key);
+      if (!prevValue) return true;
+      if ((Number(prevValue.index) || 0) !== (Number(nextValue.index) || 0))
+         return true;
+      if (prevValue.event !== nextValue.event) {
+         const prevEventSig = buildCanvasEventSignaturePart(prevValue.event);
+         const nextEventSig = buildCanvasEventSignaturePart(nextValue.event);
+         if (prevEventSig !== nextEventSig) return true;
+      }
+   }
+
+   return false;
+}
+
 /**
  * Semnătură robustă pentru canvas:
  * include câmpurile care îți schimbă UI-ul desenat (confirmare, note, favorite, important, etc.)
@@ -443,21 +462,21 @@ function serializeWorkerEventState(state) {
  */
 function buildCanvasEventsSignature(events) {
    if (!Array.isArray(events) || !events.length) return "0";
-   const cached = CANVAS_EVENTS_SIGNATURE_CACHE.get(events);
-   if (cached) return cached;
+   let hash = 2166136261;
+   let count = 0;
 
-   const parts = [];
-
-   for (const ev of events) {
-      const part = buildCanvasEventSignaturePart(ev);
+   for (let index = 0; index < events.length; index++) {
+      const part = buildCanvasEventSignaturePart(events[index]);
       if (!part) continue;
-      parts.push(part);
+      count++;
+      const chunk = `${index}|${part}`;
+      for (let i = 0; i < chunk.length; i++) {
+         hash ^= chunk.charCodeAt(i);
+         hash = Math.imul(hash, 16777619);
+      }
    }
 
-   parts.sort();
-   const sig = parts.join(";");
-   CANVAS_EVENTS_SIGNATURE_CACHE.set(events, sig);
-   return sig;
+   return `${count}:${(hash >>> 0).toString(36)}`;
 }
 
 /* ================== SECTOR FILTER HELPERS (NEW) ================== */
@@ -3530,11 +3549,9 @@ function DayviewCanvasTrack({
 
    /* ================== signatures (redraw memo) ================== */
 
-   const eventsSig = useMemo(
-      () => buildCanvasEventsSignature(eventsForCanvas),
-      // ⚠️ refreshTick forțează recalcul chiar dacă upstream a păstrat aceleași referințe
-      [eventsForCanvas, refreshTick],
-   );
+   // Calculăm semnătura la fiecare render pentru a prinde și mutațiile in-place
+   // (în prod pot apărea update-uri socket fără referințe noi de array).
+   const eventsSig = buildCanvasEventsSignature(eventsForCanvas);
 
    const workerEventState = useMemo(
       () => {
@@ -3640,8 +3657,12 @@ function DayviewCanvasTrack({
       const nowTs = Date.now();
       const hasHitMapDemand =
          activeEventId != null || hitMapInteractiveUntilRef.current > nowTs;
+      const hitMapAgeMs = nowTs - hitMapBuiltAtRef.current;
       const shouldBuildHitMap = !!(
-         !isPanInteracting && hasHitMapDemand
+         !isPanInteracting &&
+         (hasHitMapDemand ||
+            hitMapNeedsRebuildRef.current ||
+            hitMapAgeMs > HITMAP_STALE_MAX_AGE_MS)
       );
       const dayHasActiveEvent =
          activeEventId != null &&
@@ -4110,8 +4131,13 @@ function DayviewCanvasTrack({
             workerEventsSigRef.current !== eventsSig ||
             workerEventsSourceRef.current !== eventsSafe
          ) {
-            const eventsSigChanged = workerEventsSigRef.current !== eventsSig;
-            if (eventsSigChanged) {
+            const shouldResetWorkerEvents =
+               workerEventsSigRef.current !== eventsSig ||
+               hasWorkerEventStateDiff(
+                  workerEventsStateRef.current,
+                  nextWorkerEventState,
+               );
+            if (shouldResetWorkerEvents) {
                try {
                   worker.postMessage({
                      type: "scene-events-reset",
@@ -4284,9 +4310,14 @@ function DayviewCanvasTrack({
          1,
          Math.floor(dynamicSurfaceHeight * canvasDpr),
       );
-      const dynamicLayerBuffer = ensureDynamicLayerBuffer(dynamicPixelW, dynamicPixelH);
-      const dynamicLayerCtx = dynamicLayerBuffer?.getContext?.("2d");
-      const hasDynamicLayer = !!(dynamicLayerBuffer && dynamicLayerCtx);
+      const dynamicLayerBuffer = ENABLE_DYNAMIC_LAYER_CACHE
+         ? ensureDynamicLayerBuffer(dynamicPixelW, dynamicPixelH)
+         : null;
+      const dynamicLayerCtx = ENABLE_DYNAMIC_LAYER_CACHE
+         ? dynamicLayerBuffer?.getContext?.("2d")
+         : null;
+      const hasDynamicLayer =
+         ENABLE_DYNAMIC_LAYER_CACHE && !!(dynamicLayerBuffer && dynamicLayerCtx);
       const shouldRefreshDynamicLayer =
          shouldBuildHitMap || dynamicLayerSigRef.current !== dynamicLayerKey;
       let hitMap = null;
@@ -4959,9 +4990,16 @@ function DayviewCanvasTrack({
          if (slotHit?.item) {
             const foundSlotItem = slotHit.item;
             const resolvedInstructorId = resolveInstructorIdForHit(foundSlotItem);
+            if (!resolvedInstructorId) {
+               setSelectedEventId(null);
+               setSelectedSlot(null);
+               setGlobalSelection({ event: null, slot: null });
+               setTouchToolbar(null);
+               return;
+            }
             const slotPayload = {
-               instructorId: resolvedInstructorId ?? foundSlotItem.instructorId,
-               actionInstructorId: resolvedInstructorId ?? null,
+               instructorId: resolvedInstructorId,
+               actionInstructorId: resolvedInstructorId,
                highlightInstructorId: foundSlotItem.instructorId,
                slotStart: foundSlotItem.slotStart,
                slotEnd: foundSlotItem.slotEnd,
@@ -5233,11 +5271,15 @@ function DayviewCanvasTrack({
             return;
          }
 
-        if (hit.kind === "empty-slot" || hit.kind === "wait-slot") {
-           const resolvedInstructorId = resolveInstructorIdForHit(hit);
+         if (hit.kind === "empty-slot" || hit.kind === "wait-slot") {
+            const resolvedInstructorId = resolveInstructorIdForHit(hit);
+            if (!resolvedInstructorId) {
+               setTouchToolbar(null);
+               return;
+            }
             const slotPayload = {
-               instructorId: resolvedInstructorId ?? hit.instructorId,
-               actionInstructorId: resolvedInstructorId ?? null,
+               instructorId: resolvedInstructorId,
+               actionInstructorId: resolvedInstructorId,
                highlightInstructorId: hit.instructorId,
                slotStart: hit.slotStart,
                slotEnd: hit.slotEnd,

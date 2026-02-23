@@ -15,7 +15,11 @@ import arrowIcon from "../../assets/svg/arrow.svg";
 import favIcon from "../../assets/svg/material-symbols--star-outline-rounded.svg";
 import importantIcon from "../../assets/svg/zondicons--exclamation-outline.svg";
 
-import { createReservationsForUser } from "../../api/reservationsService";
+import {
+   createReservationsForUser,
+   patchReservation,
+   getUserReservations,
+} from "../../api/reservationsService";
 
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
@@ -373,6 +377,99 @@ function busyLocalKeyFromStored(st) {
    const offMin = tzOffsetMinutesAt(d.getTime(), MOLDOVA_TZ);
    const base = new Date(d.getTime() - offMin * 60000);
    return localKeyFromTs(base.getTime(), MOLDOVA_TZ);
+}
+
+function reservationIdFromAny(r) {
+   return r?.id ?? r?.reservationId ?? r?.reservation?.id ?? null;
+}
+
+function reservationInstructorIdFromAny(r) {
+   return (
+      r?.instructorId ??
+      r?.instructor_id ??
+      r?.instructor?.id ??
+      r?.reservation?.instructorId ??
+      r?.reservation?.instructor_id ??
+      r?.reservation?.instructor?.id ??
+      null
+   );
+}
+
+function reservationUserIdFromAny(r) {
+   return (
+      r?.userId ??
+      r?.user_id ??
+      r?.user?.id ??
+      r?.reservation?.userId ??
+      r?.reservation?.user_id ??
+      r?.reservation?.user?.id ??
+      null
+   );
+}
+
+function reservationStartFromAny(r) {
+   return (
+      r?.startTime ??
+      r?.start_time ??
+      r?.start ??
+      r?.dateTime ??
+      r?.datetime ??
+      r?.date ??
+      r?.reservation?.startTime ??
+      r?.reservation?.start_time ??
+      r?.reservation?.start ??
+      r?.reservation?.dateTime ??
+      r?.reservation?.datetime ??
+      r?.reservation?.date ??
+      null
+   );
+}
+
+function extractCreatedReservations(payload) {
+   const out = [];
+   const seen = new Set();
+
+   const visit = (node, depth = 0) => {
+      if (node == null || depth > 7) return;
+      if (Array.isArray(node)) {
+         for (const item of node) visit(item, depth + 1);
+         return;
+      }
+      if (typeof node !== "object") return;
+
+      const rid = reservationIdFromAny(node);
+      const instructorId = reservationInstructorIdFromAny(node);
+      const userId = reservationUserIdFromAny(node);
+      const startRaw = reservationStartFromAny(node);
+
+      const looksLikeReservation = !!(
+         (rid != null && (startRaw != null || userId != null || instructorId != null)) ||
+         (startRaw != null && (userId != null || instructorId != null))
+      );
+
+      if (looksLikeReservation) {
+         const key = `${String(rid ?? "")}|${String(startRaw ?? "")}|${String(
+            userId ?? "",
+         )}`;
+         if (!seen.has(key)) {
+            seen.add(key);
+            out.push({
+               id: rid != null ? Number(rid) : NaN,
+               instructorId:
+                  instructorId != null ? Number(instructorId) : NaN,
+               userId: userId != null ? Number(userId) : NaN,
+               startRaw: startRaw != null ? String(startRaw) : "",
+            });
+         }
+      }
+
+      for (const value of Object.values(node)) {
+         if (value && typeof value === "object") visit(value, depth + 1);
+      }
+   };
+
+   visit(payload, 0);
+   return out;
 }
 
 function repeatContainsSlotKey(b, targetKey) {
@@ -1060,7 +1157,63 @@ export default function CreateRezervation({
             ],
          };
 
-         await createReservationsForUser(payload);
+         const createResult = await createReservationsForUser(payload);
+
+         const targetLocalKey = busyLocalKeyFromStored(startTimeToSend);
+         let createdCandidates = extractCreatedReservations(createResult).filter(
+            (row) =>
+               (!Number.isFinite(row.userId) || row.userId === studentIdNum) &&
+               (!row.startRaw ||
+                  !targetLocalKey ||
+                  busyLocalKeyFromStored(row.startRaw) === targetLocalKey),
+         );
+
+         if (!createdCandidates.length) {
+            try {
+               const fromUserRaw = await getUserReservations(studentIdNum);
+               const fromUser = Array.isArray(fromUserRaw)
+                  ? fromUserRaw
+                  : Array.isArray(fromUserRaw?.items)
+                    ? fromUserRaw.items
+                    : [];
+
+               createdCandidates = fromUser
+                  .map((row) => ({
+                     id: Number(reservationIdFromAny(row)),
+                     instructorId: Number(reservationInstructorIdFromAny(row)),
+                     userId: Number(reservationUserIdFromAny(row)),
+                     startRaw: String(reservationStartFromAny(row) || ""),
+                  }))
+                  .filter(
+                     (row) =>
+                        Number.isFinite(row.id) &&
+                        (!Number.isFinite(row.userId) || row.userId === studentIdNum) &&
+                        (!row.startRaw ||
+                           !targetLocalKey ||
+                           busyLocalKeyFromStored(row.startRaw) === targetLocalKey),
+                  );
+            } catch {}
+         }
+
+         const toFixIds = createdCandidates
+            .filter(
+               (row) =>
+                  Number.isFinite(row.id) &&
+                  (!Number.isFinite(row.instructorId) ||
+                     row.instructorId !== instructorIdNum),
+            )
+            .map((row) => Number(row.id));
+
+         if (toFixIds.length) {
+            await Promise.all(
+               toFixIds.map((rid) =>
+                  patchReservation(rid, { instructorId: instructorIdNum }).catch(
+                     () => null,
+                  ),
+               ),
+            );
+         }
+
          notifyBlackoutsChanged(instructorIdNum);
 
          setMessages([
