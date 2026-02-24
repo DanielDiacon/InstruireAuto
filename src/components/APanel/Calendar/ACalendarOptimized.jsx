@@ -6,7 +6,6 @@ import React, {
    useCallback,
    useRef,
    useLayoutEffect,
-   memo,
 } from "react";
 import { useDispatch, useSelector, shallowEqual } from "react-redux";
 
@@ -31,9 +30,6 @@ import {
    fetchInstructors,
 } from "../../../store/instructorsSlice";
 
-import { ReactSVG } from "react-svg";
-import searchIcon from "../../../assets/svg/search.svg";
-
 import {
    selectCalendarBaseData,
    selectCalendarDerivedData,
@@ -41,9 +37,9 @@ import {
 
 import { openPopup } from "../../Utils/popupStore";
 
-import DayviewCanvasTrack from "./DayviewCanvasTrack";
+import ACalendarToolbar from "./ACalendarToolbar";
+import ACalendarTrack from "./ACalendarTrack";
 import useInertialPan from "./useInertialPan";
-import DayOrderEditorModal from "./DayOrderEditorModal";
 
 import { useReservationSocket } from "../../../socket/useReservationSocket";
 import { getInstructorBlackouts } from "../../../api/instructorsService";
@@ -63,8 +59,6 @@ const VISIBLE_DAYS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 96 : 80;
 const TRACK_DAY_GAP_PX = 24;
 const VISIBLE_DAYS_OVERSCAN = IS_LOW_SPEC_DEVICE ? 2 : 3;
 const STICKY_VISIBLE_DAYS_LIMIT = IS_LOW_SPEC_DEVICE ? 10 : 14;
-const VISIBLE_ROWS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 80 : 64;
-const VIEWPORT_X_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 56 : 40;
 const DISABLE_DAY_LAZY_LOAD = true;
 
 function safeReadScrollStateMap() {
@@ -204,6 +198,106 @@ const toFloatingDate = (val) => {
    return isNaN(d) ? null : d;
 };
 
+const firstDefined = (...values) => {
+   for (const value of values) {
+      if (value !== null && value !== undefined) return value;
+   }
+   return null;
+};
+
+const normalizeEntityId = (value) => {
+   if (value === null || value === undefined) return null;
+   const out = String(value).trim();
+   return out ? out : null;
+};
+
+const getReservationId = (r) =>
+   firstDefined(r?.id, r?._id, r?.reservationId, r?.reservation_id, r?.uuid);
+
+const getReservationStartRaw = (r) =>
+   firstDefined(
+      r?.startTime,
+      r?.start,
+      r?.startedAt,
+      r?.start_at,
+      r?.startDate,
+      r?.start_date,
+      r?.dateTime,
+      r?.datetime,
+      r?.date,
+      r?.begin,
+      r?.reservation?.startTime,
+      r?.reservation?.start,
+      r?.reservation?.startedAt,
+      r?.reservation?.start_at,
+      r?.reservation?.startDate,
+      r?.reservation?.start_date,
+      r?.reservation?.dateTime,
+      r?.reservation?.datetime,
+      r?.reservation?.date,
+      r?.reservation?.begin,
+   );
+
+const getReservationEndRaw = (r) =>
+   firstDefined(
+      r?.endTime,
+      r?.end,
+      r?.end_at,
+      r?.endDate,
+      r?.end_date,
+      r?.finishTime,
+      r?.reservation?.endTime,
+      r?.reservation?.end,
+      r?.reservation?.end_at,
+      r?.reservation?.endDate,
+      r?.reservation?.end_date,
+      r?.reservation?.finishTime,
+   );
+
+const getReservationInstructorId = (r) =>
+   normalizeEntityId(
+      firstDefined(
+         r?.instructorId,
+         r?.instructor_id,
+         r?.instructor?.id,
+         r?.reservation?.instructorId,
+         r?.reservation?.instructor_id,
+         r?.reservation?.instructor?.id,
+      ),
+   );
+
+const getReservationGroupId = (r) =>
+   firstDefined(
+      r?.instructorsGroupId,
+      r?.instructors_group_id,
+      r?.groupId,
+      r?.group_id,
+      r?.group?.id,
+      r?.reservation?.instructorsGroupId,
+      r?.reservation?.instructors_group_id,
+      r?.reservation?.groupId,
+      r?.reservation?.group_id,
+      r?.reservation?.group?.id,
+   );
+
+const getReservationStudentId = (r) =>
+   normalizeEntityId(
+      firstDefined(
+         r?.userId,
+         r?.user_id,
+         r?.studentId,
+         r?.student_id,
+         r?.user?.id,
+         r?.student?.id,
+         r?.reservation?.userId,
+         r?.reservation?.user_id,
+         r?.reservation?.studentId,
+         r?.reservation?.student_id,
+         r?.reservation?.user?.id,
+         r?.reservation?.student?.id,
+      ),
+   );
+
 const norm = (s = "") =>
    s
       .toString()
@@ -287,84 +381,6 @@ function getUserIdFromToken(token) {
 
 const px = (v) => parseFloat(String(v || 0));
 
-function SimpleDropdown({
-   value,
-   onChange,
-   options,
-   placeholder = "",
-   className = "",
-   "aria-label": ariaLabel,
-}) {
-   const [open, setOpen] = useState(false);
-   const ref = useRef(null);
-
-   const handleToggle = useCallback(() => {
-      setOpen((v) => !v);
-   }, []);
-
-   const handleSelect = useCallback(
-      (val) => {
-         onChange?.(val);
-         setOpen(false);
-      },
-      [onChange],
-   );
-
-   useEffect(() => {
-      if (!open) return;
-      const onClickOutside = (e) => {
-         if (!ref.current) return;
-         if (!ref.current.contains(e.target)) setOpen(false);
-      };
-      document.addEventListener("click", onClickOutside, true);
-      return () => document.removeEventListener("click", onClickOutside, true);
-   }, [open]);
-
-   const current = options.find((o) => String(o.value) === String(value));
-   const label = current?.label ?? placeholder ?? "";
-
-   return (
-      <div
-         ref={ref}
-         className={`dv-dd dv-select ${className || ""}`}
-         aria-label={ariaLabel}
-      >
-         <button
-            type="button"
-            className="dv-dd__btn dv-dd__trigger"
-            onClick={handleToggle}
-            aria-haspopup="listbox"
-            aria-expanded={open ? "true" : "false"}
-         >
-            <span className="dv-dd__label">{label}</span>
-            <span className="dv-dd__chevron">▾</span>
-         </button>
-         {open && (
-            <div className="dv-dd__menu dv-dd__list" role="listbox">
-               {options.map((opt) => {
-                  const isActive = String(opt.value) === String(value);
-                  return (
-                     <button
-                        key={opt.value}
-                        type="button"
-                        className={
-                           "dv-dd__option dv-dd__item" +
-                           (isActive ? " dv-dd__option--active" : "")
-                        }
-                        onClick={() => handleSelect(opt.value)}
-                        role="option"
-                        aria-selected={isActive ? "true" : "false"}
-                     >
-                        {opt.label}
-                     </button>
-                  );
-               })}
-            </div>
-         )}
-      </div>
-   );
-}
-
 /* ===== Dummy data pentru render instant (10 instructori fake) ===== */
 const DUMMY_INSTRUCTORS = Array.from({ length: 10 }).map((_, idx) => {
    const n = idx + 1;
@@ -400,10 +416,7 @@ function closestZoomPercentFromZoom(zoomVal) {
    return best;
 }
 
-const EMPTY_EVENTS = [];
-const EMPTY_SLOTS = [];
 const EMPTY_RESERVATIONS = [];
-const EMPTY_MAP = new Map();
 
 function setsEqual(a, b) {
    if (a === b) return true;
@@ -643,16 +656,7 @@ export default function ACalendarOptimized({
    const dayRefs = useRef(new Map());
    const scrollLazyRafRef = useRef(null);
    const lastVisibleDaysScrollLeftRef = useRef(-1);
-   const lastViewportScrollTopRef = useRef(-1);
-   const lastViewportUpdateTsRef = useRef(0);
    const isPanVirtualizationLockedRef = useRef(false);
-
-   const [scrollViewport, setScrollViewport] = useState({
-      left: 0,
-      top: 0,
-      width: 0,
-      height: 0,
-   });
 
    const [visibleDays, setVisibleDays] = useState(() => new Set());
    const [stickyVisibleDays, setStickyVisibleDays] = useState(() => new Set());
@@ -846,24 +850,24 @@ export default function ACalendarOptimized({
       inertiaX: true,
       inertiaY: true,
       slopPx: 6,
-      inertiaBoostX: 1.35,
-      inertiaBoostY: 1.6,
-      frictionX: 0.9,
-      frictionY: 0.94,
-      stopSpeedX: 0.05,
-      stopSpeedY: 0.03,
+      inertiaBoostX: 1.22,
+      inertiaBoostY: 1.35,
+      frictionX: 0.88,
+      frictionY: 0.91,
+      stopSpeedX: 0.24,
+      stopSpeedY: 0.18,
       maxInertiaX: 70,
       maxInertiaY: 95,
    });
 
    const token = getCookie("access_token");
-
-   // ✅ debug WS o singură dată
+   const reservationsHydrated = useSelector(
+      (state) => state?.reservations?.hydrated === true,
+   );
+   const reservationsHydratedRef = useRef(reservationsHydrated);
    useEffect(() => {
-      try {
-         localStorage.setItem("__WS_DEBUG", "1");
-      } catch {}
-   }, []);
+      reservationsHydratedRef.current = reservationsHydrated;
+   }, [reservationsHydrated]);
 
    const [presenceByReservationUsers, setPresenceByReservationUsers] = useState(
       () => new Map(),
@@ -938,7 +942,9 @@ export default function ACalendarOptimized({
          try {
             localStorage.setItem("__WS_DEBUG", on ? "1" : "0");
          } catch {}
-         console.log("[WS DEBUG]", window.__WS_DEBUG ? "ON" : "OFF");
+         if (window.__WS_DEBUG) {
+            console.log("[WS DEBUG]", "ON");
+         }
       };
 
       // 1) pornește din URL: ?wsdebug=1
@@ -1281,7 +1287,9 @@ export default function ACalendarOptimized({
          setCreateDraftBySlotUsers(new Map());
          activeDraftSlotByUserRef.current = new Map();
 
-         runReservationsRefresh("ws-connect");
+         if (reservationsHydratedRef.current) {
+            runReservationsRefresh("ws-connect");
+         }
       },
 
       onDisconnect: () => {
@@ -1824,7 +1832,7 @@ export default function ACalendarOptimized({
       const endLimit = monthWindowTs.end;
 
       for (const r of list) {
-         const startRaw = r?.startTime ?? r?.start ?? r?.startedAt ?? r?.startDate;
+         const startRaw = getReservationStartRaw(r);
          if (!startRaw) continue;
 
          const start = toFloatingDate(startRaw);
@@ -2068,29 +2076,37 @@ export default function ACalendarOptimized({
       (r, startDateOverride) => {
          const start =
             startDateOverride ||
-            toFloatingDate(
-               r.startTime ??
-                  r.start ??
-                  r.startedAt ??
-                  r.start_at ??
-                  r.startDate ??
-                  r.start_date,
-            );
+            toFloatingDate(getReservationStartRaw(r));
          if (!start || isNaN(start)) return null;
 
-         const end = new Date(start.getTime() + LESSON_MINUTES * 60000);
+         const endRaw = getReservationEndRaw(r);
+         const endParsed = endRaw ? toFloatingDate(endRaw) : null;
+         const end =
+            endParsed && endParsed.getTime() > start.getTime()
+               ? endParsed
+               : new Date(start.getTime() + LESSON_MINUTES * 60000);
 
-         const instIdStr =
-            r.instructorId != null ? String(r.instructorId) : "__unknown";
-         const groupIdRaw = r.instructorsGroupId ?? null;
-         const studentId = r.userId != null ? String(r.userId) : null;
+         const instIdStr = getReservationInstructorId(r) || "__unknown";
+         const groupIdRaw = getReservationGroupId(r);
+         const studentId = getReservationStudentId(r);
+         const eventIdRaw = getReservationId(r);
+         const eventId =
+            eventIdRaw != null
+               ? String(eventIdRaw)
+               : `${instIdStr}|${start.toISOString()}`;
 
          const fromStore = studentDict ? studentDict.get(studentId) : null;
-         const userObj = r.user || {};
+         const userObj =
+            r.user || r.student || r.client || r.reservation?.user || {};
 
          const first = fromStore?.firstName ?? userObj.firstName ?? "";
          const last = fromStore?.lastName ?? userObj.lastName ?? "";
-         const phone = fromStore?.phone ?? userObj.phone ?? null;
+         const phone =
+            fromStore?.phone ??
+            userObj.phone ??
+            userObj.phoneNumber ??
+            userObj.mobile ??
+            null;
          const studentPrivateMsg = fromStore?.privateMessage ?? "";
 
          const groupName = (() => {
@@ -2143,7 +2159,7 @@ export default function ACalendarOptimized({
          );
 
          return {
-            id: String(r.id),
+            id: eventId,
             title: "Programare",
             start,
             end,
@@ -2473,24 +2489,6 @@ export default function ACalendarOptimized({
          setIsPanInteracting(true);
          lastVisibleDaysScrollLeftRef.current = -1;
 
-         // Păstrăm viewport-ul sincronizat și în pan, fără a forța full redraw pe Y.
-         const left = el.scrollLeft || 0;
-         const top = el.scrollTop || 0;
-         const width = el.clientWidth || 0;
-         const height = el.clientHeight || 0;
-         lastViewportScrollTopRef.current = top;
-         setScrollViewport((prev) => {
-            if (
-               prev.left === left &&
-               prev.top === top &&
-               prev.width === width &&
-               prev.height === height
-            ) {
-               return prev;
-            }
-            return { left, top, width, height };
-         });
-
          // În pan actualizăm rapid fereastra de zile cu un overscan mic.
          recomputeVisibleDays({
             expandOnly: false,
@@ -2503,23 +2501,6 @@ export default function ACalendarOptimized({
       const unlockPanVirtualization = () => {
          isPanVirtualizationLockedRef.current = false;
          setIsPanInteracting(false);
-
-         const left = el.scrollLeft || 0;
-         const top = el.scrollTop || 0;
-         const width = el.clientWidth || 0;
-         const height = el.clientHeight || 0;
-         lastViewportScrollTopRef.current = top;
-         setScrollViewport((prev) => {
-            if (
-               prev.left === left &&
-               prev.top === top &&
-               prev.width === width &&
-               prev.height === height
-            ) {
-               return prev;
-            }
-            return { left, top, width, height };
-         });
 
          // După pan refacem normal fereastra de zile.
          recomputeVisibleDays({ expandOnly: false });
@@ -3426,92 +3407,25 @@ export default function ACalendarOptimized({
             scrollLazyRafRef.current = null;
             const left = el.scrollLeft || 0;
             const top = el.scrollTop || 0;
-            const nowMs = performance.now();
             const prevScrollPos = scrollPosRef.current || { x: left, y: top };
             const deltaXSinceLastFrame = left - (Number(prevScrollPos.x) || 0);
+            const absDeltaX = Math.abs(deltaXSinceLastFrame);
             const isInteractingNow =
                !!suspendFlagsRef.current?.isInteracting ||
                isPanVirtualizationLockedRef.current;
-
-            if (DISABLE_DAY_LAZY_LOAD) {
-               scrollPosRef.current = { x: left, y: top };
-               if (!isInteractingNow) {
-                  schedulePersistScroll(left, top);
-               }
-
-               const viewportXThreshold = isInteractingNow
-                  ? Math.max(
-                       Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 1.1),
-                       IS_LOW_SPEC_DEVICE ? 52 : 40,
-                    )
-                  : VIEWPORT_X_SCROLL_THRESHOLD_PX;
-               const rowsThreshold = isInteractingNow
-                  ? Math.max(
-                       Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 1.1),
-                       IS_LOW_SPEC_DEVICE ? 52 : 40,
-                    )
-                  : VISIBLE_ROWS_SCROLL_THRESHOLD_PX;
-               const prevTop = lastViewportScrollTopRef.current;
-               const nextWidth = el.clientWidth || 0;
-               const nextHeight = el.clientHeight || 0;
-               setScrollViewport((prev) => {
-                  const leftDelta = Math.abs((prev.left || 0) - left);
-                  const topDelta = prevTop < 0 ? Infinity : Math.abs(top - prevTop);
-                  const shouldBumpLeft = leftDelta >= viewportXThreshold;
-                  const shouldBumpTop = topDelta >= rowsThreshold;
-                  const shouldBumpWidth = Math.abs((prev.width || 0) - nextWidth) > 1;
-                  const shouldBumpHeight = Math.abs((prev.height || 0) - nextHeight) > 1;
-                  const throttledByPan =
-                     isInteractingNow &&
-                     nowMs - (lastViewportUpdateTsRef.current || 0) <
-                        (IS_LOW_SPEC_DEVICE ? 44 : 28);
-
-                  if (
-                     !shouldBumpLeft &&
-                     !shouldBumpTop &&
-                     !shouldBumpWidth &&
-                     !shouldBumpHeight
-                  ) {
-                     return prev;
-                  }
-                  if (throttledByPan && !shouldBumpWidth && !shouldBumpHeight) {
-                     return prev;
-                  }
-
-                  lastViewportScrollTopRef.current = top;
-                  lastViewportUpdateTsRef.current = nowMs;
-                  return {
-                     left,
-                     top,
-                     width: nextWidth,
-                     height: nextHeight,
-                  };
-               });
-               return;
-            }
 
             scrollPosRef.current = { x: left, y: top };
             if (!isInteractingNow) {
                schedulePersistScroll(left, top);
             }
+            if (DISABLE_DAY_LAZY_LOAD) return;
+
             const daysThreshold = isInteractingNow
                ? Math.max(
                     Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.65),
                     IS_LOW_SPEC_DEVICE ? 32 : 24,
                  )
                : VISIBLE_DAYS_SCROLL_THRESHOLD_PX;
-            const viewportXThreshold = isInteractingNow
-               ? Math.max(
-                    Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 0.9),
-                    IS_LOW_SPEC_DEVICE ? 40 : 28,
-                 )
-               : VIEWPORT_X_SCROLL_THRESHOLD_PX;
-            const rowsThreshold = isInteractingNow
-               ? Math.max(
-                    Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 0.9),
-                    IS_LOW_SPEC_DEVICE ? 40 : 28,
-                 )
-               : VISIBLE_ROWS_SCROLL_THRESHOLD_PX;
 
             const prevLeft = lastVisibleDaysScrollLeftRef.current;
             const shouldRecomputeDays =
@@ -3520,16 +3434,15 @@ export default function ACalendarOptimized({
                Math.abs(left - prevLeft) >= daysThreshold;
             if (shouldRecomputeDays) {
                lastVisibleDaysScrollLeftRef.current = left;
-               const absDx = Math.abs(deltaXSinceLastFrame);
                let extraOverscanBefore = 0;
                let extraOverscanAfter = 0;
-               if (isInteractingNow && absDx > 0.1) {
+               if (isInteractingNow && absDeltaX > 0.1) {
                   const leadOverscan =
-                     absDx > 560
+                     absDeltaX > 560
                         ? IS_LOW_SPEC_DEVICE
                            ? 2
                            : 4
-                        : absDx > 260
+                        : absDeltaX > 260
                           ? IS_LOW_SPEC_DEVICE
                              ? 1
                              : 2
@@ -3556,37 +3469,6 @@ export default function ACalendarOptimized({
                   extraOverscanAfter,
                });
             }
-
-            const prevTop = lastViewportScrollTopRef.current;
-            const nextWidth = el.clientWidth || 0;
-            const nextHeight = el.clientHeight || 0;
-            setScrollViewport((prev) => {
-               const nextLeft = left;
-               const nextTop = top;
-               const leftDelta = Math.abs((prev.left || 0) - nextLeft);
-               const topDelta =
-                  prevTop < 0 ? Infinity : Math.abs(nextTop - prevTop);
-               const shouldBumpLeft = leftDelta >= viewportXThreshold;
-               const shouldBumpTop = topDelta >= rowsThreshold;
-               const shouldBumpWidth = Math.abs((prev.width || 0) - nextWidth) > 1;
-               const shouldBumpHeight = Math.abs((prev.height || 0) - nextHeight) > 1;
-
-               if (
-                  !shouldBumpLeft &&
-                  !shouldBumpTop &&
-                  !shouldBumpWidth &&
-                  !shouldBumpHeight
-               ) {
-                  return prev;
-               }
-               lastViewportScrollTopRef.current = nextTop;
-               return {
-                  left: nextLeft,
-                  top: nextTop,
-                  width: nextWidth,
-                  height: nextHeight,
-               };
-            });
          });
       };
 
@@ -3594,21 +3476,8 @@ export default function ACalendarOptimized({
          recomputeVisibleDays({ extraOverscan: 0 });
          const left = scroller.scrollLeft || 0;
          const top = scroller.scrollTop || 0;
-         const width = scroller.clientWidth || 0;
-         const height = scroller.clientHeight || 0;
-         lastViewportScrollTopRef.current = top;
-         lastViewportUpdateTsRef.current = performance.now();
-         setScrollViewport((prev) => {
-            if (
-               prev.left === left &&
-               prev.top === top &&
-               prev.width === width &&
-               prev.height === height
-            ) {
-               return prev;
-            }
-            return { left, top, width, height };
-         });
+         scrollPosRef.current = { x: left, y: top };
+         schedulePersistScroll(left, top);
       };
 
       recomputeVisibleDays({ extraOverscan: 0 });
@@ -3677,12 +3546,12 @@ export default function ACalendarOptimized({
                users={users}
                canvasInstructorsA={canvasInstructorsA}
                canvasInstructorsB={canvasInstructorsB}
-               viewportScrollLeft={scrollViewport.left}
-               viewportScrollTop={scrollViewport.top}
-               viewportWidth={scrollViewport.width}
-               viewportHeight={scrollViewport.height}
                viewModel={calendarViewModel}
                forceAllDaysVisible={DISABLE_DAY_LAZY_LOAD}
+               trackDayGapPx={TRACK_DAY_GAP_PX}
+               zBase={Z_BASE}
+               debugCanvasEmpty={DEBUG_CANVAS_EMPTY}
+               isLowSpecDevice={IS_LOW_SPEC_DEVICE}
                createDraftBySlotUsers={createDraftBySlotUsers}
                createDraftBySlotColors={createDraftBySlotColors}
                presenceByReservationUsers={presenceByReservationUsers}
@@ -3697,580 +3566,3 @@ export default function ACalendarOptimized({
       </div>
    );
 }
-
-/* ================== TOOLBAR ================== */
-
-function ACalendarToolbar({
-   dataReady,
-   searchInputRef,
-   searchInput,
-   onSearchInputChange,
-   onRunSearch,
-   onClearSearch,
-   onPrevHit,
-   onNextHit,
-   searchTotal,
-   searchIndex,
-   currentZoomValue,
-   zoomOptions,
-   onZoomChange,
-   currentMonthValue,
-   monthOptions,
-   onMonthChange,
-   sectorFilter,
-   sectorOptions,
-   onSectorChange,
-}) {
-   return (
-      <div className="dayview__header">
-         <SimpleDropdown
-            value={currentMonthValue}
-            onChange={onMonthChange}
-            options={monthOptions}
-            placeholder="Alege luna"
-            className="dv-dd--month"
-            aria-label="Alege luna"
-         />
-
-         <SimpleDropdown
-            value={sectorFilter}
-            onChange={onSectorChange}
-            options={sectorOptions}
-            placeholder="Sector"
-            className="dv-dd--sector"
-            aria-label="Filtrează după sector"
-         />
-
-         <div className="dv-search">
-            <div className="dv-search__input-wrapper">
-               <input
-                  ref={searchInputRef}
-                  className="dv-search__input"
-                  placeholder={
-                     dataReady
-                        ? "Caută după nume / telefon / notiță…"
-                        : "Se încarcă programările…"
-                  }
-                  disabled={!dataReady}
-                  value={searchInput}
-                  onChange={onSearchInputChange}
-                  onKeyDown={(e) => {
-                     if (e.key === "Enter") {
-                        onRunSearch();
-                     } else if (e.key === "ArrowLeft") {
-                        if (searchTotal) {
-                           e.preventDefault();
-                           onPrevHit();
-                        }
-                     } else if (e.key === "ArrowRight") {
-                        if (searchTotal) {
-                           e.preventDefault();
-                           onNextHit();
-                        }
-                     } else if (e.key === "Escape") {
-                        if (searchInput) {
-                           e.preventDefault();
-                           onClearSearch();
-                        }
-                     }
-                  }}
-               />
-               <button
-                  type="button"
-                  className="dv-search__btn-clear"
-                  disabled={!searchInput}
-                  onClick={onClearSearch}
-                  title="Șterge căutarea"
-               >
-                  ✕
-               </button>
-            </div>
-
-            <div className="dv-search__nav">
-               <button
-                  type="button"
-                  className="dv-search__btn"
-                  disabled={!dataReady}
-                  onClick={onRunSearch}
-                  title="Caută"
-               >
-                  <ReactSVG
-                     className="rbc-btn-group__icon react-icon"
-                     src={searchIcon}
-                  />
-               </button>
-            </div>
-
-            <div className="dv-search__count-wrapper">
-               <span className="dv-search__count">
-                  {searchTotal ? `${searchIndex + 1}/${searchTotal}` : "0/0"}
-               </span>
-
-               <button
-                  type="button"
-                  className="dv-search__btn-count"
-                  disabled={!searchTotal}
-                  onClick={onPrevHit}
-                  title="Rezultatul anterior"
-               >
-                  ◀
-               </button>
-
-               <button
-                  type="button"
-                  className="dv-search__btn-count"
-                  disabled={!searchTotal}
-                  onClick={onNextHit}
-                  title="Rezultatul următor"
-               >
-                  ▶
-               </button>
-            </div>
-         </div>
-
-         <SimpleDropdown
-            value={currentZoomValue}
-            onChange={onZoomChange}
-            options={zoomOptions}
-            placeholder="Zoom"
-            className="dv-dd--zoom"
-            aria-label="Nivel zoom"
-         />
-      </div>
-   );
-}
-
-/* ================== TRACK ================== */
-
-// ✅ ÎNLOCUIEȘTE COMPLET componenta ACalendarTrack cu asta (și nimic altceva)
-
-// ✅ ÎNLOCUIEȘTE COMPLET componenta ACalendarTrack cu asta (și nimic altceva)
-
-const ACalendarTrack = memo(function ACalendarTrack({
-   scrollRef,
-   rowHeight,
-   dayRefs,
-   loadedDays,
-   visibleDays,
-   stickyVisibleDays,
-   isPanInteracting,
-   isDummyMode,
-   allowedInstBySector,
-   baseMetrics,
-   maxColsPerGroup,
-   zoom,
-   timeMarks,
-   handleCreateFromEmpty,
-   activeEventId,
-   activeSearchEventId,
-   handleActiveEventRectChange,
-   cars,
-   instructors,
-   users,
-   canvasInstructorsA,
-   canvasInstructorsB,
-   viewportScrollLeft,
-   viewportScrollTop,
-   viewportWidth,
-   viewportHeight,
-   viewModel,
-   forceAllDaysVisible,
-   createDraftBySlotUsers,
-   createDraftBySlotColors,
-   presenceByReservationUsers,
-   presenceByReservationColors,
-
-   // ✅ NEW (le pasezi din ACalendarOptimized)
-   orderEditOpen,
-   onToggleOrderEdit,
-   onCloseOrderEdit,
-   onSaveOrder,
-}) {
-   const eventsByDay = viewModel?.eventsByDay ?? EMPTY_MAP;
-   const standardSlotsByDay = viewModel?.standardSlotsByDay ?? EMPTY_MAP;
-   const blackoutKeyMap = viewModel?.blackoutKeyMap || null;
-   const blackoutVer = viewModel?.blackoutVer ?? 0;
-   const sharedLookups = useMemo(() => {
-      const usersById = new Map();
-      const usersByPhone = new Map();
-      const usersByNormName = new Map();
-      const instructorUsersByNormName = new Map();
-      const instructorsFullById = new Map();
-      const carsByInstructorId = new Map();
-      const userColorById = new Map();
-      const historyUserById = new Map();
-      const historyInstructorById = new Map();
-      const instructorInitialsById = new Map();
-
-      for (const inst of Array.isArray(instructors) ? instructors : []) {
-         const idRaw = inst?.id;
-         if (idRaw == null) continue;
-         const id = String(idRaw);
-
-         instructorsFullById.set(id, inst);
-
-         const fullName =
-            `${inst?.firstName || ""} ${inst?.lastName || ""}`.trim() ||
-            String(inst?.name || "").trim();
-         if (fullName) {
-            historyInstructorById.set(id, fullName);
-            const parts = fullName.split(/\s+/).filter(Boolean);
-            const initials = parts
-               .slice(0, 2)
-               .map((p) => String(p || "").charAt(0).toUpperCase())
-               .join("");
-            if (initials) instructorInitialsById.set(id, initials);
-         }
-      }
-
-      for (const car of Array.isArray(cars) ? cars : []) {
-         const iidRaw = car?.instructorId ?? car?.instructor_id ?? null;
-         if (iidRaw == null) continue;
-         carsByInstructorId.set(String(iidRaw), car);
-      }
-
-      for (const user of Array.isArray(users) ? users : []) {
-         const idRaw = user?.id;
-         if (idRaw != null) {
-            const id = String(idRaw);
-            usersById.set(id, user);
-
-            const historyName =
-               `${user?.firstName || ""} ${user?.lastName || ""}`.trim();
-            if (historyName && !historyUserById.has(id)) {
-               historyUserById.set(id, historyName);
-            }
-
-            const color = String(
-               user?.color ?? user?.profileColor ?? user?.colour ?? "",
-            ).trim();
-            if (color && !userColorById.has(id)) {
-               userColorById.set(id, color);
-            }
-         }
-
-         const phoneKey = digitsOnly(user?.phone);
-         if (phoneKey && !usersByPhone.has(phoneKey)) {
-            usersByPhone.set(phoneKey, user);
-         }
-
-         const normName = norm(`${user?.firstName ?? ""} ${user?.lastName ?? ""}`);
-         if (normName && !usersByNormName.has(normName)) {
-            usersByNormName.set(normName, user);
-         }
-         if (
-            normName &&
-            String(user?.role ?? "").toUpperCase() === "INSTRUCTOR" &&
-            !instructorUsersByNormName.has(normName)
-         ) {
-            instructorUsersByNormName.set(normName, user);
-         }
-      }
-
-      const desiredInstructorBadgeByUserId = new Map();
-      for (const user of Array.isArray(users) ? users : []) {
-         const uidRaw = user?.id;
-         if (uidRaw == null) continue;
-         const desiredIdRaw = user?.desiredInstructorId;
-         if (desiredIdRaw == null) continue;
-
-         const badge = instructorInitialsById.get(String(desiredIdRaw)) || "";
-         if (badge) {
-            desiredInstructorBadgeByUserId.set(String(uidRaw), badge);
-         }
-      }
-
-      return {
-         usersById,
-         usersByPhone,
-         usersByNormName,
-         instructorUsersByNormName,
-         instructorsFullById,
-         carsByInstructorId,
-         userColorById,
-         desiredInstructorBadgeByUserId,
-         mapsForHistory: {
-            userById: historyUserById,
-            instrById: historyInstructorById,
-         },
-      };
-   }, [users, instructors, cars]);
-
-   const eventsByDayForView = useMemo(() => {
-      if (!allowedInstBySector) return eventsByDay;
-
-      const filtered = new Map();
-      for (const [ts, evs] of eventsByDay.entries()) {
-         if (!Array.isArray(evs) || !evs.length) {
-            filtered.set(ts, EMPTY_EVENTS);
-            continue;
-         }
-         const arr = evs.filter((ev) =>
-            allowedInstBySector.has(String(ev?.instructorId ?? "__unknown")),
-         );
-         filtered.set(ts, arr.length ? arr : EMPTY_EVENTS);
-      }
-      return filtered;
-   }, [eventsByDay, allowedInstBySector]);
-
-   const labelFormatter = useMemo(
-      () =>
-         new Intl.DateTimeFormat("ro-RO", {
-            weekday: "short",
-            day: "2-digit",
-            month: "short",
-         }),
-      [],
-   );
-   const canvasLayout = useMemo(
-      () => ({
-         colWidth: baseMetrics.colw,
-         colGap: 12 * zoom,
-         headerHeight: 100 * zoom,
-         slotHeight: 125 * zoom,
-         colsPerRow: maxColsPerGroup,
-         rowGap: 24 * zoom,
-         dayWidth: baseMetrics.dayWidth,
-      }),
-      [baseMetrics.colw, baseMetrics.dayWidth, zoom, maxColsPerGroup],
-   );
-
-   const dayViewportOverscanPx = useMemo(() => {
-      const dayW = Math.max(1, Number(baseMetrics?.dayWidth) || 1);
-      const vw = Math.max(0, Number(viewportWidth) || 0);
-
-      if (vw <= 0) return dayW * (IS_LOW_SPEC_DEVICE ? 4 : 5);
-
-      return Math.max(
-         dayW * (IS_LOW_SPEC_DEVICE ? 2.2 : 2.8),
-         Math.round(vw * (IS_LOW_SPEC_DEVICE ? 0.9 : 1.1)),
-      );
-   }, [baseMetrics?.dayWidth, viewportWidth]);
-
-   const isDayInViewportWindow = useCallback(
-      (dayLeft, dayWidth, dayIdx) => {
-         const vw = Math.max(0, Number(viewportWidth) || 0);
-         if (vw <= 0) {
-            return dayIdx < (IS_LOW_SPEC_DEVICE ? 5 : 7);
-         }
-
-         const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
-         const viewRight = viewLeft + vw;
-         const left = Math.max(0, Number(dayLeft) || 0);
-         const width = Math.max(1, Number(dayWidth) || 1);
-         const right = left + width;
-
-         return !(
-            right < viewLeft - dayViewportOverscanPx ||
-            left > viewRight + dayViewportOverscanPx
-         );
-      },
-      [viewportWidth, viewportScrollLeft, dayViewportOverscanPx],
-   );
-
-   const isGroupAForDate = useCallback((dateObj) => {
-      const dow = dateObj.getDay(); // 0=Sun,1=Mon,...6=Sat
-      return dow === 0 || dow === 2 || dow === 4; // ✅ Dum + Mar + Joi
-   }, []);
-
-   const dayEntries = useMemo(
-      () =>
-         loadedDays.map((d) => {
-            const ts = startOfDayTs(d);
-            const dayStartLocal = new Date(d);
-            dayStartLocal.setHours(7, 0, 0, 0);
-            const dayEndLocal = new Date(d);
-            dayEndLocal.setHours(21, 0, 0, 0);
-            return {
-               ts,
-               label: labelFormatter.format(d).replace(",", ""),
-               dayStartTs: dayStartLocal.getTime(),
-               dayEndTs: dayEndLocal.getTime(),
-               isGroupA: isGroupAForDate(d),
-            };
-         }),
-      [loadedDays, isGroupAForDate, labelFormatter],
-   );
-
-   return (
-      <div
-         className="dv-track-wrap"
-         style={{
-            position: "relative",
-            height: rowHeight ? `${rowHeight}px` : undefined,
-         }}
-      >
-         {/* ✅ UN SINGUR BUTON pe tot track-ul (sus-stânga) */}
-         <button
-            type="button"
-            data-dv-interactive="1"
-            className="dv-track-edit-btn"
-            onClick={onToggleOrderEdit}
-            title={
-               orderEditOpen
-                  ? "Înapoi la calendar"
-                  : "Editează ordinea instructorilor"
-            }
-         >
-            {orderEditOpen ? "Înapoi" : "Edit"}
-         </button>
-
-         <div
-            className="dayview__row dv-pan"
-            ref={scrollRef}
-            style={{
-               touchAction: orderEditOpen ? "auto" : "none",
-               height: "100%",
-               overflowX: "auto",
-               overflowY: "auto",
-               overscrollBehavior: "contain",
-               cursor: orderEditOpen ? "default" : "grab",
-               WebkitUserDrag: "none",
-               userSelect: "none",
-               willChange: "scroll-position",
-            }}
-         >
-            {orderEditOpen ? (
-               // ✅ EDIT MODE: Track dispare, editorul apare în loc
-               <DayOrderEditorModal
-                  open={true}
-                  inline={true}
-                  cars={cars}
-                  instructors={instructors} // ✅ din store (ordonat pt UI)
-                  onClose={onCloseOrderEdit}
-                  onSave={onSaveOrder}
-               />
-            ) : (
-               // ✅ NORMAL MODE: Track-ul normal (zilele)
-               <div
-                  className="dayview__track"
-                  style={{
-                     display: "flex",
-                     alignItems: "stretch",
-                     gap: `${TRACK_DAY_GAP_PX}px`,
-                     paddingRight: `${TRACK_DAY_GAP_PX}px`,
-                     height: "100%",
-                  }}
-               >
-                  {dayEntries.map((entry, dayIdx) => {
-                     const { ts, label, dayStartTs, dayEndTs, isGroupA } =
-                        entry;
-                     const dayOffsetLeft =
-                        dayIdx * (baseMetrics.dayWidth + TRACK_DAY_GAP_PX);
-                     const stickyAllowed = true;
-                     const isVisible = forceAllDaysVisible
-                        ? isDayInViewportWindow(
-                             dayOffsetLeft,
-                             baseMetrics.dayWidth,
-                             dayIdx,
-                          )
-                        : visibleDays.has(ts) ||
-                          (stickyAllowed && stickyVisibleDays?.has?.(ts));
-                     const dayInstructors = isGroupA
-                        ? canvasInstructorsA
-                        : canvasInstructorsB;
-                     let evs = EMPTY_EVENTS;
-                     let slots = EMPTY_SLOTS;
-
-                     if (isVisible) {
-                        evs = isDummyMode
-                           ? EMPTY_EVENTS
-                           : eventsByDayForView.get(ts) || EMPTY_EVENTS;
-
-                        slots = standardSlotsByDay.get(ts) || EMPTY_SLOTS;
-                     }
-
-                     return (
-                        <section
-                           key={ts}
-                           ref={(el) => {
-                              const map = dayRefs.current;
-                              if (el) {
-                                 map.set(ts, el);
-                                 el.dataset.dayTs = String(ts);
-                              } else {
-                                 map.delete(ts);
-                              }
-                           }}
-                           className="dayview__group-wrap cv-auto"
-                           data-active="1"
-                           data-day-ts={ts}
-                           style={{
-                              flex: "0 0 auto",
-                              width: `${baseMetrics.dayWidth}px`,
-                              minWidth: `${baseMetrics.dayWidth}px`,
-                              display: "flex",
-                              flexDirection: "column",
-                              contain: "layout paint",
-                           }}
-                        >
-                           <header className="dayview__group-header">
-                              <div className="dayview__group-title">
-                                 {label}
-                              </div>
-                           </header>
-
-                           <div
-                              className="dayview__group-content dayview__group-content--row"
-                              style={{ flex: "1 1 auto", minHeight: 0 }}
-                           >
-                              {isVisible ? (
-                                 <DayviewCanvasTrack
-                                    dayStart={dayStartTs}
-                                    dayEnd={dayEndTs}
-                                    instructors={dayInstructors} // ✅ A/B pe zi
-                                    events={DEBUG_CANVAS_EMPTY ? [] : evs}
-                                    slots={slots}
-                                    dayOffsetLeft={dayOffsetLeft}
-                                    viewportScrollLeft={viewportScrollLeft}
-                                    viewportScrollTop={viewportScrollTop}
-                                    viewportWidth={viewportWidth}
-                                    viewportHeight={viewportHeight}
-                                    layout={canvasLayout}
-                                    timeMarks={timeMarks}
-                                    onCreateSlot={handleCreateFromEmpty}
-                                    blockedKeyMap={
-                                       DEBUG_CANVAS_EMPTY
-                                          ? null
-                                          : isDummyMode
-                                            ? null
-                                            : blackoutKeyMap
-                                    }
-                                    blackoutVer={blackoutVer}
-                                    activeEventId={activeEventId}
-                                    activeSearchEventId={activeSearchEventId}
-                                    onActiveEventRectChange={
-                                       handleActiveEventRectChange
-                                    }
-                                    cars={cars}
-                                    instructorsFull={instructors}
-                                    users={users}
-                                    sharedLookups={sharedLookups}
-                                    zoom={zoom / Z_BASE}
-                                    presenceByReservationUsers={
-                                       presenceByReservationUsers
-                                    }
-                                    presenceByReservationColors={
-                                       presenceByReservationColors
-                                    }
-                                    createDraftBySlotColors={
-                                       createDraftBySlotColors
-                                    }
-                                    createDraftBySlotUsers={
-                                       createDraftBySlotUsers
-                                    }
-                                    isPanInteracting={isPanInteracting}
-                                 />
-                              ) : (
-                                 <div className="dayview__skeleton" />
-                              )}
-                           </div>
-                        </section>
-                     );
-                  })}
-               </div>
-            )}
-         </div>
-      </div>
-   );
-});

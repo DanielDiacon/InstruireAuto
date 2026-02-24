@@ -212,12 +212,25 @@ export async function createReservations(payload) {
 
 /** GET /api/reservations */
 export async function getReservations(opts = {}) {
-   const { scope, from, to, pageSize = 5000 } = opts || {};
+   const {
+      scope,
+      from,
+      to,
+      pageSize = 5000,
+      updated_since,
+      fields,
+      limit,
+      order,
+   } = opts || {};
    const qs = new URLSearchParams();
    if (scope) qs.set("scope", scope);
    if (from) qs.set("from", from);
    if (to) qs.set("to", to);
    if (pageSize) qs.set("pageSize", String(pageSize));
+   if (updated_since) qs.set("updated_since", String(updated_since));
+   if (fields) qs.set("fields", String(fields));
+   if (limit != null) qs.set("limit", String(limit));
+   if (order) qs.set("order", String(order));
 
    const url = qs.toString()
       ? `/reservations?${qs.toString()}`
@@ -241,13 +254,41 @@ export async function getUserReservations(userId) {
 }
 
 /** GET /api/reservations/all */
-export async function getAllReservations() {
-   const res = await apiClientService.get(`/reservations/all`);
-   if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Server error: ${text}`);
+export async function getAllReservations(opts = null) {
+   const normalized = opts && typeof opts === "object" ? { ...opts } : {};
+   if (normalized.scope == null) normalized.scope = "all";
+
+   const qs = new URLSearchParams();
+   if (normalized.scope) qs.set("scope", String(normalized.scope));
+   if (normalized.from) qs.set("from", String(normalized.from));
+   if (normalized.to) qs.set("to", String(normalized.to));
+   if (normalized.pageSize) qs.set("pageSize", String(normalized.pageSize));
+   if (normalized.updated_since) {
+      qs.set("updated_since", String(normalized.updated_since));
    }
-   return await res.json();
+   if (normalized.fields) qs.set("fields", String(normalized.fields));
+   if (normalized.limit != null) qs.set("limit", String(normalized.limit));
+   if (normalized.order) qs.set("order", String(normalized.order));
+
+   const allUrl = qs.toString()
+      ? `/reservations/all?${qs.toString()}`
+      : "/reservations/all";
+
+   try {
+      const resAll = await apiClientService.get(allUrl);
+      if (!resAll.ok) {
+         const text = await resAll.text().catch(() => "");
+         throw new Error(`Server error: ${text}`);
+      }
+      return await resAll.json();
+   } catch (firstErr) {
+      // Compat fallback pentru backend-uri care implementează delta pe /reservations.
+      try {
+         return await getReservations(normalized);
+      } catch {
+         throw firstErr;
+      }
+   }
 }
 
 /** 🔥 GET /api/reservations/instructor/{instructorId}[?userId=...] */

@@ -132,7 +132,7 @@ const WORKER_COLOR_TOKENS_BASE = [
 const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
 const CLICK_COMMIT_DELAY_MS = 90;
-const DAY_OFFSCREEN_MARGIN_BASE_PX = 320;
+const DAY_OFFSCREEN_MARGIN_BASE_PX = IS_LOW_SPEC_DEVICE ? 620 : 860;
 const CANVAS_MAX_EDGE_PX = IS_LOW_SPEC_DEVICE ? 8192 : 12288;
 const CANVAS_MAX_TOTAL_PIXELS = IS_LOW_SPEC_DEVICE ? 8_000_000 : 16_000_000;
 const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
@@ -141,9 +141,9 @@ const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
 const CANVAS_MIN_DPR = 0.01;
 const ENABLE_DYNAMIC_LAYER_CACHE = false;
 const STATIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 40 : 56;
-const DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 104 : 148;
 const HITMAP_INTERACTION_KEEP_MS = 1600;
 const HITMAP_STALE_MAX_AGE_MS = IS_LOW_SPEC_DEVICE ? 520 : 360;
+const DISABLE_SECTION_VIRTUALIZATION = false;
 
 function computeSafeCanvasDpr(cssWidth, cssHeight, desiredDpr) {
    const width = Math.max(1, Number(cssWidth) || 1);
@@ -3285,6 +3285,8 @@ function DayviewCanvasTrack({
    ]);
 
    const isDayNearViewport = useMemo(() => {
+      if (DISABLE_SECTION_VIRTUALIZATION) return true;
+
       const viewWidth = Math.max(0, Number(viewportWidth) || 0);
       if (viewWidth <= 0) return true;
 
@@ -3295,17 +3297,72 @@ function DayviewCanvasTrack({
       const dayRight = dayLeft + Math.max(0, Number(dayWorldWidth) || 0);
       if (dayRight <= dayLeft) return true;
 
+      const baseMargin = isPanInteracting
+         ? DAY_OFFSCREEN_MARGIN_BASE_PX
+         : Math.round(
+              DAY_OFFSCREEN_MARGIN_BASE_PX * (IS_LOW_SPEC_DEVICE ? 0.78 : 0.72),
+           );
+      const viewportMargin = Math.round(
+         viewWidth *
+            (isPanInteracting
+               ? IS_LOW_SPEC_DEVICE
+                  ? 0.9
+                  : 1.05
+               : IS_LOW_SPEC_DEVICE
+                 ? 0.65
+                 : 0.8),
+      );
+      const dayWidthMargin = Math.round(
+         Math.max(0, Number(dayWorldWidth) || 0) *
+            (isPanInteracting ? 0.6 : 0.42),
+      );
       const margin = Math.max(
-         DAY_OFFSCREEN_MARGIN_BASE_PX,
-         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.25 : 0.4)),
+         baseMargin,
+         viewportMargin,
+         dayWidthMargin,
       );
 
       return !(dayRight < viewLeft - margin || dayLeft > viewRight + margin);
+   }, [
+      viewportWidth,
+      viewportScrollLeft,
+      dayOffsetLeft,
+      dayWorldWidth,
+      isPanInteracting,
+   ]);
+   const isDayIntersectingViewport = useMemo(() => {
+      const viewWidth = Math.max(0, Number(viewportWidth) || 0);
+      if (viewWidth <= 0) return true;
+
+      const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+      const viewRight = viewLeft + viewWidth;
+      const dayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
+      const dayRight = dayLeft + Math.max(0, Number(dayWorldWidth) || 0);
+      if (dayRight <= dayLeft) return true;
+
+      return !(dayRight < viewLeft || dayLeft > viewRight);
    }, [viewportWidth, viewportScrollLeft, dayOffsetLeft, dayWorldWidth]);
+   const dayNearViewportSeenAtRef = useRef(0);
+   const dayNearViewportNowMs =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+   if (isDayNearViewport) {
+      dayNearViewportSeenAtRef.current = dayNearViewportNowMs;
+   }
+   const dayNearViewportBuffered =
+      isDayNearViewport ||
+      dayNearViewportNowMs - (dayNearViewportSeenAtRef.current || 0) <=
+         (isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 520
+               : 400
+            : IS_LOW_SPEC_DEVICE
+              ? 280
+              : 200);
 
    const rowRenderRange = useMemo(() => {
       const rowsCount = Number(headerMetrics?.rowsCount || 0);
       if (!rowsCount) return { start: 0, end: 0 };
+      if (DISABLE_SECTION_VIRTUALIZATION) return { start: 0, end: rowsCount - 1 };
 
       const viewH = Number(viewportHeight) || 0;
       if (viewH <= 0) return { start: 0, end: rowsCount - 1 };
@@ -3314,7 +3371,25 @@ function DayviewCanvasTrack({
       const rowHeights = headerMetrics?.rowHeights || [];
       const headerH = Number(headerMetrics?.headerHeight || 0);
       const fallbackWorldHeight = Number(headerMetrics?.worldHeight || 0);
-      const overscanPx = Math.max(120, Math.round(viewH * 0.25));
+      const overscanPx = Math.max(
+         isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 250
+               : 330
+            : IS_LOW_SPEC_DEVICE
+              ? 170
+              : 230,
+         Math.round(
+            viewH *
+               (isPanInteracting
+                  ? IS_LOW_SPEC_DEVICE
+                     ? 0.62
+                     : 0.8
+                  : IS_LOW_SPEC_DEVICE
+                    ? 0.45
+                    : 0.6),
+         ),
+      );
 
       const viewTop = Math.max(0, Number(viewportScrollTop) || 0);
       const viewBottom = viewTop + viewH;
@@ -3350,11 +3425,16 @@ function DayviewCanvasTrack({
       headerMetrics?.worldHeight,
       viewportScrollTop,
       viewportHeight,
+      isPanInteracting,
    ]);
 
    const colRenderRange = useMemo(() => {
       const colsPerRow = Math.max(1, Number(headerMetrics?.colsPerRow || 0));
       if (!colsPerRow) return { start: 0, end: 0 };
+      if (DISABLE_SECTION_VIRTUALIZATION) return { start: 0, end: colsPerRow - 1 };
+      if (isPanInteracting && isDayIntersectingViewport) {
+         return { start: 0, end: colsPerRow - 1 };
+      }
 
       const viewW = Number(viewportWidth) || 0;
       if (viewW <= 0) return { start: 0, end: colsPerRow - 1 };
@@ -3369,7 +3449,25 @@ function DayviewCanvasTrack({
             : 0;
 
       const stride = Math.max(1, colWidth + colGap);
-      const overscanPx = Math.max(180, Math.round(colWidth * 1.5));
+      const overscanPx = Math.max(
+         isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 370
+               : 500
+            : IS_LOW_SPEC_DEVICE
+              ? 240
+              : 330,
+         Math.round(
+            colWidth *
+               (isPanInteracting
+                  ? IS_LOW_SPEC_DEVICE
+                     ? 2.7
+                     : 3.5
+                  : IS_LOW_SPEC_DEVICE
+                    ? 1.95
+                    : 2.6),
+         ),
+      );
 
       const globalViewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
       const localDayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
@@ -3393,6 +3491,8 @@ function DayviewCanvasTrack({
       dayOffsetLeft,
       hasPreGrid,
       preGridCols,
+      isPanInteracting,
+      isDayIntersectingViewport,
    ]);
 
    const rowRenderStartDep = rowRenderRange.start;
@@ -3402,7 +3502,7 @@ function DayviewCanvasTrack({
 
    useEffect(() => {
       if (!workerSceneCacheEnabled) return;
-      if (!isDayNearViewport) return;
+      if (!dayNearViewportBuffered) return;
       const worker = workerRef.current;
       if (!worker) return;
 
@@ -3434,7 +3534,7 @@ function DayviewCanvasTrack({
       viewportWidth,
       viewportHeight,
       zoom,
-      isDayNearViewport,
+      dayNearViewportBuffered,
    ]);
 
    /* ================== slot geoms ================== */
@@ -3785,9 +3885,10 @@ function DayviewCanvasTrack({
 
    /* ================== signatures (redraw memo) ================== */
 
-   // Calculăm semnătura la fiecare render pentru a prinde și mutațiile in-place
-   // (în prod pot apărea update-uri socket fără referințe noi de array).
-   const eventsSig = buildCanvasEventsSignature(eventsForCanvas);
+   const eventsSig = useMemo(
+      () => buildCanvasEventsSignature(eventsForCanvas),
+      [eventsForCanvas],
+   );
 
    const workerEventState = useMemo(
       () => {
@@ -3921,7 +4022,7 @@ function DayviewCanvasTrack({
       const visibleColEndForDraw = forceFullSceneForFocus
          ? Math.max(0, colsPerRow - 1)
          : colRenderEndDep;
-      const shouldRenderScene = isDayNearViewport || forceFullSceneForFocus;
+      const shouldRenderScene = dayNearViewportBuffered || forceFullSceneForFocus;
       const highlightEventIdForRender =
          selectedEventId || activeEventId || null;
 
@@ -3997,33 +4098,63 @@ function DayviewCanvasTrack({
       const viewW = Math.max(0, Number(viewportWidth) || 0);
       const viewH = Math.max(0, Number(viewportHeight) || 0);
       const overscanX = isPanInteracting
-         ? Math.max(56, Math.round(colWidth * 0.45))
-         : Math.max(80, Math.round(colWidth * 0.75));
+         ? Math.max(82, Math.round(colWidth * 0.8))
+         : Math.max(60, Math.round(colWidth * 0.55));
       const overscanY = isPanInteracting
-         ? Math.max(84, Math.round(slotHeight * 1.0))
-         : Math.max(120, Math.round(slotHeight * 1.5));
+         ? Math.max(130, Math.round(slotHeight * 1.5))
+         : Math.max(92, Math.round(slotHeight * 1.15));
       const canWindow = shouldRenderScene && viewW > 0 && viewH > 0;
-      const renderSurfaceWidth = canWindow
+      const windowXEnabled = canWindow;
+      const windowYEnabled = canWindow;
+      const renderSurfaceWidth = windowXEnabled
          ? Math.max(1, Math.min(width, Math.round(viewW + overscanX * 2)))
          : Math.max(1, Math.round(width));
-      const renderSurfaceHeight = canWindow
+      const renderSurfaceHeight = windowYEnabled
          ? Math.max(1, Math.min(height, Math.round(viewH + overscanY * 2)))
          : Math.max(1, Math.round(height));
       const maxOriginX = Math.max(0, Math.round(width - renderSurfaceWidth));
       const maxOriginY = Math.max(0, Math.round(height - renderSurfaceHeight));
-      const renderOriginX = canWindow
+      const rawRenderOriginX = windowXEnabled
          ? Math.max(
               0,
               Math.min(maxOriginX, Math.round(localViewportLeft - overscanX)),
            )
          : 0;
-      const renderOriginY = canWindow
+      const rawRenderOriginY = windowYEnabled
          ? Math.max(
               0,
               Math.min(maxOriginY, Math.round(localViewportTop - overscanY)),
            )
          : 0;
-      const staticSnapStepX = canWindow
+      const renderOriginSnapStepX = windowXEnabled
+         ? isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 3
+               : 2
+            : 1
+         : 1;
+      const renderOriginSnapStepY = windowYEnabled
+         ? isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 2
+               : 1
+            : 1
+         : 1;
+      const renderOriginX = windowXEnabled
+         ? snapViewportOrigin(
+              rawRenderOriginX,
+              maxOriginX,
+              renderOriginSnapStepX,
+           )
+         : rawRenderOriginX;
+      const renderOriginY = windowYEnabled
+         ? snapViewportOrigin(
+              rawRenderOriginY,
+              maxOriginY,
+              renderOriginSnapStepY,
+           )
+         : rawRenderOriginY;
+      const staticSnapStepX = windowXEnabled
          ? Math.max(
               8,
               Math.min(
@@ -4032,7 +4163,7 @@ function DayviewCanvasTrack({
               ),
            )
          : 1;
-      const staticSnapStepY = canWindow
+      const staticSnapStepY = windowYEnabled
          ? Math.max(
               8,
               Math.min(
@@ -4041,15 +4172,15 @@ function DayviewCanvasTrack({
               ),
            )
          : 1;
-      const staticOriginX = canWindow
+      const staticOriginX = windowXEnabled
          ? snapViewportOrigin(renderOriginX, maxOriginX, staticSnapStepX)
          : renderOriginX;
-      const staticOriginY = canWindow
+      const staticOriginY = windowYEnabled
          ? snapViewportOrigin(renderOriginY, maxOriginY, staticSnapStepY)
          : renderOriginY;
       const staticSourceOffsetX = Math.max(0, renderOriginX - staticOriginX);
       const staticSourceOffsetY = Math.max(0, renderOriginY - staticOriginY);
-      const staticSurfaceWidth = canWindow
+      const staticSurfaceWidth = windowXEnabled
          ? Math.max(
               renderSurfaceWidth,
               Math.min(
@@ -4058,7 +4189,7 @@ function DayviewCanvasTrack({
               ),
            )
          : renderSurfaceWidth;
-      const staticSurfaceHeight = canWindow
+      const staticSurfaceHeight = windowYEnabled
          ? Math.max(
               renderSurfaceHeight,
               Math.min(
@@ -4067,35 +4198,17 @@ function DayviewCanvasTrack({
               ),
            )
          : renderSurfaceHeight;
-      const dynamicSnapStepX =
-         canWindow && isPanInteracting
-            ? Math.max(
-                 12,
-                 Math.min(
-                    DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX,
-                    Math.round(Math.max(20, overscanX * 0.95)),
-                 ),
-              )
-            : 1;
-      const dynamicSnapStepY =
-         canWindow && isPanInteracting
-            ? Math.max(
-                 16,
-                 Math.min(
-                    DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX,
-                    Math.round(Math.max(26, overscanY * 0.95)),
-                 ),
-              )
-            : 1;
-      const dynamicOriginX = canWindow
+      const dynamicSnapStepX = 1;
+      const dynamicSnapStepY = 1;
+      const dynamicOriginX = windowXEnabled
          ? snapViewportOrigin(renderOriginX, maxOriginX, dynamicSnapStepX)
          : renderOriginX;
-      const dynamicOriginY = canWindow
+      const dynamicOriginY = windowYEnabled
          ? snapViewportOrigin(renderOriginY, maxOriginY, dynamicSnapStepY)
          : renderOriginY;
       const dynamicSourceOffsetX = Math.max(0, renderOriginX - dynamicOriginX);
       const dynamicSourceOffsetY = Math.max(0, renderOriginY - dynamicOriginY);
-      const dynamicSurfaceWidth = canWindow
+      const dynamicSurfaceWidth = windowXEnabled
          ? Math.max(
               renderSurfaceWidth,
               Math.min(
@@ -4104,7 +4217,7 @@ function DayviewCanvasTrack({
               ),
            )
          : renderSurfaceWidth;
-      const dynamicSurfaceHeight = canWindow
+      const dynamicSurfaceHeight = windowYEnabled
          ? Math.max(
               renderSurfaceHeight,
               Math.min(
@@ -4800,7 +4913,7 @@ function DayviewCanvasTrack({
       // ✅ NEW
       activeSectorFilter,
       instructorsLayoutSig,
-      isDayNearViewport,
+      dayNearViewportBuffered,
       eventsByReservationId,
    ]);
 
@@ -5873,7 +5986,7 @@ function DayviewCanvasTrack({
             if (isGapCol?.(inst)) return null; // (opțional defensiv)
             const row = Math.floor(idx / colsPerRow);
             const col = idx % colsPerRow;
-            if (!isDayNearViewport) return null;
+            if (!dayNearViewportBuffered) return null;
             if (row < rowRenderStartDep || row > rowRenderEndDep) return null;
             if (col < colRenderStartDep || col > colRenderEndDep) return null;
 

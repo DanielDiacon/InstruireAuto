@@ -9,7 +9,6 @@ import React, {
 } from "react";
 import { useDispatch } from "react-redux";
 import { openPopup } from "../../Utils/popupStore";
-import { updateUser } from "../../../store/usersSlice";
 
 import {
    createNote,
@@ -42,6 +41,7 @@ import cutIcon from "../../../assets/svg/material-symbols--content-cut.svg";
 import hystoryIcon from "../../../assets/svg/clock.svg";
 import arrowIcon from "../../../assets/svg/arrow-s.svg";
 import closeIcon from "../../../assets/svg/add-s.svg";
+import CanvasInstructorHeader from "./CanvasInstructorHeader";
 
 import {
    retainGlobals,
@@ -62,8 +62,6 @@ import {
 import {
    norm,
    formatHHMM,
-   getNoteForDate,
-   upsertNoteForDate,
    MOLDOVA_TZ,
    DEFAULT_TIME_MARKS,
    ymdStrInTZ,
@@ -132,7 +130,7 @@ const WORKER_COLOR_TOKENS_BASE = [
 const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
 const CLICK_COMMIT_DELAY_MS = 90;
-const DAY_OFFSCREEN_MARGIN_BASE_PX = IS_LOW_SPEC_DEVICE ? 460 : 620;
+const DAY_OFFSCREEN_MARGIN_BASE_PX = IS_LOW_SPEC_DEVICE ? 620 : 860;
 const CANVAS_MAX_EDGE_PX = IS_LOW_SPEC_DEVICE ? 8192 : 12288;
 const CANVAS_MAX_TOTAL_PIXELS = IS_LOW_SPEC_DEVICE ? 8_000_000 : 16_000_000;
 const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
@@ -141,7 +139,6 @@ const CANVAS_DOUBLE_BUFFER_MAX_PIXELS = IS_LOW_SPEC_DEVICE
 const CANVAS_MIN_DPR = 0.01;
 const ENABLE_DYNAMIC_LAYER_CACHE = false;
 const STATIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 40 : 56;
-const DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX = IS_LOW_SPEC_DEVICE ? 104 : 148;
 const HITMAP_INTERACTION_KEEP_MS = 1600;
 const HITMAP_STALE_MAX_AGE_MS = IS_LOW_SPEC_DEVICE ? 520 : 360;
 const DISABLE_SECTION_VIRTUALIZATION = false;
@@ -1077,314 +1074,6 @@ function normalizeRangeReservationsFromInstructorHistory(
 }
 
 /* ================== HEADER DOM PESTE CANVAS ================== */
-
-const CanvasInstructorHeader = memo(
-   function CanvasInstructorHeader({
-      inst,
-      dayDate,
-      sectorClassName,
-      style,
-      carsByInstructorId,
-      instructorsFullById,
-      usersById,
-      instructorUsersByNormName,
-      zoom = 1,
-   }) {
-      const dispatch = useDispatch();
-
-      const instrFull = useMemo(() => {
-         const iid = inst?.id != null ? String(inst.id) : "";
-         if (iid && instructorsFullById?.has(iid)) {
-            return instructorsFullById.get(iid);
-         }
-         return inst || null;
-      }, [instructorsFullById, inst]);
-
-      const instructorUser = useMemo(() => {
-         if (!instrFull) return null;
-
-         const directUid =
-            instrFull.userId ?? instrFull.user_id ?? instrFull.user?.id ?? null;
-
-         const roleInstr = (u) =>
-            String(u.role ?? "").toUpperCase() === "INSTRUCTOR";
-
-         if (directUid != null) {
-            const byId = usersById?.get?.(String(directUid));
-            if (byId && roleInstr(byId)) return byId;
-         }
-
-         // fallback doar după nume (fără telefon)
-         const nameKey = norm(
-            `${instrFull.firstName ?? ""} ${instrFull.lastName ?? ""}`,
-         );
-         if (!nameKey) return null;
-
-         const byName = instructorUsersByNormName?.get?.(nameKey) || null;
-         return byName && roleInstr(byName) ? byName : null;
-      }, [instrFull, usersById, instructorUsersByNormName]);
-
-      const carForInst = useMemo(() => {
-         const iid = String(inst?.id ?? "");
-         if (!iid) return null;
-         return carsByInstructorId?.get?.(iid) || null;
-      }, [carsByInstructorId, inst]);
-
-      const displayName = useMemo(() => {
-         if (!instrFull && !inst) return "–";
-
-         // ✅ prioritate: INSTRUCTOR first/last
-         const v =
-            `${instrFull?.firstName ?? ""} ${instrFull?.lastName ?? ""}`.trim();
-         if (v) return v;
-
-         // fallback la inst.name (care deja vine din instructors după fix-ul de mai sus)
-         if (inst?.name && inst.name.trim()) return inst.name.trim();
-
-         return "–";
-      }, [inst, instrFull]);
-
-      const displayPlate = useMemo(() => {
-         if (!carForInst) return "";
-         return (carForInst.plateNumber ?? "").toString().trim();
-      }, [carForInst]);
-
-      const privateMsg = (instructorUser?.privateMessage ?? "").toString();
-      const todaysText = useMemo(
-         () => getNoteForDate(privateMsg, dayDate),
-         [privateMsg, dayDate],
-      );
-      const metaText = useMemo(() => {
-         const plate = (displayPlate || "").trim();
-         const subst = (todaysText || "").trim();
-
-         if (plate && subst) return `${plate} • ${subst}`;
-         if (plate) return plate;
-         if (subst) return subst;
-
-         return "—";
-      }, [displayPlate, todaysText]);
-
-      const [isEditing, setIsEditing] = useState(false);
-      const [inputText, setInputText] = useState("");
-      const inputRef = useRef(null);
-
-      const isPad = String(inst?.id || "").startsWith("__pad_");
-      const padLabel =
-         isPad && inst?.name && inst.name.trim()
-            ? inst.name.trim()
-            : isPad
-              ? String(inst?.id || "") === "__pad_1"
-                 ? "Anulari"
-                 : "Asteptari"
-              : null;
-
-      const openEditor = useCallback(() => {
-         if (isPad) return;
-         setInputText(todaysText || "");
-         setIsEditing(true);
-      }, [isPad, todaysText]);
-
-      useEffect(() => {
-         if (isEditing && inputRef.current) {
-            inputRef.current.focus();
-            inputRef.current.select();
-         }
-      }, [isEditing]);
-
-      const saveEdit = useCallback(async () => {
-         if (!instructorUser?.id) {
-            setIsEditing(false);
-            return;
-         }
-         const nextPM = upsertNoteForDate(privateMsg, dayDate, inputText);
-         try {
-            await dispatch(
-               updateUser({
-                  id: String(instructorUser.id),
-                  data: { privateMessage: nextPM },
-               }),
-            );
-         } finally {
-            setIsEditing(false);
-         }
-      }, [dispatch, instructorUser?.id, privateMsg, dayDate, inputText]);
-
-      const cancelEdit = useCallback(() => {
-         setIsEditing(false);
-         setInputText(todaysText || "");
-      }, [todaysText]);
-
-      if (!inst) return null;
-      const isGap = isGapCol(inst);
-
-      if (isGap) {
-         return (
-            <div
-               className="dayview__column-head dv-canvas-header dv-canvas-header--gap"
-               style={{
-                  position: "absolute",
-                  boxSizing: "border-box",
-                  pointerEvents: "none",
-                  ...style,
-               }}
-            />
-         );
-      }
-
-      const z = zoom || 1;
-      const headerFontSize = 13 * z;
-      const plateFontSize = 11 * z;
-      const inputFontSize = 12 * z;
-      const paddingTop = 8 * z;
-      const paddingSides = 10 * z;
-      const paddingBottom = 4 * z;
-      const gapPx = 2 * z;
-
-      if (isPad) {
-         return (
-            <div
-               className="dayview__column-head dv-canvas-header dv-canvas-header--pad"
-               style={{
-                  position: "absolute",
-                  boxSizing: "border-box",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: `${paddingTop}px ${paddingSides}px ${paddingBottom}px`,
-                  pointerEvents: "none",
-                  color: "var(--white-p)",
-                  lineHeight: 1.15,
-                  textAlign: "center",
-                  ...style,
-               }}
-            >
-               <div
-                  className="dv-inst-name"
-                  style={{
-                     fontWeight: 600,
-                     fontSize: `${headerFontSize}px`,
-                     lineHeight: 1.15,
-                     width: "100%",
-                  }}
-               >
-                  {padLabel || "\u00A0"}
-               </div>
-            </div>
-         );
-      }
-
-      return (
-         <div
-            className={
-               "dayview__column-head dv-canvas-header" +
-               (sectorClassName ? " " + sectorClassName : "")
-            }
-            style={{
-               position: "absolute",
-               boxSizing: "border-box",
-               display: "flex",
-               flexDirection: "column",
-               alignItems: "flex-start",
-               justifyContent: "flex-start",
-               padding: `${paddingTop}px ${paddingSides}px ${paddingBottom}px`,
-               gap: gapPx,
-               cursor: "text",
-               pointerEvents: "auto",
-               color: "var(--white-p)",
-               lineHeight: 1.15,
-               ...style,
-            }}
-            onDoubleClick={(e) => {
-               e.stopPropagation();
-               openEditor();
-            }}
-         >
-            {/* RÂND 1: nume instructor */}
-            <div
-               className="dv-inst-name"
-               style={{
-                  fontWeight: 500,
-                  fontSize: `${headerFontSize}px`,
-                  lineHeight: 1.15,
-               }}
-            >
-               {displayName || "\u00A0"}
-            </div>
-
-            {/* Editare: input pentru înlocuitor/notă (stă pe rândul 2) */}
-            {/* META (plăcuță + înlocuitor) ca paragraf 2 rânduri max */}
-            {!isEditing ? (
-               <div
-                  className="dv-inst-meta"
-                  style={{
-                     fontSize: `${plateFontSize}px`,
-                     lineHeight: 1.2,
-                     opacity: metaText === "—" ? 0.55 : 0.9,
-                     width: "100%",
-
-                     // ✅ păstrează spațiul (2 rânduri)
-                     minHeight: `${plateFontSize * 1.2 * 2}px`,
-
-                     // ✅ 2 rânduri max cu "..."
-                     overflow: "hidden",
-                     display: "-webkit-box",
-                     WebkitBoxOrient: "vertical",
-                     WebkitLineClamp: 2,
-
-                     // fallback/ajutor pentru cuvinte lungi
-                     wordBreak: "break-word",
-                  }}
-                  title={metaText === "—" ? "" : metaText}
-               >
-                  {metaText}
-               </div>
-            ) : (
-               <input
-                  ref={inputRef}
-                  className="dv-subst-input"
-                  style={{
-                     width: "100%",
-                     fontSize: `${inputFontSize}px`,
-                     lineHeight: 1.2,
-                  }}
-                  placeholder="Înlocuitor / notă pentru zi"
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onBlur={saveEdit}
-                  onKeyDown={(e) => {
-                     if (e.key === "Enter") {
-                        e.preventDefault();
-                        saveEdit();
-                     } else if (e.key === "Escape") {
-                        e.preventDefault();
-                        cancelEdit();
-                     }
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-               />
-            )}
-         </div>
-      );
-   },
-   (prev, next) => {
-      return (
-         prev.inst === next.inst &&
-         prev.dayDate === next.dayDate &&
-         prev.sectorClassName === next.sectorClassName &&
-         prev.style.left === next.style.left &&
-         prev.style.top === next.style.top &&
-         prev.style.width === next.style.width &&
-         prev.style.height === next.style.height &&
-         prev.carsByInstructorId === next.carsByInstructorId &&
-         prev.instructorsFullById === next.instructorsFullById &&
-         prev.usersById === next.usersById &&
-         prev.instructorUsersByNormName === next.instructorUsersByNormName &&
-         prev.zoom === next.zoom
-      );
-   },
-);
 
 /* ================== COMPONENTA REACT ================== */
 
@@ -3334,13 +3023,67 @@ function DayviewCanvasTrack({
       const dayRight = dayLeft + Math.max(0, Number(dayWorldWidth) || 0);
       if (dayRight <= dayLeft) return true;
 
+      const baseMargin = isPanInteracting
+         ? DAY_OFFSCREEN_MARGIN_BASE_PX
+         : Math.round(
+              DAY_OFFSCREEN_MARGIN_BASE_PX * (IS_LOW_SPEC_DEVICE ? 0.78 : 0.72),
+           );
+      const viewportMargin = Math.round(
+         viewWidth *
+            (isPanInteracting
+               ? IS_LOW_SPEC_DEVICE
+                  ? 0.9
+                  : 1.05
+               : IS_LOW_SPEC_DEVICE
+                 ? 0.65
+                 : 0.8),
+      );
+      const dayWidthMargin = Math.round(
+         Math.max(0, Number(dayWorldWidth) || 0) *
+            (isPanInteracting ? 0.6 : 0.42),
+      );
       const margin = Math.max(
-         DAY_OFFSCREEN_MARGIN_BASE_PX,
-         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.45 : 0.65)),
+         baseMargin,
+         viewportMargin,
+         dayWidthMargin,
       );
 
       return !(dayRight < viewLeft - margin || dayLeft > viewRight + margin);
+   }, [
+      viewportWidth,
+      viewportScrollLeft,
+      dayOffsetLeft,
+      dayWorldWidth,
+      isPanInteracting,
+   ]);
+   const isDayIntersectingViewport = useMemo(() => {
+      const viewWidth = Math.max(0, Number(viewportWidth) || 0);
+      if (viewWidth <= 0) return true;
+
+      const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+      const viewRight = viewLeft + viewWidth;
+      const dayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
+      const dayRight = dayLeft + Math.max(0, Number(dayWorldWidth) || 0);
+      if (dayRight <= dayLeft) return true;
+
+      return !(dayRight < viewLeft || dayLeft > viewRight);
    }, [viewportWidth, viewportScrollLeft, dayOffsetLeft, dayWorldWidth]);
+   const dayNearViewportSeenAtRef = useRef(0);
+   const dayNearViewportNowMs =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+   if (isDayNearViewport) {
+      dayNearViewportSeenAtRef.current = dayNearViewportNowMs;
+   }
+   const dayNearViewportBuffered =
+      isDayNearViewport ||
+      dayNearViewportNowMs - (dayNearViewportSeenAtRef.current || 0) <=
+         (isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 520
+               : 400
+            : IS_LOW_SPEC_DEVICE
+              ? 280
+              : 200);
 
    const rowRenderRange = useMemo(() => {
       const rowsCount = Number(headerMetrics?.rowsCount || 0);
@@ -3348,7 +3091,6 @@ function DayviewCanvasTrack({
       if (DISABLE_SECTION_VIRTUALIZATION) {
          return { start: 0, end: rowsCount - 1 };
       }
-
       const viewH = Number(viewportHeight) || 0;
       if (viewH <= 0) return { start: 0, end: rowsCount - 1 };
 
@@ -3357,8 +3099,23 @@ function DayviewCanvasTrack({
       const headerH = Number(headerMetrics?.headerHeight || 0);
       const fallbackWorldHeight = Number(headerMetrics?.worldHeight || 0);
       const overscanPx = Math.max(
-         IS_LOW_SPEC_DEVICE ? 210 : 290,
-         Math.round(viewH * (IS_LOW_SPEC_DEVICE ? 0.5 : 0.7)),
+         isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 250
+               : 330
+            : IS_LOW_SPEC_DEVICE
+              ? 170
+              : 230,
+         Math.round(
+            viewH *
+               (isPanInteracting
+                  ? IS_LOW_SPEC_DEVICE
+                     ? 0.62
+                     : 0.8
+                  : IS_LOW_SPEC_DEVICE
+                    ? 0.45
+                    : 0.6),
+         ),
       );
 
       const viewTop = Math.max(0, Number(viewportScrollTop) || 0);
@@ -3395,6 +3152,7 @@ function DayviewCanvasTrack({
       headerMetrics?.worldHeight,
       viewportScrollTop,
       viewportHeight,
+      isPanInteracting,
    ]);
 
    const colRenderRange = useMemo(() => {
@@ -3403,7 +3161,9 @@ function DayviewCanvasTrack({
       if (DISABLE_SECTION_VIRTUALIZATION) {
          return { start: 0, end: colsPerRow - 1 };
       }
-
+      if (isPanInteracting && isDayIntersectingViewport) {
+         return { start: 0, end: colsPerRow - 1 };
+      }
       const viewW = Number(viewportWidth) || 0;
       if (viewW <= 0) return { start: 0, end: colsPerRow - 1 };
 
@@ -3418,8 +3178,23 @@ function DayviewCanvasTrack({
 
       const stride = Math.max(1, colWidth + colGap);
       const overscanPx = Math.max(
-         IS_LOW_SPEC_DEVICE ? 320 : 420,
-         Math.round(colWidth * (IS_LOW_SPEC_DEVICE ? 2.3 : 3.0)),
+         isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 370
+               : 500
+            : IS_LOW_SPEC_DEVICE
+              ? 240
+              : 330,
+         Math.round(
+            colWidth *
+               (isPanInteracting
+                  ? IS_LOW_SPEC_DEVICE
+                     ? 2.7
+                     : 3.5
+                  : IS_LOW_SPEC_DEVICE
+                    ? 1.95
+                    : 2.6),
+         ),
       );
 
       const globalViewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
@@ -3444,6 +3219,8 @@ function DayviewCanvasTrack({
       dayOffsetLeft,
       hasPreGrid,
       preGridCols,
+      isPanInteracting,
+      isDayIntersectingViewport,
    ]);
 
    const rowRenderStartDep = rowRenderRange.start;
@@ -3453,7 +3230,7 @@ function DayviewCanvasTrack({
 
    useEffect(() => {
       if (!workerSceneCacheEnabled) return;
-      if (!isDayNearViewport) return;
+      if (!dayNearViewportBuffered) return;
       const worker = workerRef.current;
       if (!worker) return;
 
@@ -3485,7 +3262,7 @@ function DayviewCanvasTrack({
       viewportWidth,
       viewportHeight,
       zoom,
-      isDayNearViewport,
+      dayNearViewportBuffered,
    ]);
 
    /* ================== slot geoms ================== */
@@ -3836,9 +3613,10 @@ function DayviewCanvasTrack({
 
    /* ================== signatures (redraw memo) ================== */
 
-   // Calculăm semnătura la fiecare render pentru a prinde și mutațiile in-place
-   // (în prod pot apărea update-uri socket fără referințe noi de array).
-   const eventsSig = buildCanvasEventsSignature(eventsForCanvas);
+   const eventsSig = useMemo(
+      () => buildCanvasEventsSignature(eventsForCanvas),
+      [eventsForCanvas],
+   );
 
    const workerEventState = useMemo(
       () => {
@@ -3972,7 +3750,7 @@ function DayviewCanvasTrack({
       const visibleColEndForDraw = forceFullSceneForFocus
          ? Math.max(0, colsPerRow - 1)
          : colRenderEndDep;
-      const shouldRenderScene = isDayNearViewport || forceFullSceneForFocus;
+      const shouldRenderScene = dayNearViewportBuffered || forceFullSceneForFocus;
       const highlightEventIdForRender =
          selectedEventId || activeEventId || null;
 
@@ -4048,33 +3826,63 @@ function DayviewCanvasTrack({
       const viewW = Math.max(0, Number(viewportWidth) || 0);
       const viewH = Math.max(0, Number(viewportHeight) || 0);
       const overscanX = isPanInteracting
-         ? Math.max(110, Math.round(colWidth * 0.8))
-         : Math.max(160, Math.round(colWidth * 1.2));
+         ? Math.max(160, Math.round(colWidth * 1.2))
+         : Math.max(120, Math.round(colWidth * 0.9));
       const overscanY = isPanInteracting
-         ? Math.max(150, Math.round(slotHeight * 1.6))
-         : Math.max(220, Math.round(slotHeight * 2.2));
+         ? Math.max(210, Math.round(slotHeight * 2.0))
+         : Math.max(150, Math.round(slotHeight * 1.6));
       const canWindow = shouldRenderScene && viewW > 0 && viewH > 0;
-      const renderSurfaceWidth = canWindow
+      const windowXEnabled = canWindow;
+      const windowYEnabled = canWindow;
+      const renderSurfaceWidth = windowXEnabled
          ? Math.max(1, Math.min(width, Math.round(viewW + overscanX * 2)))
          : Math.max(1, Math.round(width));
-      const renderSurfaceHeight = canWindow
+      const renderSurfaceHeight = windowYEnabled
          ? Math.max(1, Math.min(height, Math.round(viewH + overscanY * 2)))
          : Math.max(1, Math.round(height));
       const maxOriginX = Math.max(0, Math.round(width - renderSurfaceWidth));
       const maxOriginY = Math.max(0, Math.round(height - renderSurfaceHeight));
-      const renderOriginX = canWindow
+      const rawRenderOriginX = windowXEnabled
          ? Math.max(
               0,
               Math.min(maxOriginX, Math.round(localViewportLeft - overscanX)),
            )
          : 0;
-      const renderOriginY = canWindow
+      const rawRenderOriginY = windowYEnabled
          ? Math.max(
               0,
               Math.min(maxOriginY, Math.round(localViewportTop - overscanY)),
            )
          : 0;
-      const staticSnapStepX = canWindow
+      const renderOriginSnapStepX = windowXEnabled
+         ? isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 3
+               : 2
+            : 1
+         : 1;
+      const renderOriginSnapStepY = windowYEnabled
+         ? isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 2
+               : 1
+            : 1
+         : 1;
+      const renderOriginX = windowXEnabled
+         ? snapViewportOrigin(
+              rawRenderOriginX,
+              maxOriginX,
+              renderOriginSnapStepX,
+           )
+         : rawRenderOriginX;
+      const renderOriginY = windowYEnabled
+         ? snapViewportOrigin(
+              rawRenderOriginY,
+              maxOriginY,
+              renderOriginSnapStepY,
+           )
+         : rawRenderOriginY;
+      const staticSnapStepX = windowXEnabled
          ? Math.max(
               8,
               Math.min(
@@ -4083,7 +3891,7 @@ function DayviewCanvasTrack({
               ),
            )
          : 1;
-      const staticSnapStepY = canWindow
+      const staticSnapStepY = windowYEnabled
          ? Math.max(
               8,
               Math.min(
@@ -4092,15 +3900,15 @@ function DayviewCanvasTrack({
               ),
            )
          : 1;
-      const staticOriginX = canWindow
+      const staticOriginX = windowXEnabled
          ? snapViewportOrigin(renderOriginX, maxOriginX, staticSnapStepX)
          : renderOriginX;
-      const staticOriginY = canWindow
+      const staticOriginY = windowYEnabled
          ? snapViewportOrigin(renderOriginY, maxOriginY, staticSnapStepY)
          : renderOriginY;
       const staticSourceOffsetX = Math.max(0, renderOriginX - staticOriginX);
       const staticSourceOffsetY = Math.max(0, renderOriginY - staticOriginY);
-      const staticSurfaceWidth = canWindow
+      const staticSurfaceWidth = windowXEnabled
          ? Math.max(
               renderSurfaceWidth,
               Math.min(
@@ -4109,7 +3917,7 @@ function DayviewCanvasTrack({
               ),
            )
          : renderSurfaceWidth;
-      const staticSurfaceHeight = canWindow
+      const staticSurfaceHeight = windowYEnabled
          ? Math.max(
               renderSurfaceHeight,
               Math.min(
@@ -4118,35 +3926,17 @@ function DayviewCanvasTrack({
               ),
            )
          : renderSurfaceHeight;
-      const dynamicSnapStepX =
-         canWindow && isPanInteracting
-            ? Math.max(
-                 12,
-                 Math.min(
-                    DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX,
-                    Math.round(Math.max(20, overscanX * 0.95)),
-                 ),
-              )
-            : 1;
-      const dynamicSnapStepY =
-         canWindow && isPanInteracting
-            ? Math.max(
-                 16,
-                 Math.min(
-                    DYNAMIC_LAYER_ORIGIN_SNAP_MAX_PX,
-                    Math.round(Math.max(26, overscanY * 0.95)),
-                 ),
-              )
-            : 1;
-      const dynamicOriginX = canWindow
+      const dynamicSnapStepX = 1;
+      const dynamicSnapStepY = 1;
+      const dynamicOriginX = windowXEnabled
          ? snapViewportOrigin(renderOriginX, maxOriginX, dynamicSnapStepX)
          : renderOriginX;
-      const dynamicOriginY = canWindow
+      const dynamicOriginY = windowYEnabled
          ? snapViewportOrigin(renderOriginY, maxOriginY, dynamicSnapStepY)
          : renderOriginY;
       const dynamicSourceOffsetX = Math.max(0, renderOriginX - dynamicOriginX);
       const dynamicSourceOffsetY = Math.max(0, renderOriginY - dynamicOriginY);
-      const dynamicSurfaceWidth = canWindow
+      const dynamicSurfaceWidth = windowXEnabled
          ? Math.max(
               renderSurfaceWidth,
               Math.min(
@@ -4155,7 +3945,7 @@ function DayviewCanvasTrack({
               ),
            )
          : renderSurfaceWidth;
-      const dynamicSurfaceHeight = canWindow
+      const dynamicSurfaceHeight = windowYEnabled
          ? Math.max(
               renderSurfaceHeight,
               Math.min(
@@ -4851,7 +4641,7 @@ function DayviewCanvasTrack({
       // ✅ NEW
       activeSectorFilter,
       instructorsLayoutSig,
-      isDayNearViewport,
+      dayNearViewportBuffered,
       eventsByReservationId,
    ]);
 
@@ -5917,7 +5707,7 @@ function DayviewCanvasTrack({
             if (isGapCol?.(inst)) return null; // (opțional defensiv)
             const row = Math.floor(idx / colsPerRow);
             const col = idx % colsPerRow;
-            if (!isDayNearViewport) return null;
+            if (!dayNearViewportBuffered) return null;
             if (row < rowRenderStartDep || row > rowRenderEndDep) return null;
             if (col < colRenderStartDep || col > colRenderEndDep) return null;
 
@@ -6215,4 +6005,62 @@ function DayviewCanvasTrack({
    );
 }
 
-export default memo(DayviewCanvasTrack);
+function areTrackPropsEqual(prev, next) {
+   if (prev === next) return true;
+
+   if (prev.dayStart !== next.dayStart) return false;
+   if (prev.dayEnd !== next.dayEnd) return false;
+   if (prev.instructors !== next.instructors) return false;
+   if (prev.events !== next.events) return false;
+   if (prev.slots !== next.slots) return false;
+   if (prev.dayOffsetLeft !== next.dayOffsetLeft) return false;
+   if (prev.layout !== next.layout) return false;
+   if (prev.timeMarks !== next.timeMarks) return false;
+   if (prev.onCreateSlot !== next.onCreateSlot) return false;
+   if (prev.blockedKeyMap !== next.blockedKeyMap) return false;
+   if (prev.blackoutVer !== next.blackoutVer) return false;
+   if (prev.activeEventId !== next.activeEventId) return false;
+   if (prev.activeSearchEventId !== next.activeSearchEventId) return false;
+   if (prev.onActiveEventRectChange !== next.onActiveEventRectChange) return false;
+   if (prev.cars !== next.cars) return false;
+   if (prev.instructorsFull !== next.instructorsFull) return false;
+   if (prev.users !== next.users) return false;
+   if (prev.sharedLookups !== next.sharedLookups) return false;
+   if (prev.zoom !== next.zoom) return false;
+   if (prev.preGrid !== next.preGrid) return false;
+   if (prev.onManualSelection !== next.onManualSelection) return false;
+   if (prev.presenceByReservationUsers !== next.presenceByReservationUsers)
+      return false;
+   if (prev.presenceByReservationColors !== next.presenceByReservationColors)
+      return false;
+   if (prev.createDraftBySlotUsers !== next.createDraftBySlotUsers) return false;
+   if (prev.createDraftBySlotColors !== next.createDraftBySlotColors) return false;
+   if (prev.isPanInteracting !== next.isPanInteracting) return false;
+   if (prev.sectorFilter !== next.sectorFilter) return false;
+
+   const panNow = !!prev.isPanInteracting || !!next.isPanInteracting;
+   const xThreshold = panNow ? 1 : 1;
+   const yThreshold = panNow ? 1 : 1;
+
+   const dx = Math.abs(
+      Number(prev.viewportScrollLeft || 0) - Number(next.viewportScrollLeft || 0),
+   );
+   const dy = Math.abs(
+      Number(prev.viewportScrollTop || 0) - Number(next.viewportScrollTop || 0),
+   );
+   const dw = Math.abs(
+      Number(prev.viewportWidth || 0) - Number(next.viewportWidth || 0),
+   );
+   const dh = Math.abs(
+      Number(prev.viewportHeight || 0) - Number(next.viewportHeight || 0),
+   );
+
+   if (dx >= xThreshold) return false;
+   if (dy >= yThreshold) return false;
+   if (dw > 1) return false;
+   if (dh > 1) return false;
+
+   return true;
+}
+
+export default memo(DayviewCanvasTrack, areTrackPropsEqual);

@@ -41,11 +41,14 @@ export default function useInertialPan(
 ) {
    const isDown = useRef(false);
    const isPanning = useRef(false);
+   const panInputTypeRef = useRef("");
    const last = useRef({ x: 0, y: 0 });
    const vel = useRef({ x: 0, y: 0 });
    const raf = useRef(null);
    const acc = useRef({ dx: 0, dy: 0 });
    const inertiaRaf = useRef(null);
+   const moveRafRef = useRef(null);
+   const pendingMoveRef = useRef(null);
 
    const suppressClickOnce = useRef(false);
    const capturedIdRef = useRef(null);
@@ -80,12 +83,17 @@ export default function useInertialPan(
       const el = targetEl;
       if (!el) return;
 
-      const endInteraction = () => {
+      const endInteraction = (panDetail = null) => {
          if (suspendFlagsRef?.current) {
             suspendFlagsRef.current.isInteracting = false;
+            suspendFlagsRef.current.panPhase = "idle";
          }
          el.classList?.remove?.("is-panning");
-         el.dispatchEvent(new CustomEvent("dvpanend"));
+         if (panDetail && typeof panDetail === "object") {
+            el.dispatchEvent(new CustomEvent("dvpanend", { detail: panDetail }));
+         } else {
+            el.dispatchEvent(new CustomEvent("dvpanend"));
+         }
       };
 
       const stopInertiaNow = () => {
@@ -93,16 +101,92 @@ export default function useInertialPan(
             cancelAnimationFrame(inertiaRaf.current);
             inertiaRaf.current = null;
          }
+         if (moveRafRef.current) {
+            cancelAnimationFrame(moveRafRef.current);
+            moveRafRef.current = null;
+         }
+         pendingMoveRef.current = null;
          vel.current.x = 0;
          vel.current.y = 0;
          isPanning.current = false;
          isDown.current = false;
          el.style.cursor = "grab";
-         endInteraction();
+         endInteraction({ pointerType: panInputTypeRef.current || "mouse" });
+         panInputTypeRef.current = "";
       };
 
       const onCancelInertia = () => {
          stopInertiaNow();
+      };
+
+      const processMoveSample = (sample) => {
+         if (!sample || !isDown.current) return;
+         if (!isPanning.current && ignoreRef.current?.(sample.target)) return;
+
+         const cx = sample.x;
+         const cy = sample.y;
+
+         const dx = (cx - last.current.x) / (pixelScaleX || 1);
+         const dy = (cy - last.current.y) / (pixelScaleY || 1);
+
+         if (!isPanning.current) {
+            const panPointerType = String(pointerTypeRef.current || "").toLowerCase();
+            const dynamicSlop =
+               panPointerType === "touch"
+                  ? Math.max(SLOP_PX, 10)
+                  : panPointerType === "mouse"
+                    ? Math.max(2, Math.min(SLOP_PX, 4))
+                    : Math.max(2, Math.min(SLOP_PX, 5));
+            if (Math.hypot(dx, dy) < dynamicSlop) return;
+            isPanning.current = true;
+            suppressClickOnce.current = true;
+            const pointerType = panPointerType || "mouse";
+            panInputTypeRef.current = pointerType;
+            el.dispatchEvent(
+               new CustomEvent("dvpanstart", {
+                  detail: { pointerType },
+               }),
+            );
+            if (suspendFlagsRef?.current) {
+               suspendFlagsRef.current.isInteracting = true;
+               suspendFlagsRef.current.panPhase = "drag";
+               suspendFlagsRef.current.suspendScrollSnap = true;
+               suspendFlagsRef.current.suspendAutoJump = true;
+            }
+            if (capturedIdRef.current == null && sample.pointerId != null) {
+               try {
+                  el.setPointerCapture?.(sample.pointerId);
+                  capturedIdRef.current = sample.pointerId;
+               } catch {}
+            }
+            el.classList?.add?.("is-panning");
+         }
+
+         last.current.x = cx;
+         last.current.y = cy;
+
+         acc.current.dx += dx;
+         acc.current.dy += dy;
+
+         const panPointerType = String(pointerTypeRef.current || "").toLowerCase();
+         const blend = panPointerType === "touch" ? 0.24 : 0.2;
+         vel.current.x = vel.current.x * (1 - blend) + dx * blend;
+         vel.current.y = vel.current.y * (1 - blend) + dy * blend;
+
+         scheduleApply();
+      };
+
+      const flushPendingMove = () => {
+         moveRafRef.current = null;
+         const sample = pendingMoveRef.current;
+         pendingMoveRef.current = null;
+         if (!sample) return;
+         processMoveSample(sample);
+      };
+
+      const schedulePendingMove = () => {
+         if (moveRafRef.current) return;
+         moveRafRef.current = requestAnimationFrame(flushPendingMove);
       };
 
       const onPointerDown = (e) => {
@@ -113,15 +197,17 @@ export default function useInertialPan(
          isPanning.current = false;
          suppressClickOnce.current = false;
 
-         if (suspendFlagsRef?.current) {
-            suspendFlagsRef.current.isInteracting = true;
-         }
-
          pointerTypeRef.current = String(e.pointerType || "");
+         panInputTypeRef.current = pointerTypeRef.current || "mouse";
 
          const c = e.getCoalescedEvents?.()?.at(-1) ?? e;
          last.current.x = c.clientX;
          last.current.y = c.clientY;
+         pendingMoveRef.current = null;
+         if (moveRafRef.current) {
+            cancelAnimationFrame(moveRafRef.current);
+            moveRafRef.current = null;
+         }
 
          el.style.cursor = "grabbing";
 
@@ -138,48 +224,19 @@ export default function useInertialPan(
          if (!isPanning.current && ignoreRef.current?.(e.target)) return;
 
          const c = e.getCoalescedEvents?.()?.at(-1) ?? e;
-         const cx = c.clientX;
-         const cy = c.clientY;
-
-         let dx = (cx - last.current.x) / (pixelScaleX || 1);
-         let dy = (cy - last.current.y) / (pixelScaleY || 1);
-
-         if (!isPanning.current) {
-            const dynamicSlop =
-               pointerTypeRef.current === "touch"
-                  ? Math.max(SLOP_PX, 10)
-                  : SLOP_PX;
-            if (Math.hypot(dx, dy) < dynamicSlop) return;
-            isPanning.current = true;
-            suppressClickOnce.current = true;
-            el.dispatchEvent(new CustomEvent("dvpanstart"));
-            if (suspendFlagsRef?.current) {
-               suspendFlagsRef.current.suspendScrollSnap = true;
-               suspendFlagsRef.current.suspendAutoJump = true;
-            }
-            if (capturedIdRef.current == null && e.pointerId != null) {
-               try {
-                  el.setPointerCapture?.(e.pointerId);
-                  capturedIdRef.current = e.pointerId;
-               } catch {}
-            }
-            el.classList?.add?.("is-panning");
+         pendingMoveRef.current = {
+            x: c.clientX,
+            y: c.clientY,
+            pointerId: e.pointerId ?? null,
+            target: e.target,
+         };
+         if (
+            isPanning.current &&
+            String(pointerTypeRef.current || "").toLowerCase() === "touch"
+         ) {
+            e.preventDefault();
          }
-
-         e.preventDefault();
-
-         last.current.x = cx;
-         last.current.y = cy;
-
-         acc.current.dx += dx;
-         acc.current.dy += dy;
-
-         // filtrează puțin mișcarea pentru viteză
-         const blend = pointerTypeRef.current === "touch" ? 0.24 : 0.3;
-         vel.current.x = vel.current.x * (1 - blend) + dx * blend;
-         vel.current.y = vel.current.y * (1 - blend) + dy * blend;
-
-         scheduleApply();
+         schedulePendingMove();
       };
 
       const releaseCaptureIfAny = () => {
@@ -194,6 +251,17 @@ export default function useInertialPan(
       const onPointerUp = () => {
          if (!isDown.current) return;
 
+         if (moveRafRef.current) {
+            cancelAnimationFrame(moveRafRef.current);
+            moveRafRef.current = null;
+         }
+         if (pendingMoveRef.current) {
+            const pending = pendingMoveRef.current;
+            pendingMoveRef.current = null;
+            processMoveSample(pending);
+         }
+
+         const pointerType = panInputTypeRef.current || pointerTypeRef.current || "mouse";
          isDown.current = false;
          releaseCaptureIfAny();
          pointerTypeRef.current = "";
@@ -201,7 +269,8 @@ export default function useInertialPan(
          el.classList?.remove?.("is-panning");
 
          if (!isPanning.current) {
-            endInteraction();
+            endInteraction({ pointerType });
+            panInputTypeRef.current = "";
             return;
          }
 
@@ -217,8 +286,14 @@ export default function useInertialPan(
          if (tooSlowX && tooSlowY) {
             inertiaRaf.current = null;
             isPanning.current = false;
-            endInteraction();
+            endInteraction({ pointerType });
+            panInputTypeRef.current = "";
             return;
+         }
+
+         if (suspendFlagsRef?.current) {
+            suspendFlagsRef.current.isInteracting = true;
+            suspendFlagsRef.current.panPhase = "inertia";
          }
 
          let lastTime = performance.now();
@@ -253,7 +328,8 @@ export default function useInertialPan(
             if ((smallX && smallY) || (hitBoundaryX && hitBoundaryY)) {
                inertiaRaf.current = null;
                isPanning.current = false;
-               endInteraction();
+               endInteraction({ pointerType });
+               panInputTypeRef.current = "";
                return;
             }
 
@@ -266,11 +342,8 @@ export default function useInertialPan(
 
       const onClickCapture = (e) => {
          if (!suppressClickOnce.current) return;
-         const t = e.target;
-         const isCardOrSlot = t?.closest?.(".dayview__event");
-         if (!isCardOrSlot) {
-            e.stopPropagation();
-         }
+         e.preventDefault();
+         e.stopPropagation();
          suppressClickOnce.current = false;
       };
 
@@ -306,6 +379,8 @@ export default function useInertialPan(
       return () => {
          if (raf.current) cancelAnimationFrame(raf.current);
          if (inertiaRaf.current) cancelAnimationFrame(inertiaRaf.current);
+         if (moveRafRef.current) cancelAnimationFrame(moveRafRef.current);
+         pendingMoveRef.current = null;
 
          el.removeEventListener("pointerdown", onPointerDown);
          el.removeEventListener("pointermove", onPointerMove);

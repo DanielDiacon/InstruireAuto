@@ -4,7 +4,7 @@ import { ReactSVG } from "react-svg";
 import DarkModeToggle from "../components/Header/DarkModeToggle";
 import M3Link from "../components/Common/M3Link";
 import AlertPills from "../components/Utils/AlertPills";
-import { enrollStudent } from "../api/authService";
+import { enrollStudent, sendGiftWebhook } from "../api/authService";
 
 import addIcon from "../assets/svg/add.svg";
 import arrowIcon from "../assets/svg/arrow.svg";
@@ -240,11 +240,28 @@ export default function EnrollForm() {
          );
          const payload = buildEnrollPayload(form);
          await enrollStudent(payload);
+         let giftErr = null;
+         try {
+            await sendGiftWebhook({
+               nume: payload.nume,
+               prenume: payload.prenume,
+               email: payload.email,
+            });
+         } catch (err) {
+            giftErr = err;
+         }
 
-         addMessage(
-            "Gata! Cererea de înscriere și contractul au fost generate și expediate pe email.",
-            "success",
-         );
+         if (giftErr) {
+            addMessage(
+               "Înscrierea a fost trimisă, dar emailul-cadou nu a putut fi expediat acum.",
+               "warning",
+            );
+         } else {
+            addMessage(
+               "Gata! Cererea de înscriere, contractul și emailul-cadou au fost expediate.",
+               "success",
+            );
+         }
 
          try {
             localStorage.removeItem(LS_KEY);

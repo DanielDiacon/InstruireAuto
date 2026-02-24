@@ -54,7 +54,8 @@ export function getLinksForRole(roleRaw) {
       MANAGER: [
          { link: "/manager", text: "Acasă", icon: homeIcon },
          { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
-         { popup: "addProg", text: "Programare", icon: addIcon },
+         { link: "/manager/calendarplus", text: "Calendar+", icon: addIcon },
+         //{ popup: "addProg", text: "Programare", icon: addIcon },
          { popup: "addInstr", text: "Instructori", icon: instrIcon },
          { popup: "addProfessor", text: "Profesori", icon: instrIcon },
          { popup: "startExam", text: "Examen", icon: examIcon },
@@ -75,8 +76,8 @@ export function getLinksForRole(roleRaw) {
       ADMIN: [
          { link: "/admin", text: "Acasă", icon: homeIcon },
          { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
-         { link: "/admin/calendarplus", text: "Calendar Plus", icon: addIcon },
-         { popup: "addProg", text: "Programare", icon: addIcon },
+         { link: "/admin/calendarplus", text: "Calendar+", icon: addIcon },
+         //{ popup: "addProg", text: "Programare", icon: addIcon },
          { popup: "addInstr", text: "Instructori", icon: instrIcon },
          { popup: "addProfessor", text: "Profesori", icon: instrIcon },
          { popup: "addManager", text: "Manageri", icon: managerIcon },

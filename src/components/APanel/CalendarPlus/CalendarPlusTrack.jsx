@@ -1,9 +1,14 @@
-import React, { memo, useCallback, useMemo } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef } from "react";
 
 import DayOrderEditorModal from "./DayOrderEditorModal";
 import DayviewDomTrack from "./DayviewDomTrack";
+import {
+   computeHorizontalTileWindow,
+   createHorizontalTileEngineState,
+   resetHorizontalTileEngineState,
+} from "../calendarTileEngine";
 
-const TRACK_DAY_GAP_PX = 24;
+const TRACK_DAY_GAP_PX = 10;
 const Z_BASE = 0.6;
 const IS_LOW_SPEC_DEVICE =
    typeof navigator !== "undefined" &&
@@ -89,51 +94,26 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
          }),
       [],
    );
+   const domColWidth = useMemo(
+      () => Math.max(80, Math.round(Number(baseMetrics?.colw || 0))),
+      [baseMetrics?.colw],
+   );
+   const domDayWidth = useMemo(
+      () => Math.max(1, maxColsPerGroup * domColWidth),
+      [maxColsPerGroup, domColWidth],
+   );
 
    const canvasLayout = useMemo(
       () => ({
-         colWidth: baseMetrics.colw,
-         colGap: 12 * zoom,
+         colWidth: domColWidth,
+         colGap: 4 * zoom,
          headerHeight: 100 * zoom,
          slotHeight: 125 * zoom,
          colsPerRow: maxColsPerGroup,
-         rowGap: 24 * zoom,
-         dayWidth: baseMetrics.dayWidth,
+         rowGap: 8 * zoom,
+         dayWidth: domDayWidth,
       }),
-      [baseMetrics.colw, baseMetrics.dayWidth, zoom, maxColsPerGroup],
-   );
-
-   const dayViewportOverscanPx = useMemo(() => {
-      const dayW = Math.max(1, Number(baseMetrics?.dayWidth) || 1);
-      const vw = Math.max(0, Number(viewportWidth) || 0);
-
-      if (vw <= 0) return dayW * (IS_LOW_SPEC_DEVICE ? 4 : 5);
-
-      return Math.max(
-         dayW * (IS_LOW_SPEC_DEVICE ? 2.6 : 3.2),
-         Math.round(vw * (IS_LOW_SPEC_DEVICE ? 1.0 : 1.25)),
-      );
-   }, [baseMetrics?.dayWidth, viewportWidth]);
-
-   const isDayInViewportWindow = useCallback(
-      (dayLeft, dayWidth, dayIdx) => {
-         const vw = Math.max(0, Number(viewportWidth) || 0);
-         if (vw <= 0) {
-            return dayIdx < (IS_LOW_SPEC_DEVICE ? 5 : 7);
-         }
-
-         const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
-         const viewRight = viewLeft + vw;
-         const left = Math.max(0, Number(dayLeft) || 0);
-         const width = Math.max(1, Number(dayWidth) || 1);
-         const right = left + width;
-
-         return !(
-            right < viewLeft - dayViewportOverscanPx ||
-            left > viewRight + dayViewportOverscanPx
-         );
-      },
-      [viewportWidth, viewportScrollLeft, dayViewportOverscanPx],
+      [domColWidth, domDayWidth, zoom, maxColsPerGroup],
    );
 
    const isGroupAForDate = useCallback((dateObj) => {
@@ -159,6 +139,43 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
          }),
       [loadedDays, isGroupAForDate, labelFormatter],
    );
+   const dayTileEngineRef = useRef(createHorizontalTileEngineState());
+   useEffect(() => {
+      resetHorizontalTileEngineState(dayTileEngineRef.current);
+   }, [dayEntries.length, domDayWidth]);
+   const dayTileWindow = useMemo(() => {
+      const dayStride = Math.max(1, Number(domDayWidth || 0) + TRACK_DAY_GAP_PX);
+      const daysInViewport = Math.max(
+         1,
+         Math.ceil((Math.max(0, Number(viewportWidth) || 0) + 1) / dayStride),
+      );
+      return computeHorizontalTileWindow(dayTileEngineRef.current, {
+         totalItems: dayEntries.length,
+         itemWidthPx: dayStride,
+         viewportLeft: viewportScrollLeft,
+         viewportWidth,
+         isInteracting: isPanInteracting,
+         itemsPerTile: 1,
+         baseOverscanTiles: IS_LOW_SPEC_DEVICE ? 1 : 2,
+         panOverscanTiles: IS_LOW_SPEC_DEVICE ? 2 : 3,
+         idlePrefetchTiles: 0,
+         panPrefetchTiles: IS_LOW_SPEC_DEVICE
+            ? Math.max(2, Math.min(4, daysInViewport + 1))
+            : Math.max(3, Math.min(5, daysInViewport + 1)),
+         maxCacheTiles: Math.max(
+            IS_LOW_SPEC_DEVICE ? 10 : 12,
+            daysInViewport + (IS_LOW_SPEC_DEVICE ? 3 : 4),
+         ),
+         keepAliveMs: isPanInteracting ? 900 : 600,
+         directionEpsilonPx: 2,
+      });
+   }, [
+      dayEntries.length,
+      domDayWidth,
+      viewportScrollLeft,
+      viewportWidth,
+      isPanInteracting,
+   ]);
 
    return (
       <div
@@ -221,15 +238,44 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                      const { ts, label, dayStartTs, dayEndTs, isGroupA } =
                         entry;
                      const dayOffsetLeft =
-                        dayIdx * (baseMetrics.dayWidth + TRACK_DAY_GAP_PX);
+                        dayIdx * (domDayWidth + TRACK_DAY_GAP_PX);
+                     const dayLeft = dayOffsetLeft;
+                     const dayRight = dayLeft + (Number(domDayWidth) || 0);
+                     const viewportLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+                     const viewportRight =
+                        viewportLeft + Math.max(0, Number(viewportWidth) || 0);
+                     const viewportBandMargin = Math.max(
+                        Math.round((Number(domDayWidth) || 0) * 1.35),
+                        Math.round(
+                           (Number(viewportWidth) || 0) *
+                              (isPanInteracting
+                                 ? IS_LOW_SPEC_DEVICE
+                                    ? 0.7
+                                    : 0.82
+                                 : IS_LOW_SPEC_DEVICE
+                                   ? 0.78
+                                   : 0.92),
+                        ),
+                     );
+                     const inViewportBand =
+                        !isPanInteracting &&
+                        (viewportRight <= viewportLeft ||
+                           !(
+                              dayRight < viewportLeft - viewportBandMargin ||
+                              dayLeft > viewportRight + viewportBandMargin
+                           ));
+                     const dayTileIdx = Math.floor(
+                        dayIdx / Math.max(1, dayTileWindow.itemsPerTile || 1),
+                     );
+                     const tileVisible =
+                        dayTileIdx >= (dayTileWindow.activeTileStart ?? 0) &&
+                        dayTileIdx <= (dayTileWindow.activeTileEnd ?? -1);
                      const stickyAllowed = !isPanInteracting;
                      const isVisible = forceAllDaysVisible
-                        ? isDayInViewportWindow(
-                             dayOffsetLeft,
-                             baseMetrics.dayWidth,
-                             dayIdx,
-                          )
-                        : visibleDays.has(ts) ||
+                        ? tileVisible || inViewportBand
+                        : tileVisible ||
+                          inViewportBand ||
+                          visibleDays.has(ts) ||
                           (stickyAllowed && stickyVisibleDays?.has?.(ts));
                      const dayInstructors = isGroupA
                         ? canvasInstructorsA
@@ -256,16 +302,15 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                                  map.delete(ts);
                               }
                            }}
-                           className="dayview__group-wrap cv-auto"
+                           className="dayview__group-wrap cv-auto cpdom-day-group"
                            data-active="1"
                            data-day-ts={ts}
                            style={{
                               flex: "0 0 auto",
-                              width: `${baseMetrics.dayWidth}px`,
-                              minWidth: `${baseMetrics.dayWidth}px`,
+                              width: `${domDayWidth}px`,
+                              minWidth: `${domDayWidth}px`,
                               display: "flex",
                               flexDirection: "column",
-                              contain: "layout paint",
                            }}
                         >
                            <header className="dayview__group-header">
@@ -318,6 +363,7 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                                     createDraftBySlotUsers={
                                        createDraftBySlotUsers
                                     }
+                                    isPanInteracting={isPanInteracting}
                                  />
                               ) : (
                                  <div className="dayview__skeleton" />

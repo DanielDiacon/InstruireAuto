@@ -18,24 +18,41 @@ import {
    createReservationsForUser,
    deleteReservation,
 } from "../../../api/reservationsService";
+import {
+   createNote,
+   fetchWaitNotesRange,
+   updateNote,
+} from "../../../api/notesService";
+import { getUserById } from "../../../api/usersService";
 import { addInstructorBlackout } from "../../../api/instructorsService";
 import {
    addReservationLocal,
    fetchReservationsDelta,
    removeReservationLocal,
 } from "../../../store/reservationsSlice";
+import { updateUser } from "../../../store/usersSlice";
 import { DEFAULT_EVENT_COLOR_TOKEN, NO_COLOR_TOKEN } from "./render";
 import {
    MOLDOVA_TZ,
    buildStartTimeForSlot,
+   buildVirtualSlotForDayHHMM,
+   getInstructorSector,
+   getNoteForDate,
    getStudentPhoneFromEv,
    getStudentPrivateMessageFromEv,
    isEventCanceled,
    localKeyFromTs,
+   norm,
    WAIT_SLOTS_PER_COLUMN,
    CANCEL_SLOTS_PER_COLUMN,
    LATERAL_TIME_MARKS,
    LATERAL_SLOTS_PER_COLUMN,
+   WAIT_PLACEHOLDER_TEXT,
+   WAIT_NOTES_CACHE,
+   normalizeWaitNotesInput,
+   upsertNoteForDate,
+   ymdStrInTZ,
+   buildWaitNoteDateIsoForSlot,
 } from "./utils";
 import {
    getSelectionVersion,
@@ -50,18 +67,67 @@ import {
    getSelectedSlot,
 } from "./globals";
 
-const PAD_IDS = new Set(["__pad_1", "__pad_2", "__pad_3", "__pad_4"]);
 const IS_LOW_SPEC_DEVICE =
    typeof navigator !== "undefined" &&
    ((Number(navigator.deviceMemory) > 0 && Number(navigator.deviceMemory) <= 4) ||
       (Number(navigator.hardwareConcurrency) > 0 &&
          Number(navigator.hardwareConcurrency) <= 4));
-const DAY_OFFSCREEN_MARGIN_BASE_PX = IS_LOW_SPEC_DEVICE ? 520 : 680;
+const DAY_OFFSCREEN_MARGIN_BASE_PX = IS_LOW_SPEC_DEVICE ? 620 : 860;
+const DISABLE_SECTION_VIRTUALIZATION = false;
+const LONG_PRESS_MS = 200;
+const LONG_PRESS_MOVE_PX = 14;
+const ACTIVE_EVENT_RECT_RETRY_FRAMES = 40;
+const EMPTY_CELL_ITEMS = [];
+const GAP_COL_PREFIX = "__gapcol_";
+const WAIT_NOTE_MODE = "local-match";
+const RANGE_BLOCK_BATCH_DELAY_MS = 120;
+const EVENT_COLOR_MAP = {
+   DEFAULT: DEFAULT_EVENT_COLOR_TOKEN,
+   RED: "--event-red",
+   ORANGE: "--event-orange",
+   YELLOW: "--event-yellow",
+   GREEN: "--event-green",
+   BLUE: "--event-blue",
+   INDIGO: "--event-indigo",
+   PURPLE: "--event-purple",
+   PINK: "--event-pink",
+   BLACK: NO_COLOR_TOKEN,
+   "BLACK-S": NO_COLOR_TOKEN,
+   "BLACK-T": NO_COLOR_TOKEN,
+};
 
 function normalizeColorToken(input) {
-   const raw = String(input || DEFAULT_EVENT_COLOR_TOKEN).trim();
-   if (!raw || raw === "--default") return DEFAULT_EVENT_COLOR_TOKEN;
-   return raw.startsWith("--") ? raw : DEFAULT_EVENT_COLOR_TOKEN;
+   if (!input) return DEFAULT_EVENT_COLOR_TOKEN;
+
+   const raw = String(input).trim();
+   if (!raw) return DEFAULT_EVENT_COLOR_TOKEN;
+
+   const lower = raw.toLowerCase();
+   if (lower === "transparent" || lower === "black" || lower === "black-t")
+      return NO_COLOR_TOKEN;
+
+   if (/^(rgb\(|hsl\()/i.test(raw) || /^#[0-9a-fA-F]{3,8}$/.test(raw)) return raw;
+   if (raw.startsWith("var(")) return raw;
+
+   if (raw.startsWith("--")) {
+      const short = raw.slice(2).toLowerCase();
+      if (!short || short === "default") return DEFAULT_EVENT_COLOR_TOKEN;
+      if (short === "black" || short === "black-t" || short === "black-s")
+         return NO_COLOR_TOKEN;
+      if (short.startsWith("event-")) return `--${short}`;
+      return `--event-${short}`;
+   }
+
+   if (/^event-/i.test(raw)) {
+      const rest = raw.slice("event-".length).toLowerCase();
+      if (!rest || rest === "default") return DEFAULT_EVENT_COLOR_TOKEN;
+      if (rest === "black" || rest === "black-t" || rest === "black-s")
+         return NO_COLOR_TOKEN;
+      return `--event-${rest}`;
+   }
+
+   const mapped = EVENT_COLOR_MAP[raw.toUpperCase()];
+   return mapped || raw;
 }
 
 function resolveCssColor(input) {
@@ -91,6 +157,22 @@ function toLocalDateTimeString(value) {
    const h = String(d.getHours()).padStart(2, "0");
    const min = String(d.getMinutes()).padStart(2, "0");
    return `${y}-${m}-${day}T${h}:${min}:00`;
+}
+
+function isEditableTarget(target) {
+   if (!target || typeof target !== "object") return false;
+   const tag = String(target.tagName || "").toLowerCase();
+   return tag === "input" || tag === "textarea" || !!target.isContentEditable;
+}
+
+function rectsIntersect(a, b) {
+   if (!a || !b) return false;
+   return !(
+      b.left >= a.right ||
+      b.right <= a.left ||
+      b.top >= a.bottom ||
+      b.bottom <= a.top
+   );
 }
 
 function getReservationId(ev) {
@@ -162,6 +244,198 @@ function buildHeadersMeta(instructors, colsPerRow) {
    });
 }
 
+function isPadInstructor(inst) {
+   const id = String(inst?.id || "");
+   return !!inst?._padType || id.startsWith("__pad_");
+}
+
+function isGapInstructor(inst) {
+   const id = String(inst?.id || "");
+   return id.startsWith(GAP_COL_PREFIX) || inst?._isGapColumn === true;
+}
+
+function detectPadType(inst) {
+   if (!inst) return null;
+   if (inst?._padType) return String(inst._padType);
+
+   const id = String(inst?.id || "");
+   const nameLower = String(inst?.name || "").toLowerCase();
+
+   if (id === "__pad_1" || nameLower.includes("anular")) return "cancel";
+   if (id === "__pad_4" || nameLower.includes("later")) return "lateral";
+   if (id.startsWith("__pad_")) return "wait";
+   return null;
+}
+
+function normalizeBlockedSetValue(value) {
+   if (!value) return new Set();
+   if (value instanceof Set) return value;
+   if (Array.isArray(value)) return new Set(value.map((x) => String(x)));
+   if (typeof value?.has === "function") return value;
+   if (typeof value === "object") {
+      return new Set(
+         Object.entries(value)
+            .filter(([, v]) => !!v)
+            .map(([k]) => String(k)),
+      );
+   }
+   return new Set();
+}
+
+function normalizeBlockedMapInput(blockedKeyMap) {
+   if (!blockedKeyMap) return null;
+   const out = new Map();
+
+   if (blockedKeyMap instanceof Map) {
+      for (const [key, value] of blockedKeyMap.entries()) {
+         const k = String(key ?? "").trim();
+         if (!k) continue;
+         out.set(k, normalizeBlockedSetValue(value));
+      }
+      return out;
+   }
+
+   if (typeof blockedKeyMap === "object") {
+      for (const [key, value] of Object.entries(blockedKeyMap)) {
+         const k = String(key ?? "").trim();
+         if (!k) continue;
+         out.set(k, normalizeBlockedSetValue(value));
+      }
+      return out;
+   }
+
+   return null;
+}
+
+function makeGapColumn(rowIndex, colIndex) {
+   return {
+      id: `${GAP_COL_PREFIX}${rowIndex}_${colIndex}`,
+      name: "",
+      _isGapColumn: true,
+      _padType: "gap",
+      sectorSlug: null,
+   };
+}
+
+function buildEffectiveInstructorsLayout(instructors) {
+   const list = Array.isArray(instructors) ? instructors : [];
+   if (!list.length) return [];
+
+   const cancelPads = [];
+   const waitPads = [];
+   const lateralPads = [];
+   const real = [];
+
+   for (const inst of list) {
+      if (!inst) continue;
+      const padType = detectPadType(inst);
+      if (!padType) {
+         real.push(inst);
+         continue;
+      }
+
+      if (padType === "cancel") cancelPads.push({ ...inst, _padType: "cancel" });
+      else if (padType === "lateral")
+         lateralPads.push({ ...inst, _padType: "lateral" });
+      else waitPads.push({ ...inst, _padType: "wait" });
+   }
+
+   const lateralTemplate = lateralPads[0] || waitPads[0] || cancelPads[0] || null;
+   const cancel1Base = cancelPads[0] || cancelPads[1] || lateralTemplate || null;
+   const cancel2Base = cancelPads[1] || cancelPads[0] || cancel1Base;
+   const wait1Base = waitPads[0] || waitPads[1] || lateralTemplate || cancel1Base;
+   const wait2Base = waitPads[1] || waitPads[0] || wait1Base;
+
+   const makePad = (base, padType, padColumnIndex, rowIndex) => {
+      if (!base) return makeGapColumn(rowIndex, padColumnIndex);
+      const baseId = String(base.id || "__pad_");
+      return {
+         ...base,
+         id: `${baseId}__r${rowIndex}__c${padColumnIndex}`,
+         _basePadId: baseId,
+         _padType: padType,
+         _padColumnIndex: padColumnIndex,
+      };
+   };
+
+   const rows = [];
+   rows.push([
+      makePad(cancel1Base, "cancel", 0, 0),
+      makePad(cancel2Base, "cancel", 1, 0),
+      makePad(wait1Base, "wait", 0, 0),
+      makePad(wait2Base, "wait", 1, 0),
+   ]);
+
+   const makeLateral = (rowIndex) => {
+      if (!lateralTemplate) return makeGapColumn(rowIndex, 3);
+      const baseId = String(lateralTemplate.id || "__pad_4");
+      return {
+         ...lateralTemplate,
+         id: `${baseId}__r${rowIndex}__lateral`,
+         _basePadId: baseId,
+         _padType: "lateral",
+         _padColumnIndex: rowIndex,
+      };
+   };
+
+   let i = 0;
+   while (i < real.length) {
+      const rowIndex = rows.length;
+      const c0 = i < real.length ? real[i++] : makeGapColumn(rowIndex, 0);
+      const c1 = i < real.length ? real[i++] : makeGapColumn(rowIndex, 1);
+      const c2 = i < real.length ? real[i++] : makeGapColumn(rowIndex, 2);
+      rows.push([c0, c1, c2, makeLateral(rowIndex)]);
+   }
+
+   return rows.flat();
+}
+
+function buildInstructorBadge(name) {
+   const parts = String(name || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+   if (!parts.length) return "";
+   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+   return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+}
+
+function resolveGearboxBadge(value) {
+   const raw = String(value || "").toLowerCase();
+   if (!raw) return "";
+   if (raw.includes("auto")) return "A";
+   if (raw.includes("man")) return "M";
+   return "";
+}
+
+function readWaitNoteSnapshot(notesMap, globalIdx) {
+   if (!notesMap || globalIdx == null) return { id: null, text: "" };
+   const raw =
+      notesMap?.[globalIdx] ?? notesMap?.[String(globalIdx)] ?? null;
+   if (!raw) return { id: null, text: "" };
+
+   if (typeof raw === "string") {
+      return { id: null, text: String(raw || "").trim() };
+   }
+
+   if (typeof raw === "object") {
+      const idRaw = raw.id ?? raw._id ?? raw.noteId ?? raw.note_id ?? null;
+      const textRaw = raw.text ?? raw.content ?? raw.note ?? "";
+      return {
+         id: idRaw != null ? String(idRaw) : null,
+         text: String(textRaw || "").trim(),
+      };
+   }
+
+   return { id: null, text: "" };
+}
+
+function buildWaitNoteSnapshotSignature(snapshot) {
+   const id = snapshot?.id != null ? String(snapshot.id) : "";
+   const text = String(snapshot?.text || "").trim();
+   return `${id}|${text}`;
+}
+
 export default memo(function DayviewDomTrack({
    dayStart,
    dayEnd,
@@ -179,29 +453,261 @@ export default memo(function DayviewDomTrack({
    activeSearchEventId,
    onActiveEventRectChange,
    onCreateSlot,
+   users = [],
+   cars = [],
+   instructorsFull = [],
    createDraftBySlotUsers,
    createDraftBySlotColors,
    presenceByReservationUsers,
    presenceByReservationColors,
+   isPanInteracting = false,
 }) {
    const dispatch = useDispatch();
    const rootRef = useRef(null);
    const eventRefMap = useRef(new Map());
+   const longPressTimerRef = useRef(0);
+   const longPressStateRef = useRef(null);
+   const ignoreClickUntilRef = useRef(0);
+   const waitInputRef = useRef(null);
+   const waitCommitRef = useRef(false);
+   const headerInputRef = useRef(null);
+   const waitEditFocusKeyRef = useRef("");
+   const headerEditFocusKeyRef = useRef("");
+   const rangeDragRef = useRef({
+      active: false,
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      currentX: 0,
+      currentY: 0,
+      rafId: 0,
+   });
+   const rangeSelectionSigRef = useRef("");
+   const rangeSelectedEntriesRef = useRef([]);
+   const rangeBatchRunningRef = useRef(false);
+   const rangeOwnerTokenRef = useRef(
+      `cpdom-range-${Math.random().toString(36).slice(2, 10)}`,
+   );
 
    const [selectionVersion, setSelectionVersionState] = useState(() =>
       getSelectionVersion(),
    );
+   const [waitNotes, setWaitNotes] = useState({});
+   const [waitEdit, setWaitEdit] = useState(null);
+   const [headerEdit, setHeaderEdit] = useState(null);
+   const waitNotesRef = useRef(waitNotes);
+   const [rangeSelectedEntries, setRangeSelectedEntries] = useState([]);
+   const [rangeBox, setRangeBox] = useState(null);
+   const rangeSelectedKeySet = useMemo(
+      () => new Set(rangeSelectedEntries.map((entry) => entry.rangeKey)),
+      [rangeSelectedEntries],
+   );
+   const setRangeEntries = useCallback((entriesRaw) => {
+      const entries = Array.isArray(entriesRaw) ? entriesRaw : [];
+      const sig = entries.map((entry) => entry.rangeKey).join("|");
+      if (sig === rangeSelectionSigRef.current) return;
+      rangeSelectionSigRef.current = sig;
+      rangeSelectedEntriesRef.current = entries;
+      setRangeSelectedEntries(entries);
+   }, []);
+   const clearRangeSelection = useCallback(() => {
+      const drag = rangeDragRef.current;
+      if (drag.rafId) {
+         cancelAnimationFrame(drag.rafId);
+         drag.rafId = 0;
+      }
+      drag.active = false;
+      drag.pointerId = null;
+      setRangeBox(null);
+      setRangeEntries([]);
+   }, [setRangeEntries]);
 
    useEffect(() => {
       const release = retainGlobals();
       return release;
    }, []);
 
+   useEffect(
+      () => () => {
+         if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = 0;
+         }
+         longPressStateRef.current = null;
+         const drag = rangeDragRef.current;
+         if (drag.rafId) {
+            cancelAnimationFrame(drag.rafId);
+            drag.rafId = 0;
+         }
+      },
+      [],
+   );
+
    useEffect(() => {
       const onSel = () => setSelectionVersionState(getSelectionVersion());
       window.addEventListener("dayview-selection-change", onSel);
       return () => window.removeEventListener("dayview-selection-change", onSel);
    }, []);
+   useEffect(() => {
+      const onRangeOwner = (ev) => {
+         const owner = String(ev?.detail?.owner || "").trim();
+         if (!owner || owner === rangeOwnerTokenRef.current) return;
+         clearRangeSelection();
+      };
+      window.addEventListener("cpdom-range-owner-change", onRangeOwner);
+      return () =>
+         window.removeEventListener("cpdom-range-owner-change", onRangeOwner);
+   }, [clearRangeSelection]);
+
+   useEffect(() => {
+      if (!waitEdit) {
+         waitEditFocusKeyRef.current = "";
+         return;
+      }
+      const focusKey = `${String(waitEdit.instId || "")}|${Number(
+         waitEdit.slotIdx ?? -1,
+      )}|${Number(waitEdit.globalIdx ?? -1)}`;
+      if (waitEditFocusKeyRef.current === focusKey) return;
+      waitEditFocusKeyRef.current = focusKey;
+
+      const input = waitInputRef.current;
+      if (!input) return;
+      input.focus();
+      try {
+         const len = Number(input.value?.length || 0);
+         input.setSelectionRange(len, len);
+      } catch {}
+   }, [waitEdit]);
+   useEffect(() => {
+      waitNotesRef.current = waitNotes;
+   }, [waitNotes]);
+   useEffect(() => {
+      if (!headerEdit) {
+         headerEditFocusKeyRef.current = "";
+         return;
+      }
+      const focusKey = `${String(headerEdit.instId || "")}|${String(
+         headerEdit.userId || "",
+      )}`;
+      if (headerEditFocusKeyRef.current === focusKey) return;
+      headerEditFocusKeyRef.current = focusKey;
+
+      const input = headerInputRef.current;
+      if (!input) return;
+      input.focus();
+      try {
+         const len = Number(input.value?.length || 0);
+         input.setSelectionRange(len, len);
+      } catch {}
+   }, [headerEdit]);
+
+   const dayStartMs = useMemo(() => {
+      const d = toDateSafe(dayStart);
+      return d ? d.getTime() : null;
+   }, [dayStart]);
+   const dayEndMs = useMemo(() => {
+      const d = toDateSafe(dayEnd);
+      return d ? d.getTime() : null;
+   }, [dayEnd]);
+
+   const waitRangeKey = useMemo(() => {
+      if (dayStartMs == null) return "";
+      const from = new Date(dayStartMs);
+      const to = dayEndMs != null ? new Date(dayEndMs) : new Date(dayStartMs);
+      return `${ymdStrInTZ(from, MOLDOVA_TZ)}|${ymdStrInTZ(to, MOLDOVA_TZ)}`;
+   }, [dayStartMs, dayEndMs]);
+
+   const fetchLatestWaitNotesMap = useCallback(async () => {
+      if (!waitRangeKey || dayStartMs == null) {
+         setWaitNotes({});
+         return {};
+      }
+
+      const from = new Date(dayStartMs);
+      const to = dayEndMs != null ? new Date(dayEndMs) : new Date(dayStartMs);
+      const raw = await fetchWaitNotesRange({ from, to, type: "wait-slot" });
+      const normalized = normalizeWaitNotesInput(raw, from);
+
+      const entry = WAIT_NOTES_CACHE.get(waitRangeKey) || {
+         data: null,
+         error: null,
+         promise: null,
+      };
+      entry.data = normalized;
+      entry.error = null;
+      entry.promise = null;
+      WAIT_NOTES_CACHE.set(waitRangeKey, entry);
+
+      waitNotesRef.current = normalized;
+      setWaitNotes(normalized);
+
+      return normalized;
+   }, [waitRangeKey, dayStartMs, dayEndMs]);
+
+   useEffect(() => {
+      if (!waitRangeKey || dayStartMs == null) {
+         setWaitNotes({});
+         return;
+      }
+
+      let alive = true;
+      const from = new Date(dayStartMs);
+      const to = dayEndMs != null ? new Date(dayEndMs) : new Date(dayStartMs);
+
+      const apply = (value) => {
+         if (!alive) return;
+         setWaitNotes(value && typeof value === "object" ? value : {});
+      };
+
+      const existing = WAIT_NOTES_CACHE.get(waitRangeKey);
+      if (existing?.data) apply(existing.data);
+
+      let entry = existing;
+      if (!entry) {
+         entry = { data: null, error: null, promise: null };
+         WAIT_NOTES_CACHE.set(waitRangeKey, entry);
+      }
+
+      if (!entry.promise) {
+         entry.promise = fetchWaitNotesRange({ from, to, type: "wait-slot" })
+            .then((raw) => {
+               const normalized = normalizeWaitNotesInput(raw, from);
+               entry.data = normalized;
+               entry.error = null;
+               entry.promise = null;
+               WAIT_NOTES_CACHE.set(waitRangeKey, entry);
+               return normalized;
+            })
+            .catch((err) => {
+               entry.error = err;
+               entry.promise = null;
+               WAIT_NOTES_CACHE.set(waitRangeKey, entry);
+               throw err;
+            });
+      }
+
+      entry.promise
+         .then((normalized) => apply(normalized))
+         .catch((err) => {
+            console.error("fetchWaitNotesRange (DOM) error:", err);
+            apply(existing?.data || {});
+         });
+
+      return () => {
+         alive = false;
+      };
+   }, [waitRangeKey, dayStartMs, dayEndMs]);
+
+   useEffect(() => {
+      setWaitEdit(null);
+      waitCommitRef.current = false;
+   }, [waitRangeKey]);
+   useEffect(() => {
+      setHeaderEdit(null);
+   }, [dayStartMs]);
+   useEffect(() => {
+      clearRangeSelection();
+   }, [dayStartMs, clearRangeSelection]);
 
    const deleteReservationById = useCallback(
       async (reservationId) => {
@@ -279,7 +785,6 @@ export default memo(function DayviewDomTrack({
          if (!Number.isFinite(instructorIdNum) || instructorIdNum <= 0) {
             instructorIdNum = Number(copy.instructorId);
          }
-
          const userIdNum = Number(copy.userId);
          if (!Number.isFinite(instructorIdNum) || instructorIdNum <= 0) return;
          if (!Number.isFinite(userIdNum) || userIdNum <= 0) return;
@@ -423,6 +928,60 @@ export default memo(function DayviewDomTrack({
       setBlockFn(blockSelectedSlot);
    }, [blockSelectedSlot]);
 
+   const blockRangeSelectedSlots = useCallback(async () => {
+      if (rangeBatchRunningRef.current) return;
+
+      const queue = (rangeSelectedEntriesRef.current || []).filter(
+         (entry) => entry && !entry.blocked,
+      );
+      if (!queue.length) return;
+
+      rangeBatchRunningRef.current = true;
+      try {
+         for (let i = 0; i < queue.length; i++) {
+            const entry = queue[i];
+            await blockSelectedSlot({
+               instructorId: entry.instructorId,
+               actionInstructorId: entry.instructorId,
+               slotStart: entry.slotStart,
+               slotEnd: entry.slotEnd,
+               localSlotKey: entry.slotKey,
+            });
+            if (i < queue.length - 1) {
+               await new Promise((resolve) =>
+                  setTimeout(resolve, RANGE_BLOCK_BATCH_DELAY_MS),
+               );
+            }
+         }
+      } finally {
+         rangeBatchRunningRef.current = false;
+      }
+   }, [blockSelectedSlot]);
+
+   useEffect(() => {
+      const onKeyDownCapture = (e) => {
+         if (!(e.ctrlKey || e.metaKey)) return;
+         if (isEditableTarget(e.target)) return;
+         if (String(e.key || "").toLowerCase() !== "l") return;
+
+         const hasRangeSelection =
+            (rangeSelectedEntriesRef.current || []).filter((x) => !x?.blocked)
+               .length > 0;
+         if (!hasRangeSelection) return;
+
+         e.preventDefault();
+         e.stopPropagation();
+         if (typeof e.stopImmediatePropagation === "function") {
+            e.stopImmediatePropagation();
+         }
+         void blockRangeSelectedSlots();
+      };
+
+      window.addEventListener("keydown", onKeyDownCapture, true);
+      return () =>
+         window.removeEventListener("keydown", onKeyDownCapture, true);
+   }, [blockRangeSelectedSlots]);
+
    const slotsSafe = useMemo(() => {
       const out = [];
       for (const slot of Array.isArray(slots) ? slots : []) {
@@ -448,37 +1007,46 @@ export default memo(function DayviewDomTrack({
    }, [slotsSafe]);
 
    const z = 1;
-   const colWidth = Math.max(80, Number(layout?.colWidth || 150));
-   const colGap = Math.max(0, Number(layout?.colGap || 12));
-   const headerHeight = Math.max(60, Number(layout?.headerHeight || 100) * z);
-   const colsPerRow = Math.max(1, Number(layout?.colsPerRow || 4));
-   const rowGap = Math.max(0, Number(layout?.rowGap ?? 24));
-   const slotHeight = Math.max(24, Number(layout?.slotHeight || 120));
-   const slotGap = 4;
+   const colWidth = Math.max(80, Math.round(Number(layout?.colWidth || 150)));
+   const colGap = 0;
+   const headerHeight = Math.max(
+      60,
+      Math.round(Number(layout?.headerHeight || 100) * z),
+   );
+   const colsPerRow = 4;
+   const rowGap = 10;
+   const slotHeight = Math.max(24, Math.round(Number(layout?.slotHeight || 120)));
+   const slotGap = 0;
+
+   const effectiveInstructors = useMemo(
+      () => buildEffectiveInstructorsLayout(instructors),
+      [instructors],
+   );
 
    const headersMeta = useMemo(
-      () => buildHeadersMeta(instructors, colsPerRow),
-      [instructors, colsPerRow],
+      () => buildHeadersMeta(effectiveInstructors, colsPerRow),
+      [effectiveInstructors, colsPerRow],
    );
 
    const headerMetrics = useMemo(() => {
       const colsCount = Math.max(1, headersMeta.length || 1);
       const rowsCount = Math.max(1, Math.ceil(colsCount / colsPerRow));
       const worldHeight = computeWorldHeight(slotsSafe.length, slotHeight, slotGap);
-      const padWorldHeight = computeWorldHeight(
-         Math.min(WAIT_SLOTS_PER_COLUMN, slotsSafe.length),
-         slotHeight,
-         slotGap,
+      const padSlots = Math.min(
+         Math.max(WAIT_SLOTS_PER_COLUMN, CANCEL_SLOTS_PER_COLUMN),
+         slotsSafe.length,
       );
-
+      const padWorldHeight = padSlots
+         ? computeWorldHeight(padSlots, slotHeight, slotGap)
+         : worldHeight;
       const rowHeights = new Array(rowsCount);
       for (let row = 0; row < rowsCount; row++) {
-         const start = row * colsPerRow;
-         const end = Math.min(colsCount, start + colsPerRow);
-         let allPad = true;
-         for (let i = start; i < end; i++) {
-            const instId = String(headersMeta[i]?.inst?.id || "");
-            if (!instId.startsWith("__pad_")) {
+         const rowStart = row * colsPerRow;
+         const rowEnd = Math.min(colsCount, rowStart + colsPerRow);
+         let allPad = rowEnd > rowStart;
+         for (let i = rowStart; i < rowEnd; i++) {
+            const inst = headersMeta[i]?.inst || null;
+            if (!inst || (!isPadInstructor(inst) && !isGapInstructor(inst))) {
                allPad = false;
                break;
             }
@@ -507,9 +1075,21 @@ export default memo(function DayviewDomTrack({
          dayWidth,
          worldHeight,
       };
-   }, [headersMeta, colsPerRow, slotsSafe.length, slotHeight, slotGap, headerHeight, rowGap, colWidth, colGap]);
+   }, [
+      headersMeta,
+      colsPerRow,
+      slotsSafe.length,
+      slotHeight,
+      slotGap,
+      headerHeight,
+      rowGap,
+      colWidth,
+      colGap,
+   ]);
 
    const isDayNearViewport = useMemo(() => {
+      if (DISABLE_SECTION_VIRTUALIZATION) return true;
+
       const viewWidth = Math.max(0, Number(viewportWidth) || 0);
       if (viewWidth <= 0) return true;
 
@@ -519,17 +1099,76 @@ export default memo(function DayviewDomTrack({
       const dayRight = dayLeft + Math.max(0, Number(headerMetrics.dayWidth) || 0);
       if (dayRight <= dayLeft) return true;
 
+      const baseMargin = isPanInteracting
+         ? DAY_OFFSCREEN_MARGIN_BASE_PX
+         : Math.round(
+              DAY_OFFSCREEN_MARGIN_BASE_PX * (IS_LOW_SPEC_DEVICE ? 0.78 : 0.72),
+           );
+      const viewportMargin = Math.round(
+         viewWidth *
+            (isPanInteracting
+               ? IS_LOW_SPEC_DEVICE
+                  ? 0.9
+                  : 1.05
+               : IS_LOW_SPEC_DEVICE
+                 ? 0.65
+                 : 0.8),
+      );
+      const dayWidthMargin = Math.round(
+         Math.max(0, Number(headerMetrics.dayWidth) || 0) *
+            (isPanInteracting ? 0.6 : 0.42),
+      );
       const margin = Math.max(
-         DAY_OFFSCREEN_MARGIN_BASE_PX,
-         Math.round(viewWidth * (IS_LOW_SPEC_DEVICE ? 0.55 : 0.8)),
+         baseMargin,
+         viewportMargin,
+         dayWidthMargin,
       );
 
       return !(dayRight < viewLeft - margin || dayLeft > viewRight + margin);
+   }, [
+      viewportWidth,
+      viewportScrollLeft,
+      dayOffsetLeft,
+      headerMetrics.dayWidth,
+      isPanInteracting,
+   ]);
+   const isDayIntersectingViewport = useMemo(() => {
+      const viewWidth = Math.max(0, Number(viewportWidth) || 0);
+      if (viewWidth <= 0) return true;
+
+      const viewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
+      const viewRight = viewLeft + viewWidth;
+      const dayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
+      const dayRight = dayLeft + Math.max(0, Number(headerMetrics.dayWidth) || 0);
+      if (dayRight <= dayLeft) return true;
+
+      return !(dayRight < viewLeft || dayLeft > viewRight);
    }, [viewportWidth, viewportScrollLeft, dayOffsetLeft, headerMetrics.dayWidth]);
+   const dayNearViewportSeenAtRef = useRef(0);
+   const dayNearViewportNowMs =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+   if (isDayNearViewport) {
+      dayNearViewportSeenAtRef.current = dayNearViewportNowMs;
+   }
+   const dayNearViewportBuffered =
+      isDayNearViewport ||
+      dayNearViewportNowMs - (dayNearViewportSeenAtRef.current || 0) <=
+         (isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 520
+               : 400
+            : IS_LOW_SPEC_DEVICE
+              ? 280
+              : 200);
+   useEffect(() => {
+      if (dayNearViewportBuffered) return;
+      clearRangeSelection();
+   }, [dayNearViewportBuffered, clearRangeSelection]);
 
    const rowRenderRange = useMemo(() => {
       const rowsCount = Number(headerMetrics.rowsCount || 0);
       if (!rowsCount) return { start: 0, end: 0 };
+      if (DISABLE_SECTION_VIRTUALIZATION) return { start: 0, end: rowsCount - 1 };
 
       const viewH = Number(viewportHeight) || 0;
       if (viewH <= 0) return { start: 0, end: rowsCount - 1 };
@@ -537,8 +1176,23 @@ export default memo(function DayviewDomTrack({
       const viewTop = Math.max(0, Number(viewportScrollTop) || 0);
       const viewBottom = viewTop + viewH;
       const overscanPx = Math.max(
-         IS_LOW_SPEC_DEVICE ? 220 : 300,
-         Math.round(viewH * (IS_LOW_SPEC_DEVICE ? 0.55 : 0.75)),
+         isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 250
+               : 330
+            : IS_LOW_SPEC_DEVICE
+              ? 170
+              : 230,
+         Math.round(
+            viewH *
+               (isPanInteracting
+                  ? IS_LOW_SPEC_DEVICE
+                     ? 0.62
+                     : 0.8
+                  : IS_LOW_SPEC_DEVICE
+                    ? 0.45
+                    : 0.6),
+         ),
       );
 
       let start = 0;
@@ -563,16 +1217,41 @@ export default memo(function DayviewDomTrack({
 
       if (end < start) return { start: 0, end: rowsCount - 1 };
       return { start, end };
-   }, [headerMetrics, viewportScrollTop, viewportHeight, headerHeight]);
+   }, [
+      headerMetrics,
+      viewportScrollTop,
+      viewportHeight,
+      headerHeight,
+      isPanInteracting,
+   ]);
 
    const colRenderRange = useMemo(() => {
+      if (DISABLE_SECTION_VIRTUALIZATION) return { start: 0, end: colsPerRow - 1 };
+      if (isPanInteracting && isDayIntersectingViewport) {
+         return { start: 0, end: colsPerRow - 1 };
+      }
       const viewW = Number(viewportWidth) || 0;
       if (viewW <= 0) return { start: 0, end: colsPerRow - 1 };
 
       const stride = Math.max(1, colWidth + colGap);
       const overscanPx = Math.max(
-         IS_LOW_SPEC_DEVICE ? 320 : 420,
-         Math.round(colWidth * (IS_LOW_SPEC_DEVICE ? 2.4 : 3.2)),
+         isPanInteracting
+            ? IS_LOW_SPEC_DEVICE
+               ? 370
+               : 500
+            : IS_LOW_SPEC_DEVICE
+              ? 240
+              : 330,
+         Math.round(
+            colWidth *
+               (isPanInteracting
+                  ? IS_LOW_SPEC_DEVICE
+                     ? 2.7
+                     : 3.5
+                  : IS_LOW_SPEC_DEVICE
+                    ? 1.95
+                    : 2.6),
+         ),
       );
       const globalViewLeft = Math.max(0, Number(viewportScrollLeft) || 0);
       const localDayLeft = Math.max(0, Number(dayOffsetLeft) || 0);
@@ -585,7 +1264,16 @@ export default memo(function DayviewDomTrack({
       const end = Math.min(colsPerRow - 1, Math.ceil(scanEnd / stride));
       if (end < start) return { start: 0, end: -1 };
       return { start, end };
-   }, [viewportWidth, viewportScrollLeft, dayOffsetLeft, colsPerRow, colWidth, colGap]);
+   }, [
+      viewportWidth,
+      viewportScrollLeft,
+      dayOffsetLeft,
+      colsPerRow,
+      colWidth,
+      colGap,
+      isPanInteracting,
+      isDayIntersectingViewport,
+   ]);
 
    const slotLabelByIndex = useMemo(() => {
       return slotsSafe.map((slot) => slot.label);
@@ -620,16 +1308,11 @@ export default memo(function DayviewDomTrack({
       });
 
       const plain = [];
-      const canceled = [];
+      const canceledForPad = [];
 
       for (const ev of base) {
          const rid = getReservationId(ev);
          if (rid != null && isHidden(rid)) continue;
-
-         if (isEventCanceled(ev) && cancelPads.length) {
-            canceled.push(ev);
-            continue;
-         }
 
          const start = toDateSafe(ev?.start);
          if (!start) continue;
@@ -668,8 +1351,17 @@ export default memo(function DayviewDomTrack({
          const privateMessage =
             String(ev?.eventPrivateMessage || "").trim() ||
             String(getStudentPrivateMessageFromEv(ev) || "").trim();
-
-         plain.push({
+         const raw = ev?.raw || {};
+         const isFavorite = raw?.isFavorite === true || raw?.is_favorite === true;
+         const isImportant = raw?.isImportant === true || raw?.is_important === true;
+         const statusMarks = [];
+         if (isFavorite) statusMarks.push("⁂");
+         if (isImportant) statusMarks.push("‼");
+         const gearboxBadge =
+            resolveGearboxBadge(ev?.gearboxLabel) ||
+            resolveGearboxBadge(raw?.gearbox || ev?.gearbox);
+         const timeText = hhmm(start);
+         const baseItem = {
             id: ev?.id != null ? String(ev.id) : "",
             reservationId: rid != null ? String(rid) : String(ev?.id || ""),
             instructorId: mappedInstId,
@@ -679,51 +1371,62 @@ export default memo(function DayviewDomTrack({
             student,
             phone,
             privateMessage,
-            colorToken: normalizeColorToken(ev?.color),
-            canceled: false,
             rawEvent: ev,
             userId: getEventUserId(ev),
             sector: ev?.raw?.sector || ev?.sector || "Botanica",
             gearbox: ev?.raw?.gearbox || ev?.gearbox || "Manual",
+            timeText,
+            gearboxBadge,
+            statusMarks: statusMarks.join(" · "),
+            isFavorite,
+            isImportant,
+         };
+
+         if (isEventCanceled(ev)) {
+            // marcajul rămâne în locul original, colorat galben.
+            plain.push({
+               ...baseItem,
+               colorToken: "--event-yellow",
+               canceled: false,
+               isCanceledOriginMarker: true,
+            });
+            canceledForPad.push({
+               ...baseItem,
+               colorToken: normalizeColorToken(ev?.color),
+               canceled: true,
+               isCanceledOriginMarker: false,
+            });
+            continue;
+         }
+
+         plain.push({
+            ...baseItem,
+            colorToken: normalizeColorToken(ev?.color),
+            canceled: false,
+            isCanceledOriginMarker: false,
          });
       }
 
-      if (canceled.length && cancelPads.length) {
+      if (canceledForPad.length && cancelPads.length) {
          const maxSlots = Math.max(1, Math.min(CANCEL_SLOTS_PER_COLUMN, slotsSafe.length));
-         canceled
+         canceledForPad
             .slice()
             .sort((a, b) => {
-               const aa = toDateSafe(a?.start)?.getTime() || 0;
-               const bb = toDateSafe(b?.start)?.getTime() || 0;
+               const aa = a?.start?.getTime?.() || 0;
+               const bb = b?.start?.getTime?.() || 0;
                return aa - bb;
             })
-            .forEach((ev, idx) => {
+            .forEach((item, idx) => {
                const padMeta = cancelPads[Math.floor(idx / maxSlots) % cancelPads.length];
                const slotIdx = idx % maxSlots;
-               const rid = getReservationId(ev);
-               const start = toDateSafe(ev?.start);
-               if (!padMeta?.inst?.id || !start) return;
+               if (!padMeta?.inst?.id || !item?.start) return;
 
                plain.push({
-                  id: ev?.id != null ? String(ev.id) : "",
-                  reservationId: rid != null ? String(rid) : String(ev?.id || ""),
+                  ...item,
                   instructorId: String(padMeta.inst.id),
                   slotIdx,
-                  start,
-                  end: toDateSafe(ev?.end),
-                  student:
-                     `${ev?.studentFirst || ""} ${ev?.studentLast || ""}`.trim() ||
-                     "Programare",
-                  phone: getStudentPhoneFromEv(ev),
-                  privateMessage:
-                     String(ev?.eventPrivateMessage || "").trim() ||
-                     String(getStudentPrivateMessageFromEv(ev) || "").trim(),
-                  colorToken: normalizeColorToken(ev?.color),
                   canceled: true,
-                  rawEvent: ev,
-                  userId: getEventUserId(ev),
-                  sector: ev?.raw?.sector || ev?.sector || "Botanica",
-                  gearbox: ev?.raw?.gearbox || ev?.gearbox || "Manual",
+                  isCanceledOriginMarker: false,
                });
             });
       }
@@ -738,6 +1441,15 @@ export default memo(function DayviewDomTrack({
          const arr = map.get(key) || [];
          arr.push(item);
          map.set(key, arr);
+      }
+      return map;
+   }, [eventsPrepared]);
+   const eventByReservationId = useMemo(() => {
+      const map = new Map();
+      for (const item of eventsPrepared) {
+         const rid = String(item?.reservationId || item?.id || "");
+         if (!rid || map.has(rid)) continue;
+         map.set(rid, item);
       }
       return map;
    }, [eventsPrepared]);
@@ -756,9 +1468,811 @@ export default memo(function DayviewDomTrack({
 
    const renderActiveId = String(activeEventId ?? "");
    const renderSearchId = String(activeSearchEventId ?? "");
+   const displayEventByCellKey = useMemo(() => {
+      const map = new Map();
+      for (const [cellKey, itemsRaw] of byCell.entries()) {
+         const items = Array.isArray(itemsRaw) ? itemsRaw : EMPTY_CELL_ITEMS;
+         if (!items.length) continue;
+
+         let chosen = null;
+
+         if (renderActiveId) {
+            chosen =
+               items.find(
+                  (item) => String(item?.reservationId || "") === renderActiveId,
+               ) || null;
+         }
+         if (!chosen && renderSearchId) {
+            chosen =
+               items.find(
+                  (item) => String(item?.reservationId || "") === renderSearchId,
+               ) || null;
+         }
+         if (!chosen && selectedEventId) {
+            chosen =
+               items.find(
+                  (item) => String(item?.reservationId || "") === selectedEventId,
+               ) || null;
+         }
+         if (
+            !chosen &&
+            presenceByReservationUsers instanceof Map &&
+            presenceByReservationUsers.size
+         ) {
+            chosen =
+               items.find((item) =>
+                  presenceByReservationUsers.has(
+                     String(item?.reservationId || ""),
+                  ),
+               ) || null;
+         }
+         if (!chosen) chosen = items[0] || null;
+         if (chosen) map.set(cellKey, chosen);
+      }
+      return map;
+   }, [
+      byCell,
+      renderActiveId,
+      renderSearchId,
+      selectedEventId,
+      presenceByReservationUsers,
+   ]);
+
+   const usersById = useMemo(() => {
+      const map = new Map();
+      for (const user of Array.isArray(users) ? users : []) {
+         if (user?.id == null) continue;
+         map.set(String(user.id), user);
+      }
+      return map;
+   }, [users]);
+   const usersByPhone = useMemo(() => {
+      const map = new Map();
+      for (const user of Array.isArray(users) ? users : []) {
+         const key = String(user?.phone || "").replace(/\D+/g, "");
+         if (!key || map.has(key)) continue;
+         map.set(key, user);
+      }
+      return map;
+   }, [users]);
+   const usersByNormName = useMemo(() => {
+      const map = new Map();
+      for (const user of Array.isArray(users) ? users : []) {
+         const key = norm(`${user?.firstName ?? ""} ${user?.lastName ?? ""}`);
+         if (!key || map.has(key)) continue;
+         map.set(key, user);
+      }
+      return map;
+   }, [users]);
+   const instructorUsersByNormName = useMemo(() => {
+      const map = new Map();
+      for (const user of Array.isArray(users) ? users : []) {
+         if (String(user?.role || "").toUpperCase() !== "INSTRUCTOR") continue;
+         const key = norm(`${user?.firstName ?? ""} ${user?.lastName ?? ""}`);
+         if (!key || map.has(key)) continue;
+         map.set(key, user);
+      }
+      return map;
+   }, [users]);
+   const instructorsFullById = useMemo(() => {
+      const map = new Map();
+      for (const inst of Array.isArray(instructorsFull) ? instructorsFull : []) {
+         if (inst?.id == null) continue;
+         map.set(String(inst.id), inst);
+      }
+      return map;
+   }, [instructorsFull]);
+   const carsByInstructorId = useMemo(() => {
+      const map = new Map();
+      for (const car of Array.isArray(cars) ? cars : []) {
+         const iid = String(car?.instructorId ?? car?.instructor_id ?? "").trim();
+         if (!iid || map.has(iid)) continue;
+         map.set(iid, car);
+      }
+      return map;
+   }, [cars]);
+   const dayDateForHeaders = useMemo(() => {
+      const d = toDateSafe(dayStart);
+      return d || new Date();
+   }, [dayStart]);
+   const instructorBadgeById = useMemo(() => {
+      const map = new Map();
+      for (const meta of headersMeta) {
+         const inst = meta?.inst;
+         if (!inst || isPadInstructor(inst) || isGapInstructor(inst)) continue;
+         const iid = String(inst.id || "").trim();
+         if (!iid) continue;
+         const badge = buildInstructorBadge(inst?.name || "");
+         if (badge) map.set(iid, badge);
+      }
+      return map;
+   }, [headersMeta]);
+   const headerMetaByInstructorId = useMemo(() => {
+      const map = new Map();
+
+      for (const meta of headersMeta) {
+         const inst = meta?.inst || null;
+         if (!inst || isPadInstructor(inst) || isGapInstructor(inst)) continue;
+
+         const instId = String(inst.id || "").trim();
+         if (!instId) continue;
+
+         const full = instructorsFullById.get(instId) || inst;
+         const directUserId =
+            full?.userId ?? full?.user_id ?? full?.user?.id ?? null;
+
+         const hasInstructorRole = (user) =>
+            String(user?.role || "").toUpperCase() === "INSTRUCTOR";
+
+         let instructorUser = null;
+         if (directUserId != null) {
+            const candidate = usersById.get(String(directUserId)) || null;
+            if (candidate && hasInstructorRole(candidate)) instructorUser = candidate;
+         }
+
+         if (!instructorUser) {
+            const fullNameSeed = `${full?.firstName ?? ""} ${
+               full?.lastName ?? ""
+            }`.trim();
+            const nameKey = norm(fullNameSeed || String(inst?.name || ""));
+            if (nameKey) {
+               const byName = instructorUsersByNormName.get(nameKey) || null;
+               if (byName && hasInstructorRole(byName)) instructorUser = byName;
+            }
+         }
+
+         const privateMsg = String(instructorUser?.privateMessage ?? "").trim();
+         const noteForDay = getNoteForDate(privateMsg, dayDateForHeaders);
+         const plate = String(
+            carsByInstructorId.get(instId)?.plateNumber ?? "",
+         ).trim();
+
+         map.set(instId, {
+            userId: instructorUser?.id ?? null,
+            privateMessage: privateMsg,
+            noteForDay,
+            plate,
+         });
+      }
+
+      return map;
+   }, [
+      headersMeta,
+      instructorsFullById,
+      usersById,
+      instructorUsersByNormName,
+      dayDateForHeaders,
+      carsByInstructorId,
+   ]);
+   const blockedKeyMapNormalized = useMemo(() => {
+      return normalizeBlockedMapInput(blockedKeyMap);
+   }, [blockedKeyMap]);
+   const pickUserFromStore = useCallback(
+      (userIdRaw, phoneRaw, firstNameSeed, lastNameSeed) => {
+         const userId = userIdRaw != null ? String(userIdRaw) : "";
+         if (userId && usersById.has(userId)) return usersById.get(userId);
+
+         const phoneKey = String(phoneRaw || "").replace(/\D+/g, "");
+         if (phoneKey && usersByPhone.has(phoneKey)) return usersByPhone.get(phoneKey);
+
+         const nameKey = norm(`${firstNameSeed || ""} ${lastNameSeed || ""}`);
+         if (nameKey && usersByNormName.has(nameKey))
+            return usersByNormName.get(nameKey);
+
+         return null;
+      },
+      [usersById, usersByPhone, usersByNormName],
+   );
+
+   const cancelInertiaAndMomentum = useCallback(() => {
+      if (typeof window === "undefined") return;
+      try {
+         window.dispatchEvent(new CustomEvent("dvcancelinertia-all"));
+      } catch {}
+   }, []);
+   const openReservationPopup = useCallback(
+      (ev) => {
+         if (!ev) return;
+         const reservationId = ev.raw?.id ?? ev.id;
+         if (!reservationId) return;
+         cancelInertiaAndMomentum();
+         openPopup("reservationEdit", { reservationId });
+      },
+      [cancelInertiaAndMomentum],
+   );
+   const openStudentPopup = useCallback(
+      (ev) => {
+         if (!ev) return;
+         cancelInertiaAndMomentum();
+
+         const raw = ev.raw || {};
+         const fallbackName =
+            raw?.clientName ||
+            raw?.customerName ||
+            raw?.name ||
+            ev.title ||
+            "Programare";
+
+         const phoneVal = getStudentPhoneFromEv(ev);
+         const noteFromEvent = String(ev?.eventPrivateMessage || "").trim();
+         const reservationId = raw?.id ?? ev.id;
+         const userIdRaw =
+            raw?.userId ?? ev?.userId ?? raw?.user_id ?? raw?.user?.id ?? null;
+         const firstNameSeed =
+            String(ev?.studentFirst || "").trim() ||
+            String(fallbackName || "").split(" ")[0] ||
+            "";
+         const lastNameSeed = String(ev?.studentLast || "").trim();
+
+         const userFull = pickUserFromStore(
+            userIdRaw,
+            phoneVal,
+            firstNameSeed,
+            lastNameSeed,
+         );
+
+         const firstName = String(userFull?.firstName ?? firstNameSeed ?? "").trim();
+         const lastName = String(userFull?.lastName ?? lastNameSeed ?? "").trim();
+         const phone = String(userFull?.phone ?? phoneVal ?? "").trim();
+         const email = String(userFull?.email ?? "").trim();
+         const idnp = String(userFull?.idnp ?? "").trim();
+         const noteFromProfile = String(
+            userFull?.privateMessage ?? getStudentPrivateMessageFromEv(ev) ?? "",
+         ).trim();
+         const desiredInstructorId =
+            userFull?.desiredInstructorId != null
+               ? userFull.desiredInstructorId
+               : null;
+         const color = String(
+            userFull?.color ?? userFull?.profileColor ?? "",
+         ).trim();
+         const role = String(userFull?.role ?? "").trim();
+
+         if (ev?.studentId || userIdRaw) {
+            openPopup("studentDetails", {
+               student: {
+                  id: ev.studentId ?? null,
+                  userId: userFull?.id ?? userIdRaw ?? null,
+                  firstName,
+                  lastName,
+                  phone,
+                  email,
+                  idnp,
+                  privateMessage: noteFromProfile,
+                  desiredInstructorId,
+                  color,
+                  role,
+                  isConfirmed: !!(raw?.isConfirmed ?? ev?.isConfirmed),
+               },
+               noteFromEvent,
+               studentPrivateMessage: noteFromProfile,
+               fromReservationId: reservationId,
+               fromReservationStartISO: raw?.startTime || raw?.start || ev?.start || null,
+            });
+            return;
+         }
+
+         openReservationPopup(ev);
+      },
+      [cancelInertiaAndMomentum, openReservationPopup, pickUserFromStore],
+   );
+
+   const finishWaitEdit = useCallback(
+      async (commit) => {
+         const current = waitEdit;
+         setWaitEdit(null);
+
+         if (!commit || !current) return;
+
+         const text = String(current.text || "").trim();
+         const globalIdx = Number(current.globalIdx);
+         if (!Number.isFinite(globalIdx) || globalIdx < 0) return;
+
+         if (waitCommitRef.current) return;
+         waitCommitRef.current = true;
+
+         const openedFallbackSnapshot = readWaitNoteSnapshot(
+            waitNotesRef.current || {},
+            globalIdx,
+         );
+
+         let liveMap = waitNotesRef.current || {};
+         try {
+            const latest = await fetchLatestWaitNotesMap();
+            if (latest && typeof latest === "object") liveMap = latest;
+         } catch (err) {
+            console.error("wait-slot reload before save failed:", err);
+         }
+
+         const liveSnapshot = readWaitNoteSnapshot(liveMap, globalIdx);
+         const openedSnapshot = {
+            id:
+               current.baseNoteId != null
+                  ? String(current.baseNoteId)
+                  : openedFallbackSnapshot.id,
+            text:
+               current.baseText != null
+                  ? String(current.baseText || "").trim()
+                  : openedFallbackSnapshot.text,
+         };
+
+         const openedSig = buildWaitNoteSnapshotSignature(openedSnapshot);
+         const liveSig = buildWaitNoteSnapshotSignature(liveSnapshot);
+
+         if (liveSig !== openedSig) {
+            console.warn(
+               "wait-slot conflict detected: another user changed this note before save",
+               { globalIdx },
+            );
+            setWaitEdit({
+               instId: current.instId,
+               slotIdx: current.slotIdx,
+               globalIdx,
+               text: liveSnapshot.text,
+               baseNoteId: liveSnapshot.id,
+               baseText: liveSnapshot.text,
+            });
+            waitCommitRef.current = false;
+            return;
+         }
+
+         const existingId = liveSnapshot.id;
+
+         setWaitNotes((prev) => {
+            const next = { ...(prev || {}) };
+            if (text) next[globalIdx] = { id: existingId, text };
+            else delete next[globalIdx];
+
+            waitNotesRef.current = next;
+
+            if (waitRangeKey) {
+               WAIT_NOTES_CACHE.set(waitRangeKey, {
+                  data: next,
+                  error: null,
+                  promise: null,
+               });
+            }
+            return next;
+         });
+
+         if (!text) {
+            waitCommitRef.current = false;
+            return;
+         }
+
+         const payload = {
+            title: String(globalIdx),
+            content: text,
+            type: "wait-slot",
+         };
+         const noteDateIso = buildWaitNoteDateIsoForSlot(
+            dayStart,
+            globalIdx,
+            WAIT_NOTE_MODE,
+         );
+         if (noteDateIso) payload.date = noteDateIso;
+
+         const persist = existingId
+            ? updateNote(existingId, payload)
+            : createNote(payload);
+
+         persist
+            .then((saved) => {
+               const realId =
+                  saved?.id ??
+                  saved?._id ??
+                  saved?.noteId ??
+                  saved?.note_id ??
+                  existingId;
+               if (!realId) return;
+
+               setWaitNotes((prev) => {
+                  const prevNote2 = prev?.[globalIdx];
+                  if (!prevNote2) return prev;
+                  if (prevNote2.id === realId) return prev;
+
+                  const next = {
+                     ...prev,
+                     [globalIdx]: { ...prevNote2, id: realId },
+                  };
+
+                  waitNotesRef.current = next;
+
+                  if (waitRangeKey) {
+                     WAIT_NOTES_CACHE.set(waitRangeKey, {
+                        data: next,
+                        error: null,
+                        promise: null,
+                     });
+                  }
+
+                  return next;
+               });
+            })
+            .catch((err) => {
+               console.error("notesService upsert wait-slot error:", err);
+            })
+            .finally(() => {
+               waitCommitRef.current = false;
+            });
+      },
+      [waitEdit, waitRangeKey, dayStart, fetchLatestWaitNotesMap],
+   );
+
+   const handleWaitBlur = useCallback(() => {
+      finishWaitEdit(true);
+   }, [finishWaitEdit]);
+
+   const handleWaitKeyDown = useCallback(
+      (e) => {
+         if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            finishWaitEdit(true);
+         } else if (e.key === "Escape") {
+            e.preventDefault();
+            finishWaitEdit(false);
+         }
+      },
+      [finishWaitEdit],
+   );
+   const startHeaderEdit = useCallback(
+      (instId) => {
+         const id = String(instId || "").trim();
+         if (!id) return;
+         const meta = headerMetaByInstructorId.get(id) || null;
+         if (!meta?.userId) return;
+         setHeaderEdit({
+            instId: id,
+            userId: String(meta.userId),
+            privateMessage: String(meta.privateMessage || ""),
+            text: String(meta.noteForDay || ""),
+         });
+      },
+      [headerMetaByInstructorId],
+   );
+   const finishHeaderEdit = useCallback(
+      async (commit) => {
+         const current = headerEdit;
+         setHeaderEdit(null);
+         if (!commit || !current?.userId) return;
+
+         const basePrivateMessage = String(current.privateMessage || "");
+         let latestPrivateMessage = basePrivateMessage;
+         try {
+            const freshUser = await getUserById(String(current.userId));
+            latestPrivateMessage = String(freshUser?.privateMessage ?? "");
+         } catch (err) {
+            console.error("header note preflight failed:", err);
+            return;
+         }
+
+         if (latestPrivateMessage !== basePrivateMessage) {
+            const latestText = getNoteForDate(
+               latestPrivateMessage,
+               dayDateForHeaders,
+            );
+            console.warn(
+               "header note conflict detected: another user updated this note before save",
+               { instId: current.instId, userId: current.userId },
+            );
+            setHeaderEdit({
+               instId: current.instId,
+               userId: String(current.userId),
+               privateMessage: latestPrivateMessage,
+               text: latestText,
+            });
+            return;
+         }
+
+         const nextPrivateMessage = upsertNoteForDate(
+            latestPrivateMessage,
+            dayDateForHeaders,
+            current.text || "",
+         );
+         if (nextPrivateMessage === latestPrivateMessage) return;
+
+         try {
+            await dispatch(
+               updateUser({
+                  id: String(current.userId),
+                  data: { privateMessage: nextPrivateMessage },
+               }),
+            ).unwrap();
+         } catch (err) {
+            console.error("header note update failed:", err);
+         }
+      },
+      [headerEdit, dayDateForHeaders, dispatch],
+   );
+   const handleHeaderBlur = useCallback(() => {
+      finishHeaderEdit(true);
+   }, [finishHeaderEdit]);
+   const handleHeaderKeyDown = useCallback(
+      (e) => {
+         if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            finishHeaderEdit(true);
+         } else if (e.key === "Escape") {
+            e.preventDefault();
+            finishHeaderEdit(false);
+         }
+      },
+      [finishHeaderEdit],
+   );
+
+   const clearLongPress = useCallback(() => {
+      if (longPressTimerRef.current) {
+         clearTimeout(longPressTimerRef.current);
+         longPressTimerRef.current = 0;
+      }
+      longPressStateRef.current = null;
+   }, []);
+   const handleEventPointerDown = useCallback(
+      (e, item) => {
+         if (!item?.rawEvent) return;
+         if (e.button !== 0 && e.button !== undefined) return;
+
+         clearLongPress();
+         longPressStateRef.current = {
+            x: e.clientX,
+            y: e.clientY,
+            pointerId: e.pointerId ?? null,
+            item,
+         };
+         longPressTimerRef.current = window.setTimeout(() => {
+            const state = longPressStateRef.current;
+            clearLongPress();
+            if (!state?.item?.rawEvent) return;
+
+            ignoreClickUntilRef.current = Date.now() + 600;
+            setGlobalSelection({ event: state.item.rawEvent, slot: null });
+            openStudentPopup(state.item.rawEvent);
+         }, LONG_PRESS_MS);
+      },
+      [clearLongPress, openStudentPopup],
+   );
+   const handleEventPointerMove = useCallback(
+      (e) => {
+         const state = longPressStateRef.current;
+         if (!state || !longPressTimerRef.current) return;
+         if (
+            state.pointerId != null &&
+            e.pointerId != null &&
+            state.pointerId !== e.pointerId
+         ) {
+            return;
+         }
+
+         const dx = e.clientX - state.x;
+         const dy = e.clientY - state.y;
+         if (dx * dx + dy * dy > LONG_PRESS_MOVE_PX * LONG_PRESS_MOVE_PX) {
+            clearLongPress();
+         }
+      },
+      [clearLongPress],
+   );
+   const handleEventPointerUp = useCallback(() => {
+      clearLongPress();
+   }, [clearLongPress]);
+
+   const updateRangeSelectionFromPointer = useCallback(
+      (clientX, clientY) => {
+         const root = rootRef.current;
+         const drag = rangeDragRef.current;
+         if (!root || !drag.active) return;
+
+         const x0 = drag.startX;
+         const y0 = drag.startY;
+         const x1 = Number.isFinite(clientX) ? clientX : drag.currentX;
+         const y1 = Number.isFinite(clientY) ? clientY : drag.currentY;
+         const rect = {
+            left: Math.min(x0, x1),
+            top: Math.min(y0, y1),
+            right: Math.max(x0, x1) + 1,
+            bottom: Math.max(y0, y1) + 1,
+         };
+
+         const rootRect = root.getBoundingClientRect();
+         const clippedLeft = Math.max(rect.left, rootRect.left);
+         const clippedTop = Math.max(rect.top, rootRect.top);
+         const clippedRight = Math.min(rect.right, rootRect.right);
+         const clippedBottom = Math.min(rect.bottom, rootRect.bottom);
+         if (clippedRight > clippedLeft && clippedBottom > clippedTop) {
+            setRangeBox({
+               left: clippedLeft - rootRect.left,
+               top: clippedTop - rootRect.top,
+               width: clippedRight - clippedLeft,
+               height: clippedBottom - clippedTop,
+            });
+         } else {
+            setRangeBox(null);
+         }
+
+         const els = root.querySelectorAll(
+            "[data-cp-kind='slot'][data-selectable='1']",
+         );
+         const next = [];
+         const seen = new Set();
+         for (const el of els) {
+            const slotRect = el.getBoundingClientRect();
+            if (!rectsIntersect(rect, slotRect)) continue;
+
+            const rangeKey = String(el.getAttribute("data-range-key") || "").trim();
+            const instructorId = String(el.getAttribute("data-inst-id") || "").trim();
+            const slotKey = String(el.getAttribute("data-slot-key") || "").trim();
+            const slotStart = String(el.getAttribute("data-slot-start") || "").trim();
+            const slotEnd = String(el.getAttribute("data-slot-end") || "").trim();
+            const blocked = el.getAttribute("data-blocked") === "1";
+            const row = Number(el.getAttribute("data-grid-row"));
+            const col = Number(el.getAttribute("data-grid-col"));
+            const slotIdx = Number(el.getAttribute("data-slot-idx"));
+
+            if (!rangeKey || !instructorId || !slotKey || !slotStart || !slotEnd)
+               continue;
+            if (seen.has(rangeKey)) continue;
+            seen.add(rangeKey);
+
+            next.push({
+               rangeKey,
+               instructorId,
+               slotKey,
+               slotStart,
+               slotEnd,
+               blocked,
+               row: Number.isFinite(row) ? row : 0,
+               col: Number.isFinite(col) ? col : 0,
+               slotIdx: Number.isFinite(slotIdx) ? slotIdx : 0,
+            });
+         }
+
+         next.sort((a, b) => {
+            if (a.row !== b.row) return a.row - b.row;
+            if (a.slotIdx !== b.slotIdx) return a.slotIdx - b.slotIdx;
+            if (a.col !== b.col) return a.col - b.col;
+            return a.rangeKey.localeCompare(b.rangeKey);
+         });
+         setRangeEntries(next);
+      },
+      [setRangeEntries],
+   );
+
+   const handleRangePointerDownCapture = useCallback(
+      (e) => {
+         if (!(e.ctrlKey || e.metaKey)) return;
+         if (e.button !== 0 && e.button !== undefined) return;
+
+         const target = e.target;
+         if (!target?.closest) return;
+         if (target.closest("[data-dv-interactive='1']")) return;
+
+         const slotEl = target.closest(
+            "[data-cp-kind='slot'][data-selectable='1']",
+         );
+         if (!slotEl) return;
+
+         clearLongPress();
+         try {
+            window.dispatchEvent(
+               new CustomEvent("cpdom-range-owner-change", {
+                  detail: { owner: rangeOwnerTokenRef.current },
+               }),
+            );
+         } catch {}
+         clearRangeSelection();
+
+         const drag = rangeDragRef.current;
+         drag.active = true;
+         drag.pointerId = e.pointerId ?? null;
+         drag.startX = e.clientX;
+         drag.startY = e.clientY;
+         drag.currentX = e.clientX;
+         drag.currentY = e.clientY;
+         if (drag.rafId) {
+            cancelAnimationFrame(drag.rafId);
+            drag.rafId = 0;
+         }
+
+         const root = rootRef.current;
+         if (root && drag.pointerId != null && root.setPointerCapture) {
+            try {
+               root.setPointerCapture(drag.pointerId);
+            } catch {}
+         }
+
+         updateRangeSelectionFromPointer(e.clientX, e.clientY);
+
+         e.preventDefault();
+         e.stopPropagation();
+      },
+      [clearLongPress, clearRangeSelection, updateRangeSelectionFromPointer],
+   );
+
+   const handleRangePointerMoveCapture = useCallback(
+      (e) => {
+         const drag = rangeDragRef.current;
+         if (!drag.active) return;
+         if (
+            drag.pointerId != null &&
+            e.pointerId != null &&
+            drag.pointerId !== e.pointerId
+         ) {
+            return;
+         }
+
+         drag.currentX = e.clientX;
+         drag.currentY = e.clientY;
+         if (!drag.rafId) {
+            drag.rafId = requestAnimationFrame(() => {
+               drag.rafId = 0;
+               updateRangeSelectionFromPointer(drag.currentX, drag.currentY);
+            });
+         }
+
+         e.preventDefault();
+         e.stopPropagation();
+      },
+      [updateRangeSelectionFromPointer],
+   );
+
+   const finishRangePointerDrag = useCallback(
+      (e = null) => {
+         const drag = rangeDragRef.current;
+         if (!drag.active) return;
+
+         if (e) {
+            if (
+               drag.pointerId != null &&
+               e.pointerId != null &&
+               drag.pointerId !== e.pointerId
+            ) {
+               return;
+            }
+            drag.currentX = e.clientX;
+            drag.currentY = e.clientY;
+         }
+
+         if (drag.rafId) {
+            cancelAnimationFrame(drag.rafId);
+            drag.rafId = 0;
+         }
+         updateRangeSelectionFromPointer(drag.currentX, drag.currentY);
+
+         const root = rootRef.current;
+         if (root && drag.pointerId != null && root.releasePointerCapture) {
+            try {
+               root.releasePointerCapture(drag.pointerId);
+            } catch {}
+         }
+
+         drag.active = false;
+         drag.pointerId = null;
+         setRangeBox(null);
+         ignoreClickUntilRef.current = Date.now() + 260;
+
+         if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+         }
+      },
+      [updateRangeSelectionFromPointer],
+   );
+
+   const handleRangePointerUpCapture = useCallback(
+      (e) => {
+         finishRangePointerDrag(e);
+      },
+      [finishRangePointerDrag],
+   );
+
+   const handleRangePointerCancelCapture = useCallback(
+      (e) => {
+         finishRangePointerDrag(e);
+      },
+      [finishRangePointerDrag],
+   );
 
    const visibleColumns = useMemo(() => {
-      if (!isDayNearViewport) return [];
+      if (!dayNearViewportBuffered) return [];
       const out = [];
       const rowStart = rowRenderRange.start;
       const rowEnd = rowRenderRange.end;
@@ -771,7 +2285,7 @@ export default memo(function DayviewDomTrack({
 
          const top = Number(headerMetrics.rowTops[meta.row] || 0);
          const left = meta.col * (colWidth + colGap);
-         const isPad = PAD_IDS.has(String(meta.inst?.id || ""));
+         const isPad = isPadInstructor(meta.inst);
 
          out.push({
             ...meta,
@@ -785,7 +2299,7 @@ export default memo(function DayviewDomTrack({
       return out;
    }, [
       headersMeta,
-      isDayNearViewport,
+      dayNearViewportBuffered,
       rowRenderRange,
       colRenderRange,
       headerMetrics,
@@ -793,26 +2307,33 @@ export default memo(function DayviewDomTrack({
       colGap,
    ]);
 
-   const handleSelectSlot = useCallback((instId, slot) => {
+   const handleSelectSlot = useCallback((instId, slot, override = null) => {
       const instructorId = String(instId || "");
       if (!instructorId || !slot) return;
+
+      const slotStart = toDateSafe(override?.start || slot.start);
+      const slotEnd = toDateSafe(override?.end || slot.end);
+      const localSlotKey =
+         String(override?.key || "").trim() ||
+         localKeyFromTs(slotStart || slot.start, MOLDOVA_TZ);
+      if (!slotStart || !slotEnd) return;
 
       setGlobalSelection({
          event: null,
          slot: {
             instructorId,
             actionInstructorId: instructorId,
-            slotStart: slot.start,
-            slotEnd: slot.end,
-            localSlotKey: slot.key,
+            slotStart,
+            slotEnd,
+            localSlotKey,
          },
       });
    }, []);
 
    const handleCreateFromSlot = useCallback(
-      (inst, slot, blocked) => {
+      (inst, slot) => {
          const instructorId = String(inst?.id || "");
-         if (!instructorId || PAD_IDS.has(instructorId) || blocked) return;
+         if (!instructorId || isPadInstructor(inst) || isGapInstructor(inst)) return;
 
          handleSelectSlot(instructorId, slot);
          if (typeof onCreateSlot !== "function") return;
@@ -835,17 +2356,18 @@ export default memo(function DayviewDomTrack({
 
    const onGridClick = useCallback(
       (e) => {
+         if (Date.now() < ignoreClickUntilRef.current) return;
+         if (!(e.ctrlKey || e.metaKey)) {
+            clearRangeSelection();
+         }
          const eventEl = e.target?.closest?.("[data-cp-kind='event']");
          if (eventEl) {
             const rid = String(eventEl.getAttribute("data-res-id") || "");
             if (!rid) return;
-            const item = eventsPrepared.find(
-               (x) => String(x.reservationId || x.id || "") === rid,
-            );
+            const item = eventByReservationId.get(rid) || null;
             if (!item) return;
 
             setGlobalSelection({ event: item.rawEvent, slot: null });
-            openPopup("reservationEdit", { reservationId: rid });
             return;
          }
 
@@ -855,55 +2377,192 @@ export default memo(function DayviewDomTrack({
          const instId = String(slotEl.getAttribute("data-inst-id") || "");
          const slotIdx = Number(slotEl.getAttribute("data-slot-idx"));
          if (!instId || !Number.isFinite(slotIdx)) return;
+         const padType = String(slotEl.getAttribute("data-pad-type") || "");
+         const hasEventInCell = slotEl.getAttribute("data-has-event") === "1";
+         if (hasEventInCell) {
+            const rid = String(slotEl.getAttribute("data-res-id") || "");
+            if (!rid) return;
+            const item = eventByReservationId.get(rid) || null;
+            if (!item?.rawEvent) return;
+            setGlobalSelection({ event: item.rawEvent, slot: null });
+            return;
+         }
 
          const slot = slotsSafe[slotIdx] || null;
          if (!slot) return;
+         if (
+            padType === "wait" ||
+            padType === "cancel" ||
+            padType === "gap"
+         )
+            return;
+         if (padType === "lateral") {
+            const mark = LATERAL_TIME_MARKS[slotIdx] || slot.label;
+            const virtual = buildVirtualSlotForDayHHMM(dayStart, mark);
+            if (virtual?.start && virtual?.end) {
+               handleSelectSlot(instId, slot, {
+                  start: virtual.start,
+                  end: virtual.end,
+                  key: localKeyFromTs(virtual.start, MOLDOVA_TZ),
+               });
+               return;
+            }
+         }
 
          handleSelectSlot(instId, slot);
       },
-      [eventsPrepared, handleSelectSlot, slotsSafe],
+      [eventByReservationId, handleSelectSlot, slotsSafe, dayStart, clearRangeSelection],
    );
 
    const onGridDoubleClick = useCallback(
       (e) => {
+         if (Date.now() < ignoreClickUntilRef.current) return;
+         if (!(e.ctrlKey || e.metaKey)) {
+            clearRangeSelection();
+         }
+         clearLongPress();
+         const eventEl = e.target?.closest?.("[data-cp-kind='event']");
+         if (eventEl) {
+            const rid = String(eventEl.getAttribute("data-res-id") || "");
+            if (!rid) return;
+            const item = eventByReservationId.get(rid) || null;
+            if (!item?.rawEvent) return;
+            openReservationPopup(item.rawEvent);
+            return;
+         }
+
          const slotEl = e.target?.closest?.("[data-cp-kind='slot']");
          if (!slotEl) return;
 
          const instId = String(slotEl.getAttribute("data-inst-id") || "");
          const slotIdx = Number(slotEl.getAttribute("data-slot-idx"));
-         const blocked = slotEl.getAttribute("data-blocked") === "1";
+         const padType = String(slotEl.getAttribute("data-pad-type") || "");
          if (!instId || !Number.isFinite(slotIdx)) return;
+         const hasEventInCell = slotEl.getAttribute("data-has-event") === "1";
+         if (hasEventInCell) {
+            const rid = String(slotEl.getAttribute("data-res-id") || "");
+            if (!rid) return;
+            const item = eventByReservationId.get(rid) || null;
+            if (!item?.rawEvent) return;
+            openReservationPopup(item.rawEvent);
+            return;
+         }
 
          const slot = slotsSafe[slotIdx] || null;
          if (!slot) return;
+         if (padType === "cancel" || padType === "gap")
+            return;
+         if (padType === "wait") {
+            const globalIdx = Number(
+               slotEl.getAttribute("data-wait-global-idx"),
+            );
+            if (!Number.isFinite(globalIdx) || globalIdx < 0) return;
+            waitCommitRef.current = false;
+            void (async () => {
+               let map = waitNotesRef.current || {};
+               try {
+                  const latest = await fetchLatestWaitNotesMap();
+                  if (latest && typeof latest === "object") map = latest;
+               } catch (err) {
+                  console.error("wait-slot reload before edit failed:", err);
+               }
+               const snap = readWaitNoteSnapshot(map, globalIdx);
+               setWaitEdit({
+                  instId,
+                  slotIdx,
+                  globalIdx,
+                  text: snap.text,
+                  baseNoteId: snap.id,
+                  baseText: snap.text,
+               });
+            })();
+            return;
+         }
+         if (padType === "lateral") {
+            const mark = LATERAL_TIME_MARKS[slotIdx] || slot.label;
+            const virtual = buildVirtualSlotForDayHHMM(dayStart, mark);
+            if (virtual?.start && virtual?.end) {
+               handleSelectSlot(instId, slot, {
+                  start: virtual.start,
+                  end: virtual.end,
+                  key: localKeyFromTs(virtual.start, MOLDOVA_TZ),
+               });
+               return;
+            }
+            handleSelectSlot(instId, slot);
+            return;
+         }
 
          const inst =
             headersMeta.find((h) => String(h.inst?.id || "") === instId)?.inst ||
             null;
-         handleCreateFromSlot(inst, slot, blocked);
+         handleCreateFromSlot(inst, slot);
       },
-      [headersMeta, handleCreateFromSlot, slotsSafe],
+      [
+         clearLongPress,
+         eventByReservationId,
+         fetchLatestWaitNotesMap,
+         openReservationPopup,
+         headersMeta,
+         handleSelectSlot,
+         handleCreateFromSlot,
+         slotsSafe,
+         dayStart,
+         clearRangeSelection,
+      ],
    );
 
    useLayoutEffect(() => {
       if (typeof onActiveEventRectChange !== "function") return;
       const id = String(activeEventId ?? "");
       if (!id) return;
+      if (!eventByReservationId.has(id)) return;
 
-      const el = eventRefMap.current.get(id);
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      if (!rect || rect.height <= 0) return;
+      let rafId = 0;
+      let cancelled = false;
+      let tries = 0;
 
-      onActiveEventRectChange({
-         topY: rect.top,
-         bottomY: rect.bottom,
-         centerY: rect.top + rect.height / 2,
-         canvasRect: rootRef.current?.getBoundingClientRect?.() || null,
-      });
-   }, [activeEventId, onActiveEventRectChange, byCell, selectionVersion]);
+      const emitRect = () => {
+         if (cancelled) return;
+         tries += 1;
 
-   if (!isDayNearViewport) {
+         const el = eventRefMap.current.get(id);
+         if (el) {
+            const rect = el.getBoundingClientRect();
+            if (rect && rect.height > 0) {
+               onActiveEventRectChange({
+                  leftX: rect.left,
+                  rightX: rect.right,
+                  centerX: rect.left + rect.width / 2,
+                  topY: rect.top,
+                  bottomY: rect.bottom,
+                  centerY: rect.top + rect.height / 2,
+                  canvasRect: rootRef.current?.getBoundingClientRect?.() || null,
+               });
+            }
+         }
+
+         if (!cancelled && tries < ACTIVE_EVENT_RECT_RETRY_FRAMES) {
+            rafId = requestAnimationFrame(emitRect);
+         }
+      };
+
+      emitRect();
+
+      return () => {
+         cancelled = true;
+         if (rafId) cancelAnimationFrame(rafId);
+      };
+   }, [
+      activeEventId,
+      onActiveEventRectChange,
+      byCell,
+      selectionVersion,
+      dayNearViewportBuffered,
+      eventByReservationId,
+   ]);
+
+   if (!dayNearViewportBuffered) {
       return <div className="dayview__skeleton" style={{ height: "100%" }} />;
    }
 
@@ -918,22 +2577,69 @@ export default memo(function DayviewDomTrack({
          }}
          onClick={onGridClick}
          onDoubleClick={onGridDoubleClick}
+         onPointerDownCapture={handleRangePointerDownCapture}
+         onPointerMoveCapture={handleRangePointerMoveCapture}
+         onPointerUpCapture={handleRangePointerUpCapture}
+         onPointerCancelCapture={handleRangePointerCancelCapture}
       >
-         {visibleColumns.map(({ inst, idx, top, left, isPad, rowHeight }) => {
+         {visibleColumns.map(({ inst, idx, row, col, top, left, isPad, rowHeight }) => {
             const instId = String(inst?.id || "");
-            const padType = String(inst?._padType || "");
-            const maxSlots = isPad
-               ? padType === "cancel"
-                  ? Math.min(CANCEL_SLOTS_PER_COLUMN, slotsSafe.length)
-                  : padType === "lateral"
-                    ? Math.min(LATERAL_SLOTS_PER_COLUMN, slotsSafe.length)
-                    : Math.min(WAIT_SLOTS_PER_COLUMN, slotsSafe.length)
-               : slotsSafe.length;
+            const padType = detectPadType(inst) || "";
+            const isGap = isGapInstructor(inst);
+            const isCancelPad = padType === "cancel";
+            const isWaitPad = padType === "wait";
+            const isLateralPad = padType === "lateral";
+            const headerMeta = headerMetaByInstructorId.get(instId) || null;
+            const waitPadColumnIndex = Math.max(
+               0,
+               Math.trunc(Number(inst?._padColumnIndex || 0)),
+            );
+
+            const maxSlots = isGap
+               ? slotsSafe.length
+               : isPad
+                 ? isCancelPad
+                    ? Math.min(CANCEL_SLOTS_PER_COLUMN, slotsSafe.length)
+                    : isLateralPad
+                      ? Math.min(LATERAL_SLOTS_PER_COLUMN, slotsSafe.length)
+                      : Math.min(WAIT_SLOTS_PER_COLUMN, slotsSafe.length)
+                 : slotsSafe.length;
+
+            const sectorSlugRaw = getInstructorSector(inst);
+            const sectorSlug =
+               sectorSlugRaw === "botanica" ||
+               sectorSlugRaw === "ciocana" ||
+               sectorSlugRaw === "buiucani"
+                  ? sectorSlugRaw
+                  : "other";
+            const headClassName =
+               "cpdom__head dayview__column-head" +
+               (isGap
+                  ? " cpdom__head--gap"
+                  : isPad
+                    ? " cpdom__head--pad"
+                    : ` cpdom__head--${sectorSlug}`);
+            const isHeaderEditing =
+               !isPad && !isGap && headerEdit?.instId === instId;
+            const headerPlateText = String(headerMeta?.plate || "").trim() || "—";
+            const headerNoteText = String(headerMeta?.noteForDay || "").trim() || "—";
+
+            const padTitle = isCancelPad
+               ? "Anulari"
+               : isWaitPad
+                 ? "Asteptari"
+                 : isLateralPad
+                   ? "Laterala"
+                   : "Coloana sistem";
 
             return (
                <section
                   key={`${instId || "inst"}-${idx}`}
-                  className={`cpdom__col${isPad ? " cpdom__col--pad" : ""}`}
+                  className={
+                     "cpdom__col" +
+                     (isPad ? " cpdom__col--pad" : "") +
+                     (isGap ? " cpdom__col--gap" : "")
+                  }
                   style={{
                      position: "absolute",
                      left: `${left}px`,
@@ -943,15 +2649,46 @@ export default memo(function DayviewDomTrack({
                   }}
                >
                   <header
-                     className="cpdom__head dayview__column-head"
+                     className={headClassName}
                      style={{ minHeight: `${headerHeight}px` }}
+                     onDoubleClick={(e) => {
+                        if (isPad || isGap) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        startHeaderEdit(instId);
+                     }}
                   >
-                     <strong className="dv-inst-name">{inst?.name || "—"}</strong>
-                     <small className="cpdom__sub">
-                        {isPad
-                           ? "Coloană sistem"
-                           : inst?.sectorSlug || inst?.sector || "Instructor"}
-                     </small>
+                     <strong className="dv-inst-name">
+                        {isGap ? "\u00A0" : isPad ? padTitle : inst?.name || "—"}
+                     </strong>
+                     {!isGap && isPad ? <small className="cpdom__sub"> </small> : null}
+                     {!isGap && !isPad ? (
+                        isHeaderEditing ? (
+                           <textarea
+                              ref={headerInputRef}
+                              className="cpdom__head-note-input"
+                              data-dv-interactive="1"
+                              value={headerEdit?.text || ""}
+                              onChange={(e) =>
+                                 setHeaderEdit((prev) =>
+                                    prev ? { ...prev, text: e.target.value } : prev,
+                                 )
+                              }
+                              onBlur={handleHeaderBlur}
+                              onKeyDown={handleHeaderKeyDown}
+                              placeholder="Notita pe zi"
+                              onClick={(e) => e.stopPropagation()}
+                              onPointerDown={(e) => e.stopPropagation()}
+                           />
+                        ) : (
+                           <>
+                              <small className="cpdom__sub">{headerPlateText}</small>
+                              <small className="cpdom__sub cpdom__sub--meta">
+                                 {headerNoteText}
+                              </small>
+                           </>
+                        )
+                     ) : null}
                   </header>
 
                   <div
@@ -965,13 +2702,57 @@ export default memo(function DayviewDomTrack({
                         const slot = slotsSafe[i];
                         if (!slot) return null;
 
-                        const slotLabel =
-                           padType === "lateral"
-                              ? LATERAL_TIME_MARKS[i] || slotLabelByIndex[i] || slot.label
-                              : slot.label;
+                        const waitGlobalIdx = isWaitPad
+                           ? waitPadColumnIndex * WAIT_SLOTS_PER_COLUMN + i
+                           : -1;
+                        const waitNoteObj =
+                           waitGlobalIdx >= 0
+                              ? waitNotes?.[waitGlobalIdx] ??
+                                waitNotes?.[String(waitGlobalIdx)]
+                              : null;
+                        const waitNoteText =
+                           typeof waitNoteObj === "string"
+                              ? waitNoteObj
+                              : String(waitNoteObj?.text || "");
 
-                        const blockedSet = blockedKeyMap?.get?.(instId);
-                        const isBlocked = !!blockedSet?.has?.(slot.key);
+                        const slotLabel = isCancelPad
+                           ? ""
+                           : isWaitPad
+                             ? waitNoteText || WAIT_PLACEHOLDER_TEXT
+                             : isLateralPad
+                               ? LATERAL_TIME_MARKS[i] ||
+                                 slotLabelByIndex[i] ||
+                                 slot.label
+                               : slot.label;
+                        const lateralVirtualStart = isLateralPad
+                           ? buildVirtualSlotForDayHHMM(dayStart, slotLabel)?.start || null
+                           : null;
+                        const slotSelectKey =
+                           lateralVirtualStart != null
+                              ? localKeyFromTs(lateralVirtualStart, MOLDOVA_TZ)
+                              : slot.key;
+                        const isRangeSelectable =
+                           !isPad &&
+                           !isGap &&
+                           !isWaitPad &&
+                           !isCancelPad &&
+                           !isLateralPad;
+                        const isRegularInstructorSlot = !isPad && !isGap;
+                        const isClosingSlot =
+                           isRegularInstructorSlot && slot.label === "19:30";
+                        const slotRangeKey = isRangeSelectable
+                           ? `${instId}|${slot.key}`
+                           : "";
+                        const slotStartIso = slot.start.toISOString();
+                        const slotEndIso = slot.end.toISOString();
+
+                        const blockedSet =
+                           blockedKeyMapNormalized?.get(instId) ||
+                           blockedKeyMapNormalized?.get(
+                              String(Number(instId)),
+                           ) ||
+                           null;
+                        const isBlocked = !isPad && !!blockedSet?.has?.(slot.key);
 
                         const draftKey = `${instId}|${slot.start.toISOString()}`;
                         const hasDraft =
@@ -983,11 +2764,51 @@ export default memo(function DayviewDomTrack({
                               : null;
 
                         const cellKey = `${instId}|${i}`;
-                        const firstEvent = (byCell.get(cellKey) || [])[0] || null;
+                        const eventsInCell = byCell.get(cellKey) || EMPTY_CELL_ITEMS;
+                        const displayEvent =
+                           displayEventByCellKey.get(cellKey) || eventsInCell[0] || null;
+                        const hasEventInCell = eventsInCell.length > 0;
+                        const slotReservationId = String(displayEvent?.reservationId || "");
 
                         const isSelectedSlot =
+                           (!isPad || isLateralPad) &&
                            selectedSlotInstructorId === instId &&
-                           selectedSlotKey === slot.key;
+                           selectedSlotKey === slotSelectKey;
+
+                        const isWaitEditing =
+                           !!waitEdit &&
+                           waitEdit.instId === instId &&
+                           Number(waitEdit.slotIdx) === i;
+                        const isRangeSelected =
+                           isRangeSelectable && rangeSelectedKeySet.has(slotRangeKey);
+
+                        const evUser =
+                           displayEvent?.userId != null
+                              ? usersById.get(String(displayEvent.userId))
+                              : null;
+                        const desiredBadge =
+                           evUser?.desiredInstructorId != null
+                              ? instructorBadgeById.get(
+                                   String(evUser.desiredInstructorId),
+                                ) || ""
+                              : "";
+                        const isCancelOriginMarker = !!displayEvent?.isCanceledOriginMarker;
+                        const cancelOriginLabel = isCancelOriginMarker
+                           ? `${displayEvent.timeText || hhmm(displayEvent.start)} - anulat`
+                           : "";
+                        const eventMeta = displayEvent
+                           ? isCancelOriginMarker
+                              ? cancelOriginLabel
+                              : [
+                                   displayEvent.timeText || hhmm(displayEvent.start),
+                                   displayEvent.gearboxBadge ||
+                                      resolveGearboxBadge(displayEvent.gearbox),
+                                   displayEvent.statusMarks || "",
+                                   desiredBadge,
+                                ]
+                                   .filter(Boolean)
+                                   .join(" · ")
+                           : "";
 
                         return (
                            <div
@@ -996,82 +2817,174 @@ export default memo(function DayviewDomTrack({
                                  "cpdom__slot" +
                                  (isBlocked ? " is-blocked" : "") +
                                  (isSelectedSlot ? " is-selected-slot" : "") +
-                                 (hasDraft ? " is-draft" : "")
+                                 (isRangeSelected ? " is-range-selected" : "") +
+                                 (hasDraft ? " is-draft" : "") +
+                                 (isWaitPad ? " is-wait-slot" : "") +
+                                 (isCancelPad ? " is-cancel-slot" : "") +
+                                 (isLateralPad ? " is-lateral-slot" : "") +
+                                 (isClosingSlot ? " is-closing-slot" : "") +
+                                 (isGap ? " is-gap-slot" : "")
                               }
                               data-cp-kind="slot"
                               data-inst-id={instId}
                               data-slot-idx={i}
                               data-blocked={isBlocked ? "1" : "0"}
-                              style={
-                                 hasDraft && draftColor
+                              data-selectable={isRangeSelectable ? "1" : "0"}
+                              data-slot-key={slot.key}
+                              data-slot-start={slotStartIso}
+                              data-slot-end={slotEndIso}
+                              data-range-key={slotRangeKey}
+                              data-grid-row={row}
+                              data-grid-col={col}
+                              data-has-event={hasEventInCell ? "1" : "0"}
+                              data-res-id={slotReservationId}
+                              data-pad-type={padType}
+                              data-wait-global-idx={waitGlobalIdx >= 0 ? waitGlobalIdx : ""}
+                              style={{
+                                 height: `${slotHeight}px`,
+                                 minHeight: `${slotHeight}px`,
+                                 maxHeight: `${slotHeight}px`,
+                                 ...(hasDraft && draftColor
                                     ? {
-                                         borderStyle: "dashed",
-                                         borderColor: resolveCssColor(draftColor),
+                                         "--cpdom-draft-color": resolveCssColor(draftColor),
                                       }
-                                    : undefined
-                              }
+                                    : undefined),
+                              }}
                            >
-                              {firstEvent ? (
-                                 <button
-                                    ref={(el) => {
-                                       const id = String(firstEvent.reservationId || "");
-                                       if (!id) return;
-                                       if (el) eventRefMap.current.set(id, el);
-                                       else eventRefMap.current.delete(id);
-                                    }}
-                                    type="button"
-                                    className={
-                                       "cpdom__event dayview__event" +
-                                       (selectedEventId === firstEvent.reservationId
-                                          ? " is-selected-event"
-                                          : "") +
-                                       (renderActiveId === firstEvent.reservationId
-                                          ? " is-active-event"
-                                          : "") +
-                                       (renderSearchId === firstEvent.reservationId
-                                          ? " is-search-event"
-                                          : "")
-                                    }
-                                    data-cp-kind="event"
-                                    data-res-id={firstEvent.reservationId}
-                                    style={{
-                                       background: resolveCssColor(firstEvent.colorToken),
-                                    }}
-                                    title={`${firstEvent.student} (${hhmm(firstEvent.start)})`}
-                                 >
-                                    <span className="dayview__event-person-name">
-                                       {firstEvent.student}
-                                    </span>
-                                    <span className="dayview__event-phone">
-                                       {firstEvent.phone || slotLabel}
-                                    </span>
-                                    <span className="dayview__event-note">
-                                       {firstEvent.privateMessage || " "}
-                                    </span>
-                                    {presenceByReservationUsers instanceof Map &&
-                                    presenceByReservationUsers.has(
-                                       firstEvent.reservationId,
-                                    ) ? (
-                                       <span
-                                          className="cpdom__presence"
-                                          style={{
-                                             background:
-                                                presenceByReservationColors instanceof Map
-                                                   ? resolveCssColor(
-                                                        presenceByReservationColors.get(
-                                                           firstEvent.reservationId,
-                                                        ) || "--accent-l",
-                                                     )
-                                                   : "var(--accent-l)",
-                                          }}
-                                       />
-                                    ) : null}
-                                 </button>
-                              ) : (
-                                 <div className="cpdom__empty">
-                                    <span className="cpdom__time">{slotLabel}</span>
-                                 </div>
-                              )}
+                              <div className="cpdom__slot-body">
+                                 {displayEvent ? (
+                                    <button
+                                       ref={(el) => {
+                                          const id = String(displayEvent.reservationId || "");
+                                          if (!id) return;
+                                          if (el) eventRefMap.current.set(id, el);
+                                          else eventRefMap.current.delete(id);
+                                       }}
+                                       type="button"
+                                       className={
+                                          "cpdom__event dayview__event" +
+                                          (selectedEventId === displayEvent.reservationId
+                                             ? " is-selected-event"
+                                             : "") +
+                                          (renderActiveId === displayEvent.reservationId
+                                             ? " is-active-event"
+                                             : "") +
+                                          (renderSearchId === displayEvent.reservationId
+                                             ? " is-search-event"
+                                             : "") +
+                                          (isCancelOriginMarker
+                                             ? " is-cancel-origin"
+                                             : "")
+                                       }
+                                       data-cp-kind="event"
+                                       data-res-id={displayEvent.reservationId}
+                                       data-dv-pan-allow="1"
+                                       style={{
+                                          background: resolveCssColor(displayEvent.colorToken),
+                                       }}
+                                       title={
+                                          isCancelOriginMarker
+                                             ? cancelOriginLabel
+                                             : `${displayEvent.student} (${hhmm(
+                                                  displayEvent.start,
+                                               )})`
+                                       }
+                                       onPointerDown={(e) =>
+                                          handleEventPointerDown(e, displayEvent)
+                                       }
+                                       onPointerMove={handleEventPointerMove}
+                                       onPointerUp={handleEventPointerUp}
+                                       onPointerCancel={handleEventPointerUp}
+                                       onPointerLeave={handleEventPointerUp}
+                                       onContextMenu={(e) => {
+                                          e.preventDefault();
+                                          openStudentPopup(displayEvent.rawEvent);
+                                       }}
+                                    >
+                                       {isCancelOriginMarker ? (
+                                          <span className="cpdom__event-meta cpdom__event-meta--cancel-origin">
+                                             {eventMeta || "\u00A0"}
+                                          </span>
+                                       ) : (
+                                          <>
+                                             <span className="cpdom__event-meta">
+                                                {eventMeta || "\u00A0"}
+                                             </span>
+                                             <span className="dayview__event-person-name">
+                                                {displayEvent.student}
+                                             </span>
+                                             <span className="dayview__event-phone">
+                                                {displayEvent.phone || " "}
+                                             </span>
+                                             <span className="dayview__event-note">
+                                                {displayEvent.privateMessage || " "}
+                                             </span>
+                                             {presenceByReservationUsers instanceof Map &&
+                                             presenceByReservationUsers.has(
+                                                displayEvent.reservationId,
+                                             ) ? (
+                                                <span
+                                                   className="cpdom__presence"
+                                                   style={{
+                                                      background:
+                                                         presenceByReservationColors instanceof
+                                                         Map
+                                                            ? resolveCssColor(
+                                                                 presenceByReservationColors.get(
+                                                                    displayEvent.reservationId,
+                                                                 ) || "--accent-l",
+                                                              )
+                                                            : "var(--accent-l)",
+                                                   }}
+                                                />
+                                             ) : null}
+                                          </>
+                                       )}
+                                    </button>
+                                 ) : isWaitEditing ? (
+                                    <textarea
+                                       ref={waitInputRef}
+                                       className="cpdom__wait-input"
+                                       value={waitEdit?.text || ""}
+                                       onChange={(e) =>
+                                          setWaitEdit((prev) =>
+                                             prev
+                                                ? { ...prev, text: e.target.value }
+                                                : prev,
+                                          )
+                                       }
+                                       onBlur={handleWaitBlur}
+                                       onKeyDown={handleWaitKeyDown}
+                                       placeholder={WAIT_PLACEHOLDER_TEXT}
+                                       onClick={(e) => e.stopPropagation()}
+                                       onPointerDown={(e) => e.stopPropagation()}
+                                    />
+                                 ) : (
+                                    <div
+                                       className={
+                                          "cpdom__empty" +
+                                          (isRegularInstructorSlot
+                                             ? " cpdom__empty--regular"
+                                             : "") +
+                                          (isClosingSlot ? " cpdom__empty--closing" : "") +
+                                          (isWaitPad ? " cpdom__empty--wait" : "") +
+                                          (isCancelPad ? " cpdom__empty--cancel" : "")
+                                       }
+                                    >
+                                       {isBlocked &&
+                                       !isWaitPad &&
+                                       !isCancelPad &&
+                                       !isLateralPad ? (
+                                          <span className="cpdom__blocked-label">
+                                             Blocat
+                                          </span>
+                                       ) : null}
+                                       {slotLabel ? (
+                                          <span className="cpdom__time">{slotLabel}</span>
+                                       ) : null}
+                                    </div>
+                                 )}
+                              </div>
                            </div>
                         );
                      })}
@@ -1079,6 +2992,17 @@ export default memo(function DayviewDomTrack({
                </section>
             );
          })}
+         {rangeBox ? (
+            <div
+               className="cpdom__range-box"
+               style={{
+                  left: `${Math.round(rangeBox.left)}px`,
+                  top: `${Math.round(rangeBox.top)}px`,
+                  width: `${Math.round(rangeBox.width)}px`,
+                  height: `${Math.round(rangeBox.height)}px`,
+               }}
+            />
+         ) : null}
       </div>
    );
 });

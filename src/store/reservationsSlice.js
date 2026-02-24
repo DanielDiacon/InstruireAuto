@@ -15,6 +15,34 @@ import {
    buildMonthRange,
 } from "../api/reservationsService";
 
+function normalizeItemsFromResponse(res) {
+   if (Array.isArray(res)) return res;
+   if (!res || typeof res !== "object") return [];
+
+   const candidates = [
+      res.items,
+      res.data,
+      res.results,
+      res.rows,
+      res.reservations,
+      res.list,
+   ];
+
+   for (const c of candidates) {
+      if (Array.isArray(c)) return c;
+      if (c && typeof c === "object") {
+         if (Array.isArray(c.items)) return c.items;
+         if (Array.isArray(c.data)) return c.data;
+         if (Array.isArray(c.results)) return c.results;
+         if (Array.isArray(c.rows)) return c.rows;
+         if (Array.isArray(c.reservations)) return c.reservations;
+         if (Array.isArray(c.list)) return c.list;
+      }
+   }
+
+   return [];
+}
+
 /* ───────────────────── NEW: Delta sync (doar ce s-a schimbat) ───────────────────── */
 export const fetchReservationsDelta = createAsyncThunk(
    "reservations/fetchReservationsDelta",
@@ -24,7 +52,7 @@ export const fetchReservationsDelta = createAsyncThunk(
          const since = st.lastSyncedAt || null;
 
          const opts = since
-            ? { updated_since: since, pageSize: 5000 }
+            ? { scope: "all", updated_since: since, pageSize: 5000 }
             : { scope: "all", pageSize: 5000 };
 
          const res = await getAllReservations(opts);
@@ -33,8 +61,17 @@ export const fetchReservationsDelta = createAsyncThunk(
          // 1) { items: [...], deleted: [...], etag, serverTime }
          // 2) direct: [...]
          const payload = Array.isArray(res) ? { items: res } : res || {};
-         const items = payload.items || [];
-         const deleted = payload.deleted || [];
+
+         const deletedRaw =
+            payload.deleted ??
+            payload.deletedIds ??
+            payload.removed ??
+            payload.tombstones ??
+            [];
+
+         const items = normalizeItemsFromResponse(payload);
+
+         const deleted = Array.isArray(deletedRaw) ? deletedRaw : [];
          const etag = payload.etag || null;
          const now = payload.serverTime || new Date().toISOString();
 
@@ -193,7 +230,7 @@ export const fetchReservationsFiltered = createAsyncThunk(
    async (filters, { rejectWithValue }) => {
       try {
          const res = await filterReservations(filters);
-         const items = Array.isArray(res) ? res : res.items || [];
+         const items = normalizeItemsFromResponse(res);
          return { items, filters };
       } catch (e) {
          return rejectWithValue(e.message);
@@ -211,7 +248,7 @@ export const fetchReservationsForMonth = createAsyncThunk(
             ...(extraFilters || {}),
             ...range,
          });
-         const items = Array.isArray(res) ? res : res.items || [];
+         const items = normalizeItemsFromResponse(res);
          return { items, range };
       } catch (e) {
          return rejectWithValue(e.message);
@@ -322,6 +359,7 @@ const reservationsSlice = createSlice({
 
       // 🔥 diapazonul activ de rezervări (ex: luna curentă)
       activeRange: null, // { startDateFrom, startDateTo }
+      monthFetchRequestId: null, // protecție împotriva răspunsurilor vechi out-of-order
    },
    reducers: {
       setReservationColorLocal: (state, action) => {
@@ -560,26 +598,41 @@ const reservationsSlice = createSlice({
             s.errorAll = a.payload;
             s.error = a.payload;
          })
-         .addCase(fetchReservationsForMonth.pending, (s) => {
+         .addCase(fetchReservationsForMonth.pending, (s, a) => {
             s.loadingAll = true;
             s.loading = true;
             s.errorAll = null;
             s.error = null;
+            s.monthFetchRequestId = a.meta.requestId || null;
          })
          .addCase(fetchReservationsForMonth.fulfilled, (s, a) => {
+            if (
+               s.monthFetchRequestId &&
+               s.monthFetchRequestId !== a.meta.requestId
+            ) {
+               return;
+            }
             s.loadingAll = false;
             s.loading = false;
             const { items, range } = a.payload || {};
             s.list = items || [];
             s.lastSyncedAt = new Date().toISOString();
             s.hydrated = true;
+            s.monthFetchRequestId = null;
             if (range) s.activeRange = range;
          })
          .addCase(fetchReservationsForMonth.rejected, (s, a) => {
+            if (
+               s.monthFetchRequestId &&
+               s.monthFetchRequestId !== a.meta.requestId
+            ) {
+               return;
+            }
             s.loadingAll = false;
             s.loading = false;
             s.errorAll = a.payload;
             s.error = a.payload;
+            s.monthFetchRequestId = null;
          });
 
       /* ───────────── state updates din maybeRefreshReservations ───────────── */

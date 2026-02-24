@@ -184,8 +184,7 @@ export function useReservationSocket(token, opts = {}) {
       socketRef.current = socket;
 
       const handleConnect = () => {
-         // eslint-disable-next-line no-console
-         console.log(
+         dbg(
             "[WS connected]",
             "socket.id=",
             socket.id,
@@ -198,8 +197,7 @@ export function useReservationSocket(token, opts = {}) {
       };
 
       const handleDisconnect = (reason) => {
-         // eslint-disable-next-line no-console
-         console.warn(
+         dbg(
             "[WS disconnected]",
             "reason=",
             reason,
@@ -212,8 +210,7 @@ export function useReservationSocket(token, opts = {}) {
       };
 
       const handleConnectError = (err) => {
-         // eslint-disable-next-line no-console
-         console.error(
+         dbg(
             "[WS connect_error]",
             err?.message || err,
             "instance=",

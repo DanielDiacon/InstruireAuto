@@ -1,6 +1,8 @@
 import apiClientService from "./ApiClientService";
 
 const BASE_URL = `/auth`;
+const GIFT_WEBHOOK_URL =
+   "https://n8n.srv1198166.hstgr.cloud/webhook/trimitere-email-cadou";
 
 export async function signup(payload) {
    const response = await apiClientService.post(
@@ -131,6 +133,42 @@ export async function enrollStudent(payload) {
 
    if (!response.ok) {
       await throwDetailedError(response);
+   }
+
+   try {
+      return await response.json();
+   } catch {
+      return {};
+   }
+}
+
+/**
+ * Trimite emailul-cadou în n8n după înscriere reușită.
+ *
+ * @param {object} payload
+ *  {
+ *    nume, prenume, email
+ *  }
+ */
+export async function sendGiftWebhook(payload) {
+   const response = await fetch(GIFT_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+         Accept: "application/json",
+         "Content-Type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify(payload),
+   });
+
+   if (!response.ok) {
+      let details = "";
+      try {
+         details = (await response.text())?.trim();
+      } catch {}
+
+      throw new Error(
+         details || `Webhook cadou a eșuat (status ${response.status}).`,
+      );
    }
 
    try {

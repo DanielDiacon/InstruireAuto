@@ -106,14 +106,48 @@ const persistConfig = {
 };
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);
+const isProd = process.env.NODE_ENV === "production";
+const enableReduxDevChecks = process.env.REACT_APP_REDUX_DEV_CHECKS === "1";
+const enableReduxSerializableChecks =
+   process.env.REACT_APP_REDUX_SERIALIZABLE_CHECKS === "1";
+
+const serializableIgnoredActions = [
+   FLUSH,
+   REHYDRATE,
+   PAUSE,
+   PERSIST,
+   PURGE,
+   REGISTER,
+];
+
+const serializableIgnoredPaths = [
+   "reservations.list",
+   "students.list",
+   "instructors.list",
+   "instructorsGroups.list",
+   "users.list",
+   "cars.list",
+   "groups.list",
+];
 
 export const store = configureStore({
    reducer: persistedReducer,
    middleware: (getDefault) =>
       getDefault({
-         serializableCheck: {
-            ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
-         },
+         immutableCheck:
+            !isProd && enableReduxDevChecks
+               ? {
+                    warnAfter: 64,
+                 }
+               : false,
+         serializableCheck:
+            !isProd && enableReduxDevChecks && enableReduxSerializableChecks
+               ? {
+                    warnAfter: 128,
+                    ignoredActions: serializableIgnoredActions,
+                    ignoredPaths: serializableIgnoredPaths,
+                 }
+               : false,
       }),
 });
 

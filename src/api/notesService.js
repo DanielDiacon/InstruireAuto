@@ -22,17 +22,56 @@ async function parseJsonSafe(res, fallback) {
    }
 }
 
+function normalizeIsoQueryParam(value) {
+   if (!value) return "";
+   if (value instanceof Date) {
+      return Number.isFinite(value.getTime()) ? value.toISOString() : "";
+   }
+   if (typeof value === "string") return value;
+   const d = new Date(value);
+   return Number.isFinite(d.getTime()) ? d.toISOString() : "";
+}
+
 /**
  * NOTIȚE PENTRU AȘTEPTĂRI – interval de timp (ex: luna curentă),
  * filtrate cu type=wait-slot pe backend.
  *
- * GET /api/notes?from=...&to=...&type=wait-slot
+ * Compat:
+ * - fetchWaitNotesRange(fromIso, toIso)
+ * - fetchWaitNotesRange({ from, to, type })
  */
-export async function fetchWaitNotesRange(fromIso, toIso) {
+export async function fetchWaitNotesRange(fromIsoOrOptions, toIsoMaybe) {
+   let fromIso = fromIsoOrOptions;
+   let toIso = toIsoMaybe;
+   let noteType = "wait-slot";
+
+   if (
+      fromIsoOrOptions &&
+      typeof fromIsoOrOptions === "object" &&
+      !(fromIsoOrOptions instanceof Date)
+   ) {
+      fromIso =
+         fromIsoOrOptions.fromIso ??
+         fromIsoOrOptions.from ??
+         fromIsoOrOptions.start ??
+         null;
+      toIso =
+         fromIsoOrOptions.toIso ??
+         fromIsoOrOptions.to ??
+         fromIsoOrOptions.end ??
+         null;
+      if (fromIsoOrOptions.type) {
+         noteType = String(fromIsoOrOptions.type);
+      }
+   }
+
+   const fromParam = normalizeIsoQueryParam(fromIso);
+   const toParam = normalizeIsoQueryParam(toIso);
+
    const params = new URLSearchParams();
-   if (fromIso) params.set("from", fromIso);
-   if (toIso) params.set("to", toIso);
-   params.set("type", "wait-slot"); // dacă backend-ul tău folosește acest filtru
+   if (fromParam) params.set("from", fromParam);
+   if (toParam) params.set("to", toParam);
+   params.set("type", noteType || "wait-slot"); // dacă backend-ul tău folosește acest filtru
 
    const url =
       params.toString().length > 0

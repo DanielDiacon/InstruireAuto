@@ -29,6 +29,7 @@ import APInstrGroups from "./pages/APages/APInstrGroups";
 import MPanel from "./pages/MPanel";
 import MPGroups from "./pages/MPages/MPGroups";
 import MPCalendar from "./pages/MPages/MPCalendar";
+import MPCalendarPlus from "./pages/MPages/MPCalendarPlus";
 import MPHistory from "./pages/MPages/MPHistory";
 import MPInstrGroups from "./pages/MPages/MPInstrGroups";
 
@@ -202,6 +203,14 @@ const App = () => {
                      element={
                         <ProtectedRoute allowedRoles={["MANAGER"]}>
                            <MPCalendar />
+                        </ProtectedRoute>
+                     }
+                  />
+                  <Route
+                     path="/manager/calendarplus"
+                     element={
+                        <ProtectedRoute allowedRoles={["MANAGER"]}>
+                           <MPCalendarPlus />
                         </ProtectedRoute>
                      }
                   />

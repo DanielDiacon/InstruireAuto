@@ -8,6 +8,28 @@ const getCookie = (name) => {
 const isJsonContentType = (ct) =>
    !ct || String(ct).toLowerCase().includes("application/json");
 
+const IS_DEV = process.env.NODE_ENV !== "production";
+let warnedMissingToken = false;
+
+const isHttpDebugEnabled = () => {
+   if (!IS_DEV) return false;
+   if (typeof window === "undefined") return true;
+   if (window.__HTTP_DEBUG === true) return true;
+   try {
+      return localStorage.getItem("__HTTP_DEBUG") === "1";
+   } catch {
+      return false;
+   }
+};
+
+const warnMissingTokenOnce = () => {
+   if (!IS_DEV || warnedMissingToken) return;
+   warnedMissingToken = true;
+   console.warn(
+      "[AUTH] Nu există access_token în cookies; cererile vor merge fără Authorization.",
+   );
+};
+
 const sendRequest = async (
    method,
    endpoint,
@@ -15,16 +37,13 @@ const sendRequest = async (
    contentType = null,
 ) => {
    const apiUrl = process.env.REACT_APP_API_URL;
- 
+   const debugEnabled = isHttpDebugEnabled();
 
    const defaultContentType = "application/json; charset=UTF-8";
    const token = getCookie("access_token");
-   // după const token = getCookie("access_token");
    if (!token) {
-      console.warn(
-         "[AUTH] Nu există access_token în cookies → Authorization nu va fi trimis.",
-      );
-   } else {
+      warnMissingTokenOnce();
+   } else if (debugEnabled) {
       console.debug(
          "[AUTH] Token prezent. Primele 12 caractere:",
          token.slice(0, 12),
@@ -69,23 +88,22 @@ const sendRequest = async (
          : `/${endpoint}`;
       const url = `${base}${path}`;
 
-      // DEBUG prietenos
-      try {
+      if (debugEnabled) {
          console.debug("[HTTP]", upper, endpoint, {
             headers,
             body: requestOptions.body,
          });
-      } catch {}
+      }
 
       const response = await fetch(url, requestOptions);
 
-      let responseText = "";
-      try {
-         responseText = await response.clone().text();
-      } catch {}
-      try {
+      if (debugEnabled) {
+         let responseText = "";
+         try {
+            responseText = await response.clone().text();
+         } catch {}
          console.debug("[HTTP RES]", response.status, endpoint, responseText);
-      } catch {}
+      }
 
       return response;
    } catch (error) {

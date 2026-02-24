@@ -53,9 +53,40 @@ export default function SubPopup() {
    }, []);
 
    useEffect(() => {
-      const unsub = subscribeSubPopup(({ detail }) => {
+      const handleRequestClose = () => {
+         if (!getCurrentSubPopup()) {
+            closingByPopstateRef.current = false;
+            return;
+         }
+
+         // ===== CLOSE REQUEST =====
+         setExiting(false);
+         setArmed(false);
+         document.body.classList.remove("subpopup-open");
+
+         // scoatem top-ul din stivă imediat
+         revealingPrevRef.current = true;
+         popSubPopup();
+
+         // pe mobil: consumăm o intrare din istorie DOAR dacă închiderea NU a venit din popstate
+         if (isMobile() && subDepthRef.current > 0) {
+            if (!closingByPopstateRef.current) {
+               window.history.back();
+            }
+            subDepthRef.current -= 1;
+         }
+         // reset flag
+         closingByPopstateRef.current = false;
+      };
+
+      const unsub = subscribeSubPopup(({ detail, action }) => {
+         if (action === "request-close") {
+            handleRequestClose();
+            return;
+         }
+
          if (detail) {
-            // ===== OPEN =====
+            // ===== OPEN / REVEAL =====
             setExiting(false);
             setArmed(false);
             document.body.classList.add("subpopup-open");
@@ -85,28 +116,15 @@ export default function SubPopup() {
                subDepthRef.current += 1;
             }
             revealingPrevRef.current = false;
-         } else if (panelRef.current) {
-            // ===== CLOSE (instant) =====
-            setExiting(false);
-            document.body.classList.remove("subpopup-open");
-
-            // scoatem top-ul din stivă imediat
-            revealingPrevRef.current = true;
-            popSubPopup();
-
-            // curățăm complet starea
-            setPopupState({ type: null, props: {} });
-
-            // pe mobil: consumăm o intrare din istorie DOAR dacă închiderea NU a venit din popstate
-            if (isMobile() && subDepthRef.current > 0) {
-               if (!closingByPopstateRef.current) {
-                  window.history.back();
-               }
-               subDepthRef.current -= 1;
-            }
-            // reset flag
-            closingByPopstateRef.current = false;
+            return;
          }
+
+         // ===== STACK EMPTY =====
+         setExiting(false);
+         setArmed(false);
+         document.body.classList.remove("subpopup-open");
+         setPopupState({ type: null, props: {} });
+         revealingPrevRef.current = false;
       });
 
       return () => {

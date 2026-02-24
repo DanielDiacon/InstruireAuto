@@ -162,6 +162,7 @@
          opacity 160ms ease,
          transform 160ms ease;
       will-change: opacity, transform;
+      isolation: isolate;
 
       content-visibility: auto;
       contain-intrinsic-size: 44px 1400px;
@@ -181,12 +182,13 @@
    &__group-header {
       position: sticky;
       top: 0;
-      z-index: 20;
+      z-index: 120;
       height: var(--day-header-h);
       display: flex;
       align-items: center;
       justify-content: center;
       height: auto !important;
+      background: var(--black-p);
    }
 
    &__group-title {
@@ -199,6 +201,8 @@
    /* ---------- Conținut zi ---------- */
    &__group-content {
       display: grid;
+      position: relative;
+      z-index: 1;
    }
 
    &__group-content--row {
@@ -897,6 +901,14 @@
    padding: 24px;
    min-height: 240px;
    color: var(--white-p);
+}
+
+.dayview__skeleton {
+   width: 100%;
+   min-height: 260px;
+   height: 100%;
+   background: var(--black-p);
+   opacity: 0.35;
 }
 
 .dayview__spinner {

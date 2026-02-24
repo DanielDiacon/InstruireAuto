@@ -56,14 +56,15 @@ const IS_LOW_SPEC_DEVICE =
       (Number(navigator.hardwareConcurrency) > 0 &&
          Number(navigator.hardwareConcurrency) <= 4));
 const VISIBLE_DAYS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 140 : 120;
-const TRACK_DAY_GAP_PX = 24;
+const TRACK_DAY_GAP_PX = 10;
 const VISIBLE_DAYS_OVERSCAN = IS_LOW_SPEC_DEVICE ? 1 : 2;
 const STICKY_VISIBLE_DAYS_LIMIT = IS_LOW_SPEC_DEVICE ? 6 : 8;
 const VISIBLE_ROWS_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 130 : 110;
 const VIEWPORT_X_SCROLL_THRESHOLD_PX = IS_LOW_SPEC_DEVICE ? 110 : 90;
-const INTERACTING_DAYS_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 72 : 52;
-const INTERACTING_VIEWPORT_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 34 : 24;
-const DISABLE_DAY_LAZY_LOAD = true;
+const INTERACTING_DAYS_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 96 : 72;
+const INTERACTING_VIEWPORT_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 56 : 42;
+const DISABLE_DAY_LAZY_LOAD = false;
+const BLACKOUT_PREFETCH_CONCURRENCY = IS_LOW_SPEC_DEVICE ? 2 : 4;
 
 function safeReadScrollStateMap() {
    if (typeof window === "undefined") return {};
@@ -201,6 +202,106 @@ const toFloatingDate = (val) => {
    const d = new Date(val);
    return isNaN(d) ? null : d;
 };
+
+const firstDefined = (...values) => {
+   for (const value of values) {
+      if (value !== null && value !== undefined) return value;
+   }
+   return null;
+};
+
+const normalizeEntityId = (value) => {
+   if (value === null || value === undefined) return null;
+   const out = String(value).trim();
+   return out ? out : null;
+};
+
+const getReservationId = (r) =>
+   firstDefined(r?.id, r?._id, r?.reservationId, r?.reservation_id, r?.uuid);
+
+const getReservationStartRaw = (r) =>
+   firstDefined(
+      r?.startTime,
+      r?.start,
+      r?.startedAt,
+      r?.start_at,
+      r?.startDate,
+      r?.start_date,
+      r?.dateTime,
+      r?.datetime,
+      r?.date,
+      r?.begin,
+      r?.reservation?.startTime,
+      r?.reservation?.start,
+      r?.reservation?.startedAt,
+      r?.reservation?.start_at,
+      r?.reservation?.startDate,
+      r?.reservation?.start_date,
+      r?.reservation?.dateTime,
+      r?.reservation?.datetime,
+      r?.reservation?.date,
+      r?.reservation?.begin,
+   );
+
+const getReservationEndRaw = (r) =>
+   firstDefined(
+      r?.endTime,
+      r?.end,
+      r?.end_at,
+      r?.endDate,
+      r?.end_date,
+      r?.finishTime,
+      r?.reservation?.endTime,
+      r?.reservation?.end,
+      r?.reservation?.end_at,
+      r?.reservation?.endDate,
+      r?.reservation?.end_date,
+      r?.reservation?.finishTime,
+   );
+
+const getReservationInstructorId = (r) =>
+   normalizeEntityId(
+      firstDefined(
+         r?.instructorId,
+         r?.instructor_id,
+         r?.instructor?.id,
+         r?.reservation?.instructorId,
+         r?.reservation?.instructor_id,
+         r?.reservation?.instructor?.id,
+      ),
+   );
+
+const getReservationGroupId = (r) =>
+   firstDefined(
+      r?.instructorsGroupId,
+      r?.instructors_group_id,
+      r?.groupId,
+      r?.group_id,
+      r?.group?.id,
+      r?.reservation?.instructorsGroupId,
+      r?.reservation?.instructors_group_id,
+      r?.reservation?.groupId,
+      r?.reservation?.group_id,
+      r?.reservation?.group?.id,
+   );
+
+const getReservationStudentId = (r) =>
+   normalizeEntityId(
+      firstDefined(
+         r?.userId,
+         r?.user_id,
+         r?.studentId,
+         r?.student_id,
+         r?.user?.id,
+         r?.student?.id,
+         r?.reservation?.userId,
+         r?.reservation?.user_id,
+         r?.reservation?.studentId,
+         r?.reservation?.student_id,
+         r?.reservation?.user?.id,
+         r?.reservation?.student?.id,
+      ),
+   );
 
 const norm = (s = "") =>
    s
@@ -349,7 +450,7 @@ const EVENT_H = 48;
 const SLOT_H = 125;
 const HOURS_COL_W = 60;
 const COL_W = 220;
-const COL_GAP = 12;
+const COL_GAP = 0;
 const GROUP_GAP = 32;
 
 function getReservationIdFromSocketPayload(payload) {
@@ -563,6 +664,7 @@ export default function CalendarPlusOptimized({
    const lastViewportScrollTopRef = useRef(-1);
    const lastViewportUpdateTsRef = useRef(0);
    const isPanVirtualizationLockedRef = useRef(false);
+   const panInputTypeRef = useRef("mouse");
 
    const [scrollViewport, setScrollViewport] = useState({
       left: 0,
@@ -578,9 +680,14 @@ export default function CalendarPlusOptimized({
    const stickyVisibleDaysStampRef = useRef(new Map());
    const stickyVisibleDaysCounterRef = useRef(0);
 
-   // ✅ Auto-scroll Y: doar o singură dată per acțiune (search / săgeți / focus-edit)
+   // ✅ Auto-scroll pentru event activ (X + Y): o singură secvență per acțiune.
    const activeEventIdRef = useRef(null);
-   const autoScrollYOnceRef = useRef({ eventId: null, key: null, done: true });
+   const autoScrollYOnceRef = useRef({
+      eventId: null,
+      key: null,
+      done: true,
+      tries: 0,
+   });
 
    const armAutoScrollYOnce = useCallback((eventId, key) => {
       const id = eventId != null ? String(eventId) : null;
@@ -588,30 +695,45 @@ export default function CalendarPlusOptimized({
          eventId: id,
          key: String(key ?? Date.now()),
          done: false,
+         tries: 0,
       };
    }, []);
 
    const disarmAutoScrollY = useCallback(() => {
-      autoScrollYOnceRef.current = { eventId: null, key: null, done: true };
+      autoScrollYOnceRef.current = {
+         eventId: null,
+         key: null,
+         done: true,
+         tries: 0,
+      };
    }, []);
 
-   // scroll automat pe Y pentru event activ — DAR o singură dată (gate)
+   // scroll automat pe X/Y pentru event activ — DAR o singură dată (gate)
    const handleActiveEventRectChange = useCallback((info) => {
       const scroller = scrollRef.current;
       if (!scroller || !info) return;
 
       const activeId = activeEventIdRef.current;
       const gate = autoScrollYOnceRef.current;
+      const tries = Number(gate?.tries || 0);
 
       if (!activeId || !gate || gate.done) return;
       if (gate.eventId && String(gate.eventId) !== String(activeId)) return;
+      if (tries >= 54) {
+         autoScrollYOnceRef.current = { ...gate, done: true };
+         return;
+      }
 
       const scRect = scroller.getBoundingClientRect();
+      const scWidth = scRect.width || scroller.clientWidth || 0;
       const scHeight = scRect.height || scroller.clientHeight || 0;
 
       const topY = info.topY ?? info.top ?? null;
       const bottomY = info.bottomY ?? info.bottom ?? null;
       let centerY = info.centerY ?? null;
+      const leftX = info.leftX ?? info.left ?? null;
+      const rightX = info.rightX ?? info.right ?? null;
+      let centerX = info.centerX ?? null;
 
       if (centerY == null) {
          if (topY != null && bottomY != null)
@@ -620,27 +742,85 @@ export default function CalendarPlusOptimized({
          else if (bottomY != null) centerY = bottomY;
          else return;
       }
+      if (centerX == null) {
+         if (leftX != null && rightX != null)
+            centerX = leftX + (rightX - leftX) / 2;
+         else if (leftX != null) centerX = leftX;
+         else if (rightX != null) centerX = rightX;
+      }
 
-      const centerRel = centerY - scRect.top;
-      const wantedTop = scroller.scrollTop + (centerRel - scHeight / 2);
+      const stickyTopInset = 52;
+      const viewportPaddingY = 8;
+      const viewportPaddingX = 14;
+      const visibleTop = scRect.top + stickyTopInset + viewportPaddingY;
+      const visibleBottom = scRect.bottom - viewportPaddingY;
+      const visibleLeft = scRect.left + viewportPaddingX;
+      const visibleRight = scRect.right - viewportPaddingX;
 
-      const maxScrollTop = Math.max(0, scroller.scrollHeight - scHeight);
-      const nextTop = Math.max(0, Math.min(wantedTop, maxScrollTop));
+      const isYVisible =
+         topY != null &&
+         bottomY != null &&
+         topY >= visibleTop &&
+         bottomY <= visibleBottom;
+      const isXVisible =
+         leftX == null || rightX == null
+            ? true
+            : leftX >= visibleLeft && rightX <= visibleRight;
 
-      if (Math.abs(nextTop - scroller.scrollTop) < 1) {
-         autoScrollYOnceRef.current = { ...gate, done: true };
+      if (isYVisible && isXVisible) {
+         autoScrollYOnceRef.current = { ...gate, done: true, tries };
          return;
       }
 
-      scroller.scrollTop = nextTop;
-      autoScrollYOnceRef.current = { ...gate, done: true };
+      let wantedTop = scroller.scrollTop;
+      if (topY != null && topY < visibleTop) {
+         wantedTop += topY - visibleTop - viewportPaddingY;
+      } else if (bottomY != null && bottomY > visibleBottom) {
+         wantedTop += bottomY - visibleBottom + viewportPaddingY;
+      } else {
+         const centerRel = centerY - scRect.top;
+         wantedTop = scroller.scrollTop + (centerRel - scHeight / 2);
+      }
+
+      let wantedLeft = scroller.scrollLeft;
+      if (leftX != null && leftX < visibleLeft) {
+         wantedLeft += leftX - visibleLeft - viewportPaddingX;
+      } else if (rightX != null && rightX > visibleRight) {
+         wantedLeft += rightX - visibleRight + viewportPaddingX;
+      } else if (!isXVisible && centerX != null && scWidth > 0) {
+         const centerRelX = centerX - scRect.left;
+         wantedLeft = scroller.scrollLeft + (centerRelX - scWidth / 2);
+      }
+
+      const maxScrollLeft = Math.max(0, scroller.scrollWidth - scWidth);
+      const maxScrollTop = Math.max(0, scroller.scrollHeight - scHeight);
+      const nextLeft = Math.max(0, Math.min(wantedLeft, maxScrollLeft));
+      const nextTop = Math.max(0, Math.min(wantedTop, maxScrollTop));
+      const shouldMoveX = Math.abs(nextLeft - scroller.scrollLeft) >= 1;
+      const shouldMoveY = Math.abs(nextTop - scroller.scrollTop) >= 1;
+
+      if (!shouldMoveX && !shouldMoveY) {
+         autoScrollYOnceRef.current = {
+            ...gate,
+            done: isXVisible && isYVisible,
+            tries: tries + (isXVisible && isYVisible ? 0 : 1),
+         };
+         return;
+      }
+
+      if (shouldMoveX) scroller.scrollLeft = nextLeft;
+      if (shouldMoveY) scroller.scrollTop = nextTop;
+      autoScrollYOnceRef.current = { ...gate, done: false, tries: tries + 1 };
    }, []);
 
    const isInteractiveTarget = useCallback(
-      (el) =>
-         !!el.closest?.(
+      (el) => {
+         if (!el?.closest) return false;
+         if (el.closest("[data-dv-pan-allow='1']")) return false;
+         return !!el.closest(
             "button, input, textarea, select, a, [data-dv-interactive='1']",
-         ),
+         );
+      },
       [],
    );
 
@@ -755,7 +935,7 @@ export default function CalendarPlusOptimized({
       safeWriteZoomPercent(pct);
    }, [zoom, isMobile]);
 
-   const suspendFlagsRef = useRef({ isInteracting: false });
+   const suspendFlagsRef = useRef({ isInteracting: false, panPhase: "idle" });
 
    useInertialPan(scrollRef, {
       suspendFlagsRef,
@@ -763,24 +943,24 @@ export default function CalendarPlusOptimized({
       inertiaX: true,
       inertiaY: true,
       slopPx: 6,
-      inertiaBoostX: 1.35,
-      inertiaBoostY: 1.6,
-      frictionX: 0.9,
-      frictionY: 0.94,
-      stopSpeedX: 0.05,
-      stopSpeedY: 0.03,
+      inertiaBoostX: 1.28,
+      inertiaBoostY: 1.34,
+      frictionX: 0.915,
+      frictionY: 0.93,
+      stopSpeedX: 0.12,
+      stopSpeedY: 0.1,
       maxInertiaX: 70,
       maxInertiaY: 95,
    });
 
    const token = getCookie("access_token");
-
-   // ✅ debug WS o singură dată
+   const reservationsHydrated = useSelector(
+      (state) => state?.reservations?.hydrated === true,
+   );
+   const reservationsHydratedRef = useRef(reservationsHydrated);
    useEffect(() => {
-      try {
-         localStorage.setItem("__WS_DEBUG", "1");
-      } catch {}
-   }, []);
+      reservationsHydratedRef.current = reservationsHydrated;
+   }, [reservationsHydrated]);
 
    const [presenceByReservationUsers, setPresenceByReservationUsers] = useState(
       () => new Map(),
@@ -855,7 +1035,9 @@ export default function CalendarPlusOptimized({
          try {
             localStorage.setItem("__WS_DEBUG", on ? "1" : "0");
          } catch {}
-         console.log("[WS DEBUG]", window.__WS_DEBUG ? "ON" : "OFF");
+         if (window.__WS_DEBUG) {
+            console.log("[WS DEBUG]", "ON");
+         }
       };
 
       // 1) pornește din URL: ?wsdebug=1
@@ -1198,7 +1380,9 @@ export default function CalendarPlusOptimized({
          setCreateDraftBySlotUsers(new Map());
          activeDraftSlotByUserRef.current = new Map();
 
-         runReservationsRefresh("ws-connect");
+         if (reservationsHydratedRef.current) {
+            runReservationsRefresh("ws-connect");
+         }
       },
 
       onDisconnect: () => {
@@ -1407,35 +1591,47 @@ export default function CalendarPlusOptimized({
    useEffect(() => {
       if (hasPrefetchedAllRef.current) return;
       hasPrefetchedAllRef.current = true;
-      (async () => {
-         try {
-            await Promise.all([
-               dispatch(fetchInstructors()),
-               //dispatch(fetchInstructorsGroups()),
-               dispatch(fetchStudents()),
-               dispatch(
-                  fetchReservationsForMonth({
-                     date: currentDate,
-                     extraFilters: extraFilters || {},
-                  }),
-               ),
-               dispatch(fetchCars()),
-               dispatch(fetchUsers()),
-            ]);
-         } finally {
-            // no-op
+      dispatch(fetchInstructors());
+      dispatch(fetchCars());
+
+      let cancelled = false;
+      let idleId = 0;
+      let timerId = 0;
+      const runDeferredPrefetch = () => {
+         if (cancelled) return;
+         Promise.all([
+            dispatch(fetchStudents()),
+            dispatch(fetchUsers()),
+         ]).catch(() => {});
+      };
+
+      if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+         idleId = window.requestIdleCallback(runDeferredPrefetch, {
+            timeout: 1200,
+         });
+      } else {
+         timerId = window.setTimeout(runDeferredPrefetch, 420);
+      }
+
+      return () => {
+         cancelled = true;
+         if (idleId && typeof window !== "undefined" && window.cancelIdleCallback) {
+            window.cancelIdleCallback(idleId);
          }
-      })();
-   }, [dispatch, currentDate, extraFilters]);
+         if (timerId) window.clearTimeout(timerId);
+      };
+   }, [dispatch]);
 
    const {
       reservations: reservationsLive,
       instructorsGroups,
       instructors,
-      students,
       cars,
       users,
    } = useSelector(selectCalendarBaseData, shallowEqual);
+   const reservationsLoading = useSelector(
+      (state) => !!state?.reservations?.loadingAll,
+   );
 
    const handleSaveOrder = useCallback(
       async (changes) => {
@@ -1652,7 +1848,7 @@ export default function CalendarPlusOptimized({
       const endLimit = monthWindowTs.end;
 
       for (const r of list) {
-         const startRaw = r?.startTime ?? r?.start ?? r?.startedAt ?? r?.startDate;
+         const startRaw = getReservationStartRaw(r);
          if (!startRaw) continue;
 
          const start = toFloatingDate(startRaw);
@@ -1666,13 +1862,6 @@ export default function CalendarPlusOptimized({
 
       return out;
    }, [reservationsUIDedup, monthWindowTs.start, monthWindowTs.end]);
-
-   useEffect(() => {
-      if (!hasPrefetchedAllRef.current) return;
-      if ((reservationsLive?.length ?? 0) === 0) {
-         runReservationsRefresh("empty-after-prefetch");
-      }
-   }, [runReservationsRefresh, reservationsLive?.length]);
 
    useEffect(() => {
       const onFocusVisible = () => {
@@ -1690,10 +1879,16 @@ export default function CalendarPlusOptimized({
 
    const dataReady = useMemo(
       () =>
+         reservationsHydrated ||
+         reservationsLoading ||
          (reservationsLive?.length ?? 0) > 0 ||
-         (students?.length ?? 0) > 0 ||
-         (instructorsGroups?.length ?? 0) > 0,
-      [reservationsLive?.length, students?.length, instructorsGroups?.length],
+         (instructors?.length ?? 0) > 0,
+      [
+         reservationsHydrated,
+         reservationsLoading,
+         reservationsLive?.length,
+         instructors?.length,
+      ],
    );
 
    const isDummyMode = !dataReady;
@@ -1874,7 +2069,7 @@ export default function CalendarPlusOptimized({
       );
    }
 
-   function expandRepeatLocalKeys(b, allowedKeysSet) {
+   function expandRepeatLocalKeys(b) {
       const out = [];
       const t = String(b?.type || "").toUpperCase();
       if (t !== "REPEAT") return out;
@@ -1886,7 +2081,7 @@ export default function CalendarPlusOptimized({
       const lastMs = new Date(last).getTime();
       while (cur <= lastMs) {
          const key = busyLocalKeyFromStored(new Date(cur).toISOString());
-         if (!allowedKeysSet || allowedKeysSet.has(key)) out.push(key);
+         if (key) out.push(key);
          cur += stepDays * 24 * 60 * 60 * 1000;
       }
       return out;
@@ -1896,29 +2091,37 @@ export default function CalendarPlusOptimized({
       (r, startDateOverride) => {
          const start =
             startDateOverride ||
-            toFloatingDate(
-               r.startTime ??
-                  r.start ??
-                  r.startedAt ??
-                  r.start_at ??
-                  r.startDate ??
-                  r.start_date,
-            );
+            toFloatingDate(getReservationStartRaw(r));
          if (!start || isNaN(start)) return null;
 
-         const end = new Date(start.getTime() + LESSON_MINUTES * 60000);
+         const endRaw = getReservationEndRaw(r);
+         const endParsed = endRaw ? toFloatingDate(endRaw) : null;
+         const end =
+            endParsed && endParsed.getTime() > start.getTime()
+               ? endParsed
+               : new Date(start.getTime() + LESSON_MINUTES * 60000);
 
-         const instIdStr =
-            r.instructorId != null ? String(r.instructorId) : "__unknown";
-         const groupIdRaw = r.instructorsGroupId ?? null;
-         const studentId = r.userId != null ? String(r.userId) : null;
+         const instIdStr = getReservationInstructorId(r) || "__unknown";
+         const groupIdRaw = getReservationGroupId(r);
+         const studentId = getReservationStudentId(r);
+         const eventIdRaw = getReservationId(r);
+         const eventId =
+            eventIdRaw != null
+               ? String(eventIdRaw)
+               : `${instIdStr}|${start.toISOString()}`;
 
          const fromStore = studentDict ? studentDict.get(studentId) : null;
-         const userObj = r.user || {};
+         const userObj =
+            r.user || r.student || r.client || r.reservation?.user || {};
 
          const first = fromStore?.firstName ?? userObj.firstName ?? "";
          const last = fromStore?.lastName ?? userObj.lastName ?? "";
-         const phone = fromStore?.phone ?? userObj.phone ?? null;
+         const phone =
+            fromStore?.phone ??
+            userObj.phone ??
+            userObj.phoneNumber ??
+            userObj.mobile ??
+            null;
          const studentPrivateMsg = fromStore?.privateMessage ?? "";
 
          const groupName = (() => {
@@ -1971,7 +2174,7 @@ export default function CalendarPlusOptimized({
          );
 
          return {
-            id: String(r.id),
+            id: eventId,
             title: "Programare",
             start,
             end,
@@ -2296,7 +2499,11 @@ export default function CalendarPlusOptimized({
       const el = scrollRef.current;
       if (!el) return;
 
-      const lockPanVirtualization = () => {
+      const lockPanVirtualization = (ev) => {
+         const pointerType = String(ev?.detail?.pointerType || "")
+            .trim()
+            .toLowerCase();
+         panInputTypeRef.current = pointerType || "mouse";
          isPanVirtualizationLockedRef.current = true;
          setIsPanInteracting(true);
          lastVisibleDaysScrollLeftRef.current = -1;
@@ -2331,6 +2538,7 @@ export default function CalendarPlusOptimized({
       };
 
       const unlockPanVirtualization = () => {
+         panInputTypeRef.current = "mouse";
          isPanVirtualizationLockedRef.current = false;
          setIsPanInteracting(false);
          lastVisibleDaysUpdateTsRef.current = 0;
@@ -2401,20 +2609,31 @@ export default function CalendarPlusOptimized({
       [loadedDays, dayStrideForTrack, dayWidthForTrack],
    );
 
-   const allowedKeysSet = useMemo(() => {
-      const set = new Set();
-      for (const d of loadedDays) {
-         const ts = startOfDayTs(d);
-         const slots = mkStandardSlotsForDay(new Date(ts));
-         for (const s of slots) set.add(localKeyFromTs(s.start));
-      }
-      return set;
-   }, [loadedDays, mkStandardSlotsForDay]);
+   const centerDayTsInScrollerReliable = useCallback(
+      (targetDayTs) => {
+         if (targetDayTs == null) return;
+
+         const run = () => centerDayTsInScroller(targetDayTs);
+         if (typeof window === "undefined") {
+            run();
+            return;
+         }
+
+         window.requestAnimationFrame(run);
+         window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(run);
+         });
+         window.setTimeout(run, 120);
+         window.setTimeout(run, 260);
+      },
+      [centerDayTsInScroller],
+   );
 
    const blackoutKeyMapRef = useRef(new Map());
    const blackoutInFlightRef = useRef(new Set());
    const [blackoutVer, setBlackoutVer] = useState(0);
    const blackoutBumpRafRef = useRef(0);
+   const blackoutPrefetchRunRef = useRef(0);
 
    const requestBlackoutVersionBump = useCallback(() => {
       if (blackoutBumpRafRef.current) return;
@@ -2456,6 +2675,7 @@ export default function CalendarPlusOptimized({
       blackoutKeyMapRef.current = new Map();
       blackoutInFlightRef.current = new Set();
       setBlackoutVer((v) => v + 1);
+      blackoutPrefetchRunRef.current += 1;
    }, [currentMonthValue]);
    // ✅ Scroll state (X/Y) per lună — persist + restore din localStorage
    const scrollPosRef = useRef({ x: 0, y: 0 });
@@ -2463,6 +2683,13 @@ export default function CalendarPlusOptimized({
 
    // ca să nu re-restaurăm la infinit
    const restoredScrollRef = useRef({ monthKey: null, dataReady: null });
+   const forceMonthScrollResetRef = useRef(false);
+   const pendingMonthJumpRef = useRef(null);
+   const lastMonthFetchKeyRef = useRef("");
+   const extraFiltersKey = useMemo(
+      () => JSON.stringify(extraFilters || {}),
+      [extraFilters],
+   );
 
    const persistScrollNow = useCallback(() => {
       if (orderEditOpen) return; // NU salvăm când e editorul deschis
@@ -2495,6 +2722,21 @@ export default function CalendarPlusOptimized({
       };
    }, []);
 
+   useEffect(() => {
+      const fetchKey = `${currentMonthValue}|${extraFiltersKey}`;
+      if (lastMonthFetchKeyRef.current === fetchKey) return;
+      lastMonthFetchKeyRef.current = fetchKey;
+
+      dispatch(
+         fetchReservationsForMonth({
+            date: currentDate,
+            extraFilters: extraFilters || {},
+         }),
+      ).catch((e) => {
+         console.error("[CalendarPlus] fetchReservationsForMonth error", e);
+      });
+   }, [dispatch, currentDate, currentMonthValue, extraFilters, extraFiltersKey]);
+
    // ✅ RESTORE din localStorage (o dată per lună; re-aplică când treci din dummy -> real)
    useLayoutEffect(() => {
       const el = scrollRef.current;
@@ -2511,7 +2753,11 @@ export default function CalendarPlusOptimized({
 
       if (!shouldApply) return;
 
-      const saved = safeReadScrollXY(currentMonthValue);
+      const shouldForceReset = forceMonthScrollResetRef.current;
+      const saved = shouldForceReset
+         ? { x: 0, y: 0 }
+         : safeReadScrollXY(currentMonthValue);
+      forceMonthScrollResetRef.current = false;
 
       restoredScrollRef.current = {
          monthKey: currentMonthValue,
@@ -2576,13 +2822,12 @@ export default function CalendarPlusOptimized({
                const type = String(b?.type || "").toUpperCase();
 
                if (type === "REPEAT") {
-                  for (const k of expandRepeatLocalKeys(b, allowedKeysSet))
-                     set.add(k);
+                  for (const k of expandRepeatLocalKeys(b)) set.add(k);
                } else {
                   const dt = getBlackoutDT(b);
                   if (!dt) continue;
                   const k = busyLocalKeyFromStored(dt);
-                  if (!allowedKeysSet.size || allowedKeysSet.has(k)) set.add(k);
+                  if (k) set.add(k);
                }
             }
 
@@ -2597,7 +2842,7 @@ export default function CalendarPlusOptimized({
             blackoutInFlightRef.current.delete(key);
          }
       },
-      [allowedKeysSet, monthRange, requestBlackoutVersionBump],
+      [monthRange, requestBlackoutVersionBump],
    );
 
    // ✅ ținem ref actual pentru bus listener
@@ -2609,9 +2854,50 @@ export default function CalendarPlusOptimized({
       if (!instIdsAll.length) return;
       if (!DISABLE_DAY_LAZY_LOAD && !visibleDaysCount) return;
 
-      instIdsAll.forEach((iid) => {
-         ensureBlackoutsFor(iid);
-      });
+      const runId = blackoutPrefetchRunRef.current + 1;
+      blackoutPrefetchRunRef.current = runId;
+      const queue = instIdsAll.slice();
+      let index = 0;
+      let active = 0;
+      let cancelled = false;
+
+      const schedulePump = () => {
+         if (cancelled || blackoutPrefetchRunRef.current !== runId) return;
+         if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+            window.requestIdleCallback(
+               () => pump(),
+               { timeout: IS_LOW_SPEC_DEVICE ? 180 : 120 },
+            );
+         } else {
+            setTimeout(pump, 0);
+         }
+      };
+
+      const pump = () => {
+         if (cancelled || blackoutPrefetchRunRef.current !== runId) return;
+         while (
+            active < BLACKOUT_PREFETCH_CONCURRENCY &&
+            index < queue.length
+         ) {
+            const iid = queue[index++];
+            active += 1;
+            Promise.resolve(ensureBlackoutsFor(iid))
+               .catch(() => {})
+               .finally(() => {
+                  active -= 1;
+                  if (cancelled || blackoutPrefetchRunRef.current !== runId) return;
+                  if (index >= queue.length && active <= 0) return;
+                  schedulePump();
+               });
+         }
+      };
+
+      pump();
+
+      return () => {
+         cancelled = true;
+         blackoutPrefetchRunRef.current += 1;
+      };
    }, [instIdsAll, ensureBlackoutsFor, visibleDaysCount]);
 
    // ✅ BUS listener (cu blackouts-changed)
@@ -2703,7 +2989,7 @@ export default function CalendarPlusOptimized({
    const blackoutKeyMapSnapshot = useMemo(() => {
       const m = blackoutKeyMapRef.current;
       return m instanceof Map ? new Map(m) : new Map();
-   }, [blackoutVer, currentMonthValue]);
+   }, [blackoutVer]);
 
    const calendarViewModel = useMemo(
       () => ({
@@ -2721,6 +3007,34 @@ export default function CalendarPlusOptimized({
          blackoutKeyMapSnapshot,
       ],
    );
+
+   useEffect(() => {
+      const pendingMonthKey = pendingMonthJumpRef.current;
+      if (!pendingMonthKey || pendingMonthKey !== currentMonthValue) return;
+      if (reservationsLoading) return;
+
+      pendingMonthJumpRef.current = null;
+
+      const firstDayWithEvents =
+         loadedDays.find((day) => {
+            const dayTs = startOfDayTs(day);
+            const list = eventsByDay.get(dayTs);
+            return Array.isArray(list) && list.length > 0;
+         }) || loadedDays[0];
+
+      const targetDayTs = firstDayWithEvents
+         ? startOfDayTs(firstDayWithEvents)
+         : null;
+      if (targetDayTs == null) return;
+
+      centerDayTsInScrollerReliable(targetDayTs);
+   }, [
+      currentMonthValue,
+      reservationsLoading,
+      loadedDays,
+      eventsByDay,
+      centerDayTsInScrollerReliable,
+   ]);
 
    const monthOptions = useMemo(() => {
       const base = new Date(monthAnchorDate);
@@ -2897,13 +3211,7 @@ export default function CalendarPlusOptimized({
 
       setAutoFocusEventId(targetId);
 
-      const doScrollX = () => centerDayTsInScroller(targetDayTs);
-
-      if (typeof window !== "undefined") {
-         window.requestAnimationFrame(() =>
-            window.requestAnimationFrame(doScrollX),
-         );
-      }
+      centerDayTsInScrollerReliable(targetDayTs);
    }, [
       focusToken,
       eventIdToDayTs,
@@ -2911,7 +3219,7 @@ export default function CalendarPlusOptimized({
       currentMonthValue,
       armAutoScrollYOnce,
       disarmAutoScrollY,
-      centerDayTsInScroller,
+      centerDayTsInScrollerReliable,
    ]);
 
    const handleMonthChange = useCallback(
@@ -2919,40 +3227,37 @@ export default function CalendarPlusOptimized({
          const opt = monthOptions.find((o) => String(o.value) === String(val));
          if (!opt) return;
          const newDate = new Date(opt.year, opt.month, 1);
+         const newMonthKey = `${newDate.getFullYear()}-${pad2(newDate.getMonth() + 1)}`;
 
          setCurrentDate(newDate);
+         forceMonthScrollResetRef.current = true;
+         pendingMonthJumpRef.current = newMonthKey;
+         const immediateFetchKey = `${newMonthKey}|${extraFiltersKey}`;
+         lastMonthFetchKeyRef.current = immediateFetchKey;
+
+         dispatch(
+            fetchReservationsForMonth({
+               date: newDate,
+               extraFilters: extraFilters || {},
+            }),
+         ).catch((e) => {
+            if (lastMonthFetchKeyRef.current === immediateFetchKey) {
+               lastMonthFetchKeyRef.current = "";
+            }
+            console.error("[CalendarPlus] fetchReservationsForMonth error", e);
+         });
 
          if (typeof onMonthChange === "function") onMonthChange(newDate);
-
-         try {
-            dispatch(
-               fetchReservationsForMonth({
-                  date: newDate,
-                  extraFilters: extraFilters || {},
-               }),
-            );
-         } catch (e) {
-            console.error("[DayView] fetchReservationsForMonth error", e);
+         restoredScrollRef.current = { monthKey: null, dataReady: null };
+         const el = scrollRef.current;
+         if (el) {
+            el.scrollLeft = 0;
+            el.scrollTop = 0;
+            scrollPosRef.current = {
+               x: 0,
+               y: 0,
+            };
          }
-
-         // ✅ Nu mai forța 0; dacă există poziție salvată pt luna aleasă, o folosim
-         try {
-            const newMonthKey = `${newDate.getFullYear()}-${pad2(newDate.getMonth() + 1)}`;
-            const saved = safeReadScrollXY(newMonthKey);
-
-            // resetăm “marker”-ul de restore ca să permită aplicarea pentru luna nouă
-            restoredScrollRef.current = { monthKey: null, dataReady: null };
-
-            const el = scrollRef.current;
-            if (el) {
-               el.scrollLeft = saved?.x ?? 0;
-               el.scrollTop = saved?.y ?? 0;
-               scrollPosRef.current = {
-                  x: el.scrollLeft || 0,
-                  y: el.scrollTop || 0,
-               };
-            }
-         } catch {}
 
          disarmAutoScrollY();
          setAutoFocusEventId(null);
@@ -2960,7 +3265,14 @@ export default function CalendarPlusOptimized({
          setSearchState({ query: "", hits: [], index: 0 });
          setVisibleDays(new Set());
       },
-      [monthOptions, extraFilters, onMonthChange, dispatch, disarmAutoScrollY],
+      [
+         monthOptions,
+         onMonthChange,
+         disarmAutoScrollY,
+         dispatch,
+         extraFilters,
+         extraFiltersKey,
+      ],
    );
 
    const sectorOptions = useMemo(
@@ -3225,14 +3537,14 @@ export default function CalendarPlusOptimized({
          return next;
       });
 
-      centerDayTsInScroller(hit.dayTs);
+      centerDayTsInScrollerReliable(hit.dayTs);
    }, [
       searchHits,
       searchState.index,
       loadedDays,
       armAutoScrollYOnce,
       searchState.query,
-      centerDayTsInScroller,
+      centerDayTsInScrollerReliable,
    ]);
 
    useEffect(() => {
@@ -3262,9 +3574,22 @@ export default function CalendarPlusOptimized({
             const left = el.scrollLeft || 0;
             const top = el.scrollTop || 0;
             const nowMs = performance.now();
+            const prevScrollPos = scrollPosRef.current || { x: left, y: top };
+            const deltaXSinceLastFrame = left - (Number(prevScrollPos.x) || 0);
+            const absDeltaX = Math.abs(deltaXSinceLastFrame);
             const isInteractingNow =
                !!suspendFlagsRef.current?.isInteracting ||
                isPanVirtualizationLockedRef.current;
+            const panPointerType = String(panInputTypeRef.current || "")
+               .trim()
+               .toLowerCase();
+            const panPhase = String(suspendFlagsRef.current?.panPhase || "")
+               .trim()
+               .toLowerCase();
+            const isInertiaPhase = isInteractingNow && panPhase === "inertia";
+            const isDragPhase = isInteractingNow && !isInertiaPhase;
+            const isMouseDrag = isDragPhase && panPointerType === "mouse";
+            const isMouseInertia = isInertiaPhase && panPointerType === "mouse";
 
             if (DISABLE_DAY_LAZY_LOAD) {
                scrollPosRef.current = { x: left, y: top };
@@ -3272,20 +3597,87 @@ export default function CalendarPlusOptimized({
                   schedulePersistScroll(left, top);
                }
 
+               const viewportSnapStep = !isInteractingNow
+                  ? 1
+                  : isMouseDrag || isMouseInertia
+                    ? 1
+                  : IS_LOW_SPEC_DEVICE
+                    ? absDeltaX >= 8
+                       ? 2
+                       : 1
+                    : absDeltaX >= 12
+                      ? 2
+                      : 1;
+               const snappedLeft =
+                  viewportSnapStep > 1
+                     ? Math.round(left / viewportSnapStep) * viewportSnapStep
+                     : left;
+               const snappedTop =
+                  viewportSnapStep > 1
+                     ? Math.round(top / viewportSnapStep) * viewportSnapStep
+                     : top;
                const nextWidth = el.clientWidth || 0;
                const nextHeight = el.clientHeight || 0;
+               const viewportXThreshold = isInteractingNow
+                  ? isMouseDrag
+                     ? 2
+                     : isMouseInertia
+                       ? 8
+                     : IS_LOW_SPEC_DEVICE
+                       ? 20
+                       : 14
+                  : 1;
+               const viewportYThreshold = isInteractingNow
+                  ? isMouseDrag
+                     ? 2
+                     : isMouseInertia
+                       ? 8
+                     : IS_LOW_SPEC_DEVICE
+                       ? 26
+                       : 18
+                  : 1;
+               const minViewportUpdateMs = isInteractingNow
+                  ? isMouseDrag
+                     ? 0
+                     : isMouseInertia
+                       ? 24
+                     : INTERACTING_VIEWPORT_UPDATE_MIN_MS
+                  : 0;
                setScrollViewport((prev) => {
+                  const nextTop = isInteractingNow ? prev.top || 0 : snappedTop;
+                  const leftDelta = Math.abs((prev.left || 0) - snappedLeft);
+                  const topDelta = Math.abs((prev.top || 0) - nextTop);
+                  const shouldBumpLeft = leftDelta >= viewportXThreshold;
+                  const shouldBumpTop = topDelta >= viewportYThreshold;
+                  const shouldBumpWidth = Math.abs((prev.width || 0) - nextWidth) > 1;
+                  const shouldBumpHeight = Math.abs((prev.height || 0) - nextHeight) > 1;
+                  const throttledByPan =
+                     minViewportUpdateMs > 0 &&
+                     nowMs - (lastViewportUpdateTsRef.current || 0) <
+                        minViewportUpdateMs;
+
                   if (
-                     prev.left === left &&
-                     prev.top === top &&
-                     prev.width === nextWidth &&
-                     prev.height === nextHeight
+                     !shouldBumpLeft &&
+                     !shouldBumpTop &&
+                     !shouldBumpWidth &&
+                     !shouldBumpHeight
                   ) {
                      return prev;
                   }
+                  if (
+                     throttledByPan &&
+                     !shouldBumpWidth &&
+                     !shouldBumpHeight &&
+                     leftDelta < viewportXThreshold * 2 &&
+                     topDelta < viewportYThreshold * 2
+                  ) {
+                     return prev;
+                  }
+                  lastViewportScrollTopRef.current = nextTop;
+                  lastViewportUpdateTsRef.current = nowMs;
                   return {
-                     left,
-                     top,
+                     left: snappedLeft,
+                     top: nextTop,
                      width: nextWidth,
                      height: nextHeight,
                   };
@@ -3293,29 +3685,45 @@ export default function CalendarPlusOptimized({
                return;
             }
 
-            const prevScrollPos = scrollPosRef.current || { x: left, y: top };
-            const deltaXSinceLastFrame = left - (Number(prevScrollPos.x) || 0);
             scrollPosRef.current = { x: left, y: top };
             if (!isInteractingNow) {
                schedulePersistScroll(left, top);
             }
             const daysThreshold = isInteractingNow
-               ? Math.max(
-                    Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.9),
-                    IS_LOW_SPEC_DEVICE ? 72 : 56,
-                 )
+               ? isMouseDrag
+                  ? Math.max(
+                       Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.22),
+                       12,
+                    )
+                  : isMouseInertia
+                    ? Math.max(
+                         Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.35),
+                         28,
+                      )
+                  : Math.max(
+                       Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.9),
+                       IS_LOW_SPEC_DEVICE ? 72 : 56,
+                    )
                : VISIBLE_DAYS_SCROLL_THRESHOLD_PX;
             const viewportXThreshold = isInteractingNow
-               ? Math.max(
-                    Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 1.1),
-                    IS_LOW_SPEC_DEVICE ? 96 : 80,
-                 )
+               ? isMouseDrag
+                  ? 3
+                  : isMouseInertia
+                    ? 8
+                  : Math.max(
+                       Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 1.1),
+                       IS_LOW_SPEC_DEVICE ? 96 : 80,
+                    )
                : VIEWPORT_X_SCROLL_THRESHOLD_PX;
             const rowsThreshold = isInteractingNow
-               ? Math.max(
-                    Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 1.1),
-                    IS_LOW_SPEC_DEVICE ? 96 : 80,
-                 )
+               ? isMouseDrag
+                  ? 4
+                  : isMouseInertia
+                    ? 10
+                  : Math.max(
+                       Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 1.1),
+                       IS_LOW_SPEC_DEVICE ? 96 : 80,
+                    )
                : VISIBLE_ROWS_SCROLL_THRESHOLD_PX;
 
             const prevLeft = lastVisibleDaysScrollLeftRef.current;
@@ -3324,7 +3732,11 @@ export default function CalendarPlusOptimized({
             const enoughTimeForDaysUpdate =
                !isInteractingNow ||
                nowMs - (lastVisibleDaysUpdateTsRef.current || 0) >=
-                  INTERACTING_DAYS_UPDATE_MIN_MS;
+                  (isMouseDrag
+                     ? 12
+                     : isMouseInertia
+                       ? 28
+                       : INTERACTING_DAYS_UPDATE_MIN_MS);
             const shouldRecomputeDays =
                crossedDaysThreshold && enoughTimeForDaysUpdate;
             if (shouldRecomputeDays) {
@@ -3357,8 +3769,25 @@ export default function CalendarPlusOptimized({
             const nextWidth = el.clientWidth || 0;
             const nextHeight = el.clientHeight || 0;
             setScrollViewport((prev) => {
-               const nextLeft = left;
-               const nextTop = top;
+               const viewportSnapStep = !isInteractingNow
+                  ? 1
+                  : isMouseDrag || isMouseInertia
+                    ? 1
+                    : IS_LOW_SPEC_DEVICE
+                      ? absDeltaX >= 8
+                         ? 2
+                         : 1
+                      : absDeltaX >= 12
+                        ? 2
+                        : 1;
+               const nextLeft =
+                  viewportSnapStep > 1
+                     ? Math.round(left / viewportSnapStep) * viewportSnapStep
+                     : left;
+               const nextTop =
+                  viewportSnapStep > 1
+                     ? Math.round(top / viewportSnapStep) * viewportSnapStep
+                     : top;
                const leftDelta = Math.abs((prev.left || 0) - nextLeft);
                const topDelta =
                   prevTop < 0 ? Infinity : Math.abs(nextTop - prevTop);
@@ -3369,7 +3798,11 @@ export default function CalendarPlusOptimized({
                const throttledByPan =
                   isInteractingNow &&
                   nowMs - (lastViewportUpdateTsRef.current || 0) <
-                     INTERACTING_VIEWPORT_UPDATE_MIN_MS;
+                     (isMouseDrag
+                        ? 12
+                        : isMouseInertia
+                          ? 24
+                          : INTERACTING_VIEWPORT_UPDATE_MIN_MS);
 
                if (
                   !shouldBumpLeft &&
