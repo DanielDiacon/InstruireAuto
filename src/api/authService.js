@@ -151,13 +151,17 @@ export async function enrollStudent(payload) {
  *  }
  */
 export async function sendGiftWebhook(payload) {
-   const response = await fetch(GIFT_WEBHOOK_URL, {
-      method: "POST",
+   const params = new URLSearchParams({
+      nume: String(payload?.nume || "").trim(),
+      prenume: String(payload?.prenume || "").trim(),
+      email: String(payload?.email || "").trim(),
+   });
+
+   const response = await fetch(`${GIFT_WEBHOOK_URL}?${params.toString()}`, {
+      method: "GET",
       headers: {
          Accept: "application/json",
-         "Content-Type": "application/json; charset=UTF-8",
       },
-      body: JSON.stringify(payload),
    });
 
    if (!response.ok) {
