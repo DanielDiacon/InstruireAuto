@@ -22,14 +22,96 @@ let GLOBAL_SELECTION_VERSION = 0;
 let GLOBAL_HIDDEN_IDS = new Set();
 let GLOBAL_HIDDEN_VERSION = 0;
 
+function firstDefined() {
+  for (let i = 0; i < arguments.length; i += 1) {
+    const value = arguments[i];
+    if (value !== null && value !== undefined) return value;
+  }
+  return null;
+}
+
+function toDateSafe(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function normalizeEventId(eventLike) {
+  if (!eventLike || typeof eventLike !== "object") return "";
+  const raw = eventLike.raw || {};
+  const id = firstDefined(raw.id, eventLike.id, null);
+  return id != null ? String(id) : "";
+}
+
+function normalizeEventStartMs(eventLike) {
+  if (!eventLike || typeof eventLike !== "object") return null;
+  const raw = eventLike.raw || {};
+  const startRaw = firstDefined(
+    raw.startTime,
+    raw.start,
+    raw.start_at,
+    raw.startDate,
+    eventLike.start,
+    null,
+  );
+  const d = toDateSafe(startRaw);
+  return d ? d.getTime() : null;
+}
+
+function normalizeSlotKey(slotLike) {
+  if (!slotLike || typeof slotLike !== "object") return "";
+  const keyRaw = firstDefined(slotLike.localSlotKey, slotLike.slotKey, null);
+  return keyRaw != null ? String(keyRaw).trim() : "";
+}
+
+function normalizeSlotInstructorId(slotLike) {
+  if (!slotLike || typeof slotLike !== "object") return "";
+  const idRaw = firstDefined(
+    slotLike.actionInstructorId,
+    slotLike.instructorId,
+    null,
+  );
+  return idRaw != null ? String(idRaw).trim() : "";
+}
+
+function normalizeSlotStartMs(slotLike) {
+  if (!slotLike || typeof slotLike !== "object") return null;
+  const d = toDateSafe(firstDefined(slotLike.slotStart, null));
+  return d ? d.getTime() : null;
+}
+
+function buildSelectionMarker(eventLike, slotLike) {
+  return {
+    eventId: normalizeEventId(eventLike),
+    eventStartMs: normalizeEventStartMs(eventLike),
+    slotInstructorId: normalizeSlotInstructorId(slotLike),
+    slotKey: normalizeSlotKey(slotLike),
+    slotStartMs: normalizeSlotStartMs(slotLike),
+  };
+}
+
+function markersEqual(a, b) {
+  const one = a || {};
+  const two = b || {};
+  return (
+    String(one.eventId || "") === String(two.eventId || "") &&
+    Number(one.eventStartMs ?? -1) === Number(two.eventStartMs ?? -1) &&
+    String(one.slotInstructorId || "") === String(two.slotInstructorId || "") &&
+    String(one.slotKey || "") === String(two.slotKey || "") &&
+    Number(one.slotStartMs ?? -1) === Number(two.slotStartMs ?? -1)
+  );
+}
+
 /* ================== Broadcast helpers ================== */
 
-function broadcastSelectionChange() {
+function broadcastSelectionChange(extraDetail = null) {
   if (typeof window === "undefined") return;
 
   try {
     const ev = new CustomEvent("dayview-selection-change", {
-      detail: { version: GLOBAL_SELECTION_VERSION },
+      detail: {
+        version: GLOBAL_SELECTION_VERSION,
+        ...(extraDetail && typeof extraDetail === "object" ? extraDetail : {}),
+      },
     });
     window.dispatchEvent(ev);
   } catch (e) {
@@ -82,10 +164,19 @@ export function getSelectionVersion() {
  * setează selecția globală (fie event, fie slot, fie nimic)
  */
 export function setGlobalSelection({ event = null, slot = null } = {}) {
-  GLOBAL_SELECTED_EVENT = event || null;
-  GLOBAL_SELECTED_SLOT = slot || null;
+  const nextEvent = event || null;
+  const nextSlot = slot || null;
+  const prevMarker = buildSelectionMarker(GLOBAL_SELECTED_EVENT, GLOBAL_SELECTED_SLOT);
+  const nextMarker = buildSelectionMarker(nextEvent, nextSlot);
+  if (markersEqual(prevMarker, nextMarker)) return;
+
+  GLOBAL_SELECTED_EVENT = nextEvent;
+  GLOBAL_SELECTED_SLOT = nextSlot;
   GLOBAL_SELECTION_VERSION += 1;
-  broadcastSelectionChange();
+  broadcastSelectionChange({
+    prev: prevMarker,
+    next: nextMarker,
+  });
 }
 
 /* ================== Public API: hidden ids ================== */

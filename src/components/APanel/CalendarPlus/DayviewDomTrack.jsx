@@ -27,9 +27,10 @@ import { getUserById } from "../../../api/usersService";
 import { addInstructorBlackout } from "../../../api/instructorsService";
 import {
    addReservationLocal,
-   fetchReservationsDelta,
+   patchReservationLocal,
    removeReservationLocal,
 } from "../../../store/reservationsSlice";
+import { reservationsApi } from "../../../store/reservationsApi";
 import { updateUser } from "../../../store/usersSlice";
 import { DEFAULT_EVENT_COLOR_TOKEN, NO_COLOR_TOKEN } from "./render";
 import {
@@ -77,10 +78,14 @@ const DISABLE_SECTION_VIRTUALIZATION = false;
 const LONG_PRESS_MS = 200;
 const LONG_PRESS_MOVE_PX = 14;
 const ACTIVE_EVENT_RECT_RETRY_FRAMES = 40;
+const DELETE_ANIMATION_MS = 170;
 const EMPTY_CELL_ITEMS = [];
 const GAP_COL_PREFIX = "__gapcol_";
 const WAIT_NOTE_MODE = "local-match";
-const RANGE_BLOCK_BATCH_DELAY_MS = 120;
+const RANGE_BLOCK_BATCH_DELAY_MS = 0;
+const RANGE_BLOCK_BATCH_CONCURRENCY = 2;
+const RANGE_SLOT_SELECTOR = "[data-cp-kind='slot'][data-selectable='1']";
+const DAYVIEW_STRUCTURE_CACHE = new WeakMap();
 const EVENT_COLOR_MAP = {
    DEFAULT: DEFAULT_EVENT_COLOR_TOKEN,
    RED: "--event-red",
@@ -95,6 +100,10 @@ const EVENT_COLOR_MAP = {
    "BLACK-S": NO_COLOR_TOKEN,
    "BLACK-T": NO_COLOR_TOKEN,
 };
+
+function isRangeMultiSelectPressed(eventLike) {
+   return !!eventLike?.shiftKey;
+}
 
 function normalizeColorToken(input) {
    if (!input) return DEFAULT_EVENT_COLOR_TOKEN;
@@ -140,6 +149,24 @@ function toDateSafe(value) {
    return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function toFiniteTimeMs(value) {
+   const d = toDateSafe(value);
+   return d ? d.getTime() : null;
+}
+
+function selectionMarkerTouchesDay(marker, dayStartMs, dayEndMs) {
+   if (!marker || dayStartMs == null || dayEndMs == null) return false;
+
+   const candidates = [marker?.slotStartMs, marker?.eventStartMs];
+   for (const raw of candidates) {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) continue;
+      if (n >= dayStartMs && n < dayEndMs) return true;
+   }
+
+   return false;
+}
+
 function hhmm(value) {
    const d = toDateSafe(value);
    if (!d) return "";
@@ -159,20 +186,151 @@ function toLocalDateTimeString(value) {
    return `${y}-${m}-${day}T${h}:${min}:00`;
 }
 
+function toSlotKeyForCompare(value) {
+   const d = toDateSafe(value);
+   if (!d) return "";
+   return localKeyFromTs(d, MOLDOVA_TZ);
+}
+
 function isEditableTarget(target) {
    if (!target || typeof target !== "object") return false;
    const tag = String(target.tagName || "").toLowerCase();
    return tag === "input" || tag === "textarea" || !!target.isContentEditable;
 }
 
-function rectsIntersect(a, b) {
-   if (!a || !b) return false;
-   return !(
-      b.left >= a.right ||
-      b.right <= a.left ||
-      b.top >= a.bottom ||
-      b.bottom <= a.top
+function reservationIdFromAny(node) {
+   if (!node || typeof node !== "object") return null;
+   return (
+      node.id ??
+      node._id ??
+      node.reservationId ??
+      node.reservation_id ??
+      node.reservation?.id ??
+      null
    );
+}
+
+function reservationStartFromAny(node) {
+   if (!node || typeof node !== "object") return null;
+   return (
+      node.startTime ??
+      node.start_time ??
+      node.start ??
+      node.dateTime ??
+      node.datetime ??
+      node.date ??
+      node.reservation?.startTime ??
+      node.reservation?.start ??
+      node.reservation?.dateTime ??
+      null
+   );
+}
+
+function reservationInstructorIdFromAny(node) {
+   if (!node || typeof node !== "object") return null;
+   return (
+      node.instructorId ??
+      node.instructor_id ??
+      node.instructor?.id ??
+      node.reservation?.instructorId ??
+      node.reservation?.instructor_id ??
+      node.reservation?.instructor?.id ??
+      null
+   );
+}
+
+function reservationUserIdFromAny(node) {
+   if (!node || typeof node !== "object") return null;
+   return (
+      node.userId ??
+      node.user_id ??
+      node.user?.id ??
+      node.studentId ??
+      node.student_id ??
+      node.student?.id ??
+      node.reservation?.userId ??
+      node.reservation?.user_id ??
+      node.reservation?.user?.id ??
+      null
+   );
+}
+
+function extractCreatedReservations(payload) {
+   const out = [];
+   const seen = new Set();
+
+   const visit = (node, depth = 0) => {
+      if (node == null || depth > 7) return;
+      if (Array.isArray(node)) {
+         for (const item of node) visit(item, depth + 1);
+         return;
+      }
+      if (typeof node !== "object") return;
+
+      const rid = reservationIdFromAny(node);
+      const startRaw = reservationStartFromAny(node);
+      const instructorId = reservationInstructorIdFromAny(node);
+      const userId = reservationUserIdFromAny(node);
+
+      const looksLikeReservation = !!(
+         (rid != null && (startRaw != null || userId != null || instructorId != null)) ||
+         (startRaw != null && (userId != null || instructorId != null))
+      );
+
+      if (looksLikeReservation) {
+         const key = `${String(rid ?? "")}|${String(startRaw ?? "")}|${String(
+            userId ?? "",
+         )}|${String(instructorId ?? "")}`;
+         if (!seen.has(key)) {
+            seen.add(key);
+            out.push(node);
+         }
+      }
+
+      for (const value of Object.values(node)) {
+         if (value && typeof value === "object") visit(value, depth + 1);
+      }
+   };
+
+   visit(payload, 0);
+   return out;
+}
+
+function rectIntersectsCoords(
+   aLeft,
+   aTop,
+   aRight,
+   aBottom,
+   bLeft,
+   bTop,
+   bRight,
+   bBottom,
+) {
+   return !(
+      bLeft >= aRight ||
+      bRight <= aLeft ||
+      bTop >= aBottom ||
+      bBottom <= aTop
+   );
+}
+
+function compareRangeEntry(a, b) {
+   if ((a?.row || 0) !== (b?.row || 0)) return (a?.row || 0) - (b?.row || 0);
+   if ((a?.slotIdx || 0) !== (b?.slotIdx || 0))
+      return (a?.slotIdx || 0) - (b?.slotIdx || 0);
+   if ((a?.col || 0) !== (b?.col || 0)) return (a?.col || 0) - (b?.col || 0);
+   return String(a?.rangeKey || "").localeCompare(String(b?.rangeKey || ""));
+}
+
+function rangeBoxSig(box) {
+   if (!box) return "";
+   return `${box.left}|${box.top}|${box.width}|${box.height}`;
+}
+
+function escapeAttrSelectorValue(value) {
+   return String(value ?? "")
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"');
 }
 
 function getReservationId(ev) {
@@ -284,16 +442,12 @@ function normalizeBlockedSetValue(value) {
 
 function normalizeBlockedMapInput(blockedKeyMap) {
    if (!blockedKeyMap) return null;
-   const out = new Map();
-
    if (blockedKeyMap instanceof Map) {
-      for (const [key, value] of blockedKeyMap.entries()) {
-         const k = String(key ?? "").trim();
-         if (!k) continue;
-         out.set(k, normalizeBlockedSetValue(value));
-      }
-      return out;
+      // Fast path: in CalendarPlus, payload-ul este deja Map<string, Set<string>>.
+      return blockedKeyMap;
    }
+
+   const out = new Map();
 
    if (typeof blockedKeyMap === "object") {
       for (const [key, value] of Object.entries(blockedKeyMap)) {
@@ -315,6 +469,135 @@ function makeGapColumn(rowIndex, colIndex) {
       _padType: "gap",
       sectorSlug: null,
    };
+}
+
+function computeHeaderMetricsForStructure({
+   headersMeta,
+   colsPerRow,
+   slotsCount,
+   slotHeight,
+   slotGap,
+   headerHeight,
+   rowGap,
+   colWidth,
+   colGap,
+}) {
+   const colsCount = Math.max(1, headersMeta.length || 1);
+   const rowsCount = Math.max(1, Math.ceil(colsCount / colsPerRow));
+   const worldHeight = computeWorldHeight(slotsCount, slotHeight, slotGap);
+   const padSlots = Math.min(
+      Math.max(WAIT_SLOTS_PER_COLUMN, CANCEL_SLOTS_PER_COLUMN),
+      slotsCount,
+   );
+   const padWorldHeight = padSlots
+      ? computeWorldHeight(padSlots, slotHeight, slotGap)
+      : worldHeight;
+   const rowHeights = new Array(rowsCount);
+   for (let row = 0; row < rowsCount; row++) {
+      const rowStart = row * colsPerRow;
+      const rowEnd = Math.min(colsCount, rowStart + colsPerRow);
+      let allPad = rowEnd > rowStart;
+      for (let i = rowStart; i < rowEnd; i++) {
+         const inst = headersMeta[i]?.inst || null;
+         if (!inst || (!isPadInstructor(inst) && !isGapInstructor(inst))) {
+            allPad = false;
+            break;
+         }
+      }
+      rowHeights[row] = allPad ? padWorldHeight : worldHeight;
+   }
+
+   const rowTops = new Array(rowsCount);
+   let acc = 0;
+   for (let row = 0; row < rowsCount; row++) {
+      rowTops[row] = acc;
+      acc += headerHeight + rowHeights[row] + rowGap;
+   }
+
+   const totalHeight = Math.max(1, acc - rowGap);
+   const dayWidth =
+      Math.min(colsPerRow, colsCount) * colWidth +
+      Math.max(0, Math.min(colsPerRow, colsCount) - 1) * colGap;
+
+   return {
+      colsCount,
+      rowsCount,
+      rowHeights,
+      rowTops,
+      totalHeight,
+      dayWidth,
+      worldHeight,
+   };
+}
+
+function getCachedDayviewStructure({
+   instructors,
+   colsPerRow,
+   slotsCount,
+   slotHeight,
+   slotGap,
+   headerHeight,
+   rowGap,
+   colWidth,
+   colGap,
+}) {
+   if (!Array.isArray(instructors)) {
+      const effectiveInstructors = [];
+      const headersMeta = buildHeadersMeta(effectiveInstructors, colsPerRow);
+      const headerMetrics = computeHeaderMetricsForStructure({
+         headersMeta,
+         colsPerRow,
+         slotsCount,
+         slotHeight,
+         slotGap,
+         headerHeight,
+         rowGap,
+         colWidth,
+         colGap,
+      });
+      return { effectiveInstructors, headersMeta, headerMetrics };
+   }
+
+   let byParams = DAYVIEW_STRUCTURE_CACHE.get(instructors);
+   if (!byParams) {
+      byParams = new Map();
+      DAYVIEW_STRUCTURE_CACHE.set(instructors, byParams);
+   }
+
+   const key = [
+      colsPerRow,
+      slotsCount,
+      slotHeight,
+      slotGap,
+      headerHeight,
+      rowGap,
+      colWidth,
+      colGap,
+   ].join("|");
+   const cached = byParams.get(key);
+   if (cached) return cached;
+
+   const effectiveInstructors = buildEffectiveInstructorsLayout(instructors);
+   const headersMeta = buildHeadersMeta(effectiveInstructors, colsPerRow);
+   const headerMetrics = computeHeaderMetricsForStructure({
+      headersMeta,
+      colsPerRow,
+      slotsCount,
+      slotHeight,
+      slotGap,
+      headerHeight,
+      rowGap,
+      colWidth,
+      colGap,
+   });
+
+   const result = { effectiveInstructors, headersMeta, headerMetrics };
+   byParams.set(key, result);
+   if (byParams.size > 8) {
+      const oldestKey = byParams.keys().next().value;
+      byParams.delete(oldestKey);
+   }
+   return result;
 }
 
 function buildEffectiveInstructorsLayout(instructors) {
@@ -436,7 +719,7 @@ function buildWaitNoteSnapshotSignature(snapshot) {
    return `${id}|${text}`;
 }
 
-export default memo(function DayviewDomTrack({
+function DayviewDomTrack({
    dayStart,
    dayEnd,
    instructors,
@@ -449,6 +732,7 @@ export default memo(function DayviewDomTrack({
    viewportHeight,
    layout,
    blockedKeyMap,
+   blackoutVer = 0,
    activeEventId,
    activeSearchEventId,
    onActiveEventRectChange,
@@ -456,6 +740,7 @@ export default memo(function DayviewDomTrack({
    users = [],
    cars = [],
    instructorsFull = [],
+   sharedLookups = null,
    createDraftBySlotUsers,
    createDraftBySlotColors,
    presenceByReservationUsers,
@@ -488,6 +773,13 @@ export default memo(function DayviewDomTrack({
    const rangeOwnerTokenRef = useRef(
       `cpdom-range-${Math.random().toString(36).slice(2, 10)}`,
    );
+   const rangeHitCacheRef = useRef({
+      root: null,
+      built: false,
+      items: [],
+   });
+   const rangeBoxSigRef = useRef("");
+   const deleteTimersRef = useRef(new Map());
 
    const [selectionVersion, setSelectionVersionState] = useState(() =>
       getSelectionVersion(),
@@ -496,6 +788,10 @@ export default memo(function DayviewDomTrack({
    const [waitEdit, setWaitEdit] = useState(null);
    const [headerEdit, setHeaderEdit] = useState(null);
    const waitNotesRef = useRef(waitNotes);
+   const [deletingReservationIds, setDeletingReservationIds] = useState(
+      () => new Set(),
+   );
+   const deletingReservationIdsRef = useRef(deletingReservationIds);
    const [rangeSelectedEntries, setRangeSelectedEntries] = useState([]);
    const [rangeBox, setRangeBox] = useState(null);
    const rangeSelectedKeySet = useMemo(
@@ -510,6 +806,13 @@ export default memo(function DayviewDomTrack({
       rangeSelectedEntriesRef.current = entries;
       setRangeSelectedEntries(entries);
    }, []);
+   const invalidateRangeHitCache = useCallback(() => {
+      rangeHitCacheRef.current = {
+         root: null,
+         built: false,
+         items: [],
+      };
+   }, []);
    const clearRangeSelection = useCallback(() => {
       const drag = rangeDragRef.current;
       if (drag.rafId) {
@@ -518,9 +821,13 @@ export default memo(function DayviewDomTrack({
       }
       drag.active = false;
       drag.pointerId = null;
-      setRangeBox(null);
+      if (rangeBoxSigRef.current) {
+         rangeBoxSigRef.current = "";
+         setRangeBox(null);
+      }
+      invalidateRangeHitCache();
       setRangeEntries([]);
-   }, [setRangeEntries]);
+   }, [invalidateRangeHitCache, setRangeEntries]);
 
    useEffect(() => {
       const release = retainGlobals();
@@ -539,15 +846,38 @@ export default memo(function DayviewDomTrack({
             cancelAnimationFrame(drag.rafId);
             drag.rafId = 0;
          }
+         rangeBoxSigRef.current = "";
+         invalidateRangeHitCache();
+         const deleteTimers = deleteTimersRef.current;
+         deleteTimers.forEach((timerId) => clearTimeout(timerId));
+         deleteTimers.clear();
       },
-      [],
+      [invalidateRangeHitCache],
    );
 
    useEffect(() => {
-      const onSel = () => setSelectionVersionState(getSelectionVersion());
+      const onSel = (ev) => {
+         const detail = ev?.detail || null;
+         if (detail && (detail.prev || detail.next)) {
+            const dayStartMs = toFiniteTimeMs(dayStart);
+            const dayEndMs = toFiniteTimeMs(dayEnd);
+            const touchesPrev = selectionMarkerTouchesDay(
+               detail.prev,
+               dayStartMs,
+               dayEndMs,
+            );
+            const touchesNext = selectionMarkerTouchesDay(
+               detail.next,
+               dayStartMs,
+               dayEndMs,
+            );
+            if (!touchesPrev && !touchesNext) return;
+         }
+         setSelectionVersionState(getSelectionVersion());
+      };
       window.addEventListener("dayview-selection-change", onSel);
       return () => window.removeEventListener("dayview-selection-change", onSel);
-   }, []);
+   }, [dayStart, dayEnd]);
    useEffect(() => {
       const onRangeOwner = (ev) => {
          const owner = String(ev?.detail?.owner || "").trim();
@@ -558,6 +888,37 @@ export default memo(function DayviewDomTrack({
       return () =>
          window.removeEventListener("cpdom-range-owner-change", onRangeOwner);
    }, [clearRangeSelection]);
+   useEffect(() => {
+      const onDeletePreview = (ev) => {
+         const rid = String(ev?.detail?.reservationId || "").trim();
+         if (!rid) return;
+
+         const phase = String(ev?.detail?.phase || "start")
+            .trim()
+            .toLowerCase();
+
+         if (phase === "end" || phase === "stop" || phase === "clear") {
+            setDeletingReservationIds((prev) => {
+               if (!prev.has(rid)) return prev;
+               const next = new Set(prev);
+               next.delete(rid);
+               return next;
+            });
+            return;
+         }
+
+         setDeletingReservationIds((prev) => {
+            if (prev.has(rid)) return prev;
+            const next = new Set(prev);
+            next.add(rid);
+            return next;
+         });
+      };
+
+      window.addEventListener("cpdom-delete-preview", onDeletePreview);
+      return () =>
+         window.removeEventListener("cpdom-delete-preview", onDeletePreview);
+   }, []);
 
    useEffect(() => {
       if (!waitEdit) {
@@ -581,6 +942,9 @@ export default memo(function DayviewDomTrack({
    useEffect(() => {
       waitNotesRef.current = waitNotes;
    }, [waitNotes]);
+   useEffect(() => {
+      deletingReservationIdsRef.current = deletingReservationIds;
+   }, [deletingReservationIds]);
    useEffect(() => {
       if (!headerEdit) {
          headerEditFocusKeyRef.current = "";
@@ -709,44 +1073,85 @@ export default memo(function DayviewDomTrack({
       clearRangeSelection();
    }, [dayStartMs, clearRangeSelection]);
 
+   const invalidateMonthReservations = useCallback(() => {
+      dispatch(
+         reservationsApi.util.invalidateTags([{ type: "ReservationsMonth" }]),
+      );
+   }, [dispatch]);
+
    const deleteReservationById = useCallback(
-      async (reservationId) => {
+      (reservationId) => {
          if (!reservationId) return;
-         const idStr = String(reservationId);
+         const idStr = String(reservationId).trim();
+         if (!idStr) return;
+         if (deleteTimersRef.current.has(idStr)) return;
+         if (deletingReservationIdsRef.current.has(idStr)) return;
 
-         dispatch(removeReservationLocal(idStr));
-         hideReservationGlobally(idStr);
          setGlobalSelection({ event: null, slot: null });
-
          try {
-            triggerCalendarRefresh({
-               source: "dom-shortcut",
-               type: "delete-optimistic",
-               forceReload: false,
-            });
+            window.dispatchEvent(
+               new CustomEvent("cpdom-delete-preview", {
+                  detail: { reservationId: idStr, phase: "start" },
+               }),
+            );
          } catch {}
+         setDeletingReservationIds((prev) => {
+            if (prev.has(idStr)) return prev;
+            const next = new Set(prev);
+            next.add(idStr);
+            return next;
+         });
 
-         try {
-            await deleteReservation(idStr);
-         } catch (err) {
-            console.error("Delete reservation failed (CalendarPlus DOM):", err);
+         const timerId = setTimeout(async () => {
+            deleteTimersRef.current.delete(idStr);
+
+            dispatch(removeReservationLocal(idStr));
+            hideReservationGlobally(idStr);
+
             try {
-               await dispatch(fetchReservationsDelta());
                triggerCalendarRefresh({
                   source: "dom-shortcut",
-                  type: "delete-rollback",
+                  type: "delete-optimistic",
                   forceReload: false,
                });
             } catch {}
-            return;
-         }
 
-         setTimeout(async () => {
+            let deletedOnServer = false;
             try {
-               await dispatch(fetchReservationsDelta());
+               await deleteReservation(idStr);
+               deletedOnServer = true;
             } catch (err) {
-               console.error("Delta refresh after delete failed:", err);
+               console.error("Delete reservation failed (CalendarPlus DOM):", err);
+               try {
+                  invalidateMonthReservations();
+                  triggerCalendarRefresh({
+                     source: "dom-shortcut",
+                     type: "delete-rollback",
+                     forceReload: false,
+                  });
+               } catch {}
             } finally {
+               try {
+                  window.dispatchEvent(
+                     new CustomEvent("cpdom-delete-preview", {
+                        detail: { reservationId: idStr, phase: "end" },
+                     }),
+                  );
+               } catch {}
+               setDeletingReservationIds((prev) => {
+                  if (!prev.has(idStr)) return prev;
+                  const next = new Set(prev);
+                  next.delete(idStr);
+                  return next;
+               });
+            }
+
+            if (!deletedOnServer) return;
+
+            setTimeout(async () => {
+               try {
+                  invalidateMonthReservations();
+               } catch {}
                try {
                   triggerCalendarRefresh({
                      source: "dom-shortcut",
@@ -754,10 +1159,12 @@ export default memo(function DayviewDomTrack({
                      forceReload: false,
                   });
                } catch {}
-            }
-         }, 0);
+            }, 0);
+         }, DELETE_ANIMATION_MS);
+
+         deleteTimersRef.current.set(idStr, timerId);
       },
-      [dispatch],
+      [dispatch, invalidateMonthReservations],
    );
 
    useEffect(() => {
@@ -825,7 +1232,7 @@ export default memo(function DayviewDomTrack({
          } catch {}
 
          try {
-            await createReservationsForUser({
+            const createResult = await createReservationsForUser({
                userId: userIdNum,
                instructorId: instructorIdNum,
                reservations: [
@@ -839,12 +1246,104 @@ export default memo(function DayviewDomTrack({
                   },
                ],
             });
+
+            const createdCandidates = extractCreatedReservations(createResult);
+            const createdIds = createdCandidates
+               .map((item) => reservationIdFromAny(item))
+               .filter((id) => id != null)
+               .map((id) => String(id));
+            const targetSlotKey = toSlotKeyForCompare(startTimeToSend);
+            let createdReservation = null;
+            let bestScore = Number.NEGATIVE_INFINITY;
+            for (const item of createdCandidates) {
+               const uid = Number(reservationUserIdFromAny(item));
+               const iid = Number(reservationInstructorIdFromAny(item));
+               const rid = reservationIdFromAny(item);
+               const slotKey = toSlotKeyForCompare(reservationStartFromAny(item));
+
+               let score = 0;
+               if (rid != null) score += 2;
+               if (Number.isFinite(uid) && uid === userIdNum) score += 4;
+               if (Number.isFinite(iid) && iid === instructorIdNum) score += 4;
+               if (targetSlotKey && slotKey && targetSlotKey === slotKey) score += 8;
+
+               if (score > bestScore) {
+                  bestScore = score;
+                  createdReservation = item;
+               }
+            }
+            if (!createdReservation) {
+               createdReservation = createdCandidates[0] || null;
+            }
+
+            const createdId = reservationIdFromAny(createdReservation);
+            const confirmedId =
+               createdId != null ? String(createdId) : String(optimisticId);
+            if (confirmedId && confirmedId !== String(optimisticId)) {
+               dispatch(removeReservationLocal(confirmedId));
+            }
+            dispatch(
+               patchReservationLocal({
+                  id: optimisticId,
+                  changes: {
+                     id: confirmedId,
+                     userId: userIdNum,
+                     instructorId: instructorIdNum,
+                     // Păstrăm ora slotului selectat pentru confirmarea locală:
+                     // elimină saltul de oră cauzat de formate TZ diferite în răspuns.
+                     startTime: optimisticStartTime,
+                     sector:
+                        createdReservation?.sector ??
+                        createdReservation?.reservation?.sector ??
+                        fallbackSector,
+                     gearbox: normalizeGearbox(
+                        createdReservation?.gearbox ??
+                           createdReservation?.reservation?.gearbox ??
+                           fallbackGearbox,
+                     ),
+                     privateMessage:
+                        createdReservation?.privateMessage ??
+                        createdReservation?.reservation?.privateMessage ??
+                        fallbackPrivateMessage,
+                     color:
+                        createdReservation?.color ??
+                        createdReservation?.reservation?.color ??
+                        fallbackColor,
+                     _optimistic: false,
+                     _optimisticPending: false,
+                     ...(createdReservation?.user
+                        ? { user: createdReservation.user }
+                        : {}),
+                  },
+               }),
+            );
+
+            try {
+               triggerCalendarRefresh({
+                  source: "dom-shortcut",
+                  type: "paste-sync",
+                  forceReload: false,
+               });
+            } catch {}
+
+            try {
+               if (typeof window !== "undefined") {
+                  window.dispatchEvent(
+                     new CustomEvent("calendarplus-local-mutation", {
+                        detail: {
+                           type: "create",
+                           source: "paste",
+                           reservationId:
+                              createdId != null ? String(createdId) : undefined,
+                           reservationIds: createdIds,
+                        },
+                     }),
+                  );
+               }
+            } catch {}
          } catch (err) {
             console.error("Paste create failed (CalendarPlus DOM):", err);
             dispatch(removeReservationLocal(optimisticId));
-            try {
-               await dispatch(fetchReservationsDelta());
-            } catch {}
             try {
                triggerCalendarRefresh({
                   source: "dom-shortcut",
@@ -855,19 +1354,7 @@ export default memo(function DayviewDomTrack({
             return;
          }
 
-         setTimeout(async () => {
-            try {
-               await dispatch(fetchReservationsDelta());
-            } catch {}
-            dispatch(removeReservationLocal(optimisticId));
-            try {
-               triggerCalendarRefresh({
-                  source: "dom-shortcut",
-                  type: "paste-sync",
-                  forceReload: false,
-               });
-            } catch {}
-         }, 0);
+         return;
       },
       [dispatch],
    );
@@ -875,6 +1362,23 @@ export default memo(function DayviewDomTrack({
    useEffect(() => {
       setPasteFn(pasteFromCopyToSlot);
    }, [pasteFromCopyToSlot]);
+
+   const isSlotBusyByReservation = useCallback((instructorId, slotKey) => {
+      const inst = String(instructorId || "").trim();
+      const key = String(slotKey || "").trim();
+      if (!inst || !key) return false;
+
+      const root = rootRef.current;
+      if (!root) return false;
+
+      const selector = `[data-cp-kind="slot"][data-inst-id="${escapeAttrSelectorValue(
+         inst,
+      )}"][data-slot-key="${escapeAttrSelectorValue(key)}"]`;
+      const slotEl = root.querySelector(selector);
+      if (!slotEl) return false;
+
+      return slotEl.getAttribute("data-has-event") === "1";
+   }, []);
 
    const blockSelectedSlot = useCallback(async (slot) => {
       if (!slot?.slotStart) return;
@@ -889,6 +1393,9 @@ export default memo(function DayviewDomTrack({
       if (!slotStartDate) return;
       const slotKey = localKeyFromTs(slotStartDate, MOLDOVA_TZ);
       const instructorIdStr = String(instructorIdNum);
+      if (isSlotBusyByReservation(instructorIdStr, slotKey)) {
+         return;
+      }
 
       try {
          triggerCalendarRefresh({
@@ -922,7 +1429,7 @@ export default memo(function DayviewDomTrack({
             });
          } catch {}
       }
-   }, []);
+   }, [isSlotBusyByReservation]);
 
    useEffect(() => {
       setBlockFn(blockSelectedSlot);
@@ -932,27 +1439,43 @@ export default memo(function DayviewDomTrack({
       if (rangeBatchRunningRef.current) return;
 
       const queue = (rangeSelectedEntriesRef.current || []).filter(
-         (entry) => entry && !entry.blocked,
+         (entry) => entry && !entry.blocked && !entry.hasEvent,
       );
       if (!queue.length) return;
 
       rangeBatchRunningRef.current = true;
       try {
-         for (let i = 0; i < queue.length; i++) {
-            const entry = queue[i];
-            await blockSelectedSlot({
-               instructorId: entry.instructorId,
-               actionInstructorId: entry.instructorId,
-               slotStart: entry.slotStart,
-               slotEnd: entry.slotEnd,
-               localSlotKey: entry.slotKey,
-            });
-            if (i < queue.length - 1) {
-               await new Promise((resolve) =>
-                  setTimeout(resolve, RANGE_BLOCK_BATCH_DELAY_MS),
-               );
+         const workersCount = Math.max(
+            1,
+            Math.min(RANGE_BLOCK_BATCH_CONCURRENCY, queue.length),
+         );
+         let nextIndex = 0;
+
+         const worker = async () => {
+            while (nextIndex < queue.length) {
+               const idx = nextIndex;
+               nextIndex += 1;
+               const entry = queue[idx];
+
+               await blockSelectedSlot({
+                  instructorId: entry.instructorId,
+                  actionInstructorId: entry.instructorId,
+                  slotStart: entry.slotStart,
+                  slotEnd: entry.slotEnd,
+                  localSlotKey: entry.slotKey,
+               });
+
+               if (RANGE_BLOCK_BATCH_DELAY_MS > 0 && idx < queue.length - 1) {
+                  await new Promise((resolve) =>
+                     setTimeout(resolve, RANGE_BLOCK_BATCH_DELAY_MS),
+                  );
+               }
             }
-         }
+         };
+
+         await Promise.all(
+            Array.from({ length: workersCount }, () => worker()),
+         );
       } finally {
          rangeBatchRunningRef.current = false;
       }
@@ -960,13 +1483,14 @@ export default memo(function DayviewDomTrack({
 
    useEffect(() => {
       const onKeyDownCapture = (e) => {
-         if (!(e.ctrlKey || e.metaKey)) return;
+         if (!isRangeMultiSelectPressed(e)) return;
          if (isEditableTarget(e.target)) return;
          if (String(e.key || "").toLowerCase() !== "l") return;
 
          const hasRangeSelection =
-            (rangeSelectedEntriesRef.current || []).filter((x) => !x?.blocked)
-               .length > 0;
+            (rangeSelectedEntriesRef.current || []).filter(
+               (x) => !x?.blocked && !x?.hasEvent,
+            ).length > 0;
          if (!hasRangeSelection) return;
 
          e.preventDefault();
@@ -1017,75 +1541,34 @@ export default memo(function DayviewDomTrack({
    const rowGap = 10;
    const slotHeight = Math.max(24, Math.round(Number(layout?.slotHeight || 120)));
    const slotGap = 0;
-
-   const effectiveInstructors = useMemo(
-      () => buildEffectiveInstructorsLayout(instructors),
-      [instructors],
-   );
-
-   const headersMeta = useMemo(
-      () => buildHeadersMeta(effectiveInstructors, colsPerRow),
-      [effectiveInstructors, colsPerRow],
-   );
-
-   const headerMetrics = useMemo(() => {
-      const colsCount = Math.max(1, headersMeta.length || 1);
-      const rowsCount = Math.max(1, Math.ceil(colsCount / colsPerRow));
-      const worldHeight = computeWorldHeight(slotsSafe.length, slotHeight, slotGap);
-      const padSlots = Math.min(
-         Math.max(WAIT_SLOTS_PER_COLUMN, CANCEL_SLOTS_PER_COLUMN),
+   const dayviewStructure = useMemo(
+      () =>
+         getCachedDayviewStructure({
+            instructors,
+            colsPerRow,
+            slotsCount: slotsSafe.length,
+            slotHeight,
+            slotGap,
+            headerHeight,
+            rowGap,
+            colWidth,
+            colGap,
+         }),
+      [
+         instructors,
+         colsPerRow,
          slotsSafe.length,
-      );
-      const padWorldHeight = padSlots
-         ? computeWorldHeight(padSlots, slotHeight, slotGap)
-         : worldHeight;
-      const rowHeights = new Array(rowsCount);
-      for (let row = 0; row < rowsCount; row++) {
-         const rowStart = row * colsPerRow;
-         const rowEnd = Math.min(colsCount, rowStart + colsPerRow);
-         let allPad = rowEnd > rowStart;
-         for (let i = rowStart; i < rowEnd; i++) {
-            const inst = headersMeta[i]?.inst || null;
-            if (!inst || (!isPadInstructor(inst) && !isGapInstructor(inst))) {
-               allPad = false;
-               break;
-            }
-         }
-         rowHeights[row] = allPad ? padWorldHeight : worldHeight;
-      }
-
-      const rowTops = new Array(rowsCount);
-      let acc = 0;
-      for (let row = 0; row < rowsCount; row++) {
-         rowTops[row] = acc;
-         acc += headerHeight + rowHeights[row] + rowGap;
-      }
-
-      const totalHeight = Math.max(1, acc - rowGap);
-      const dayWidth =
-         Math.min(colsPerRow, colsCount) * colWidth +
-         Math.max(0, Math.min(colsPerRow, colsCount) - 1) * colGap;
-
-      return {
-         colsCount,
-         rowsCount,
-         rowHeights,
-         rowTops,
-         totalHeight,
-         dayWidth,
-         worldHeight,
-      };
-   }, [
-      headersMeta,
-      colsPerRow,
-      slotsSafe.length,
-      slotHeight,
-      slotGap,
-      headerHeight,
-      rowGap,
-      colWidth,
-      colGap,
-   ]);
+         slotHeight,
+         slotGap,
+         headerHeight,
+         rowGap,
+         colWidth,
+         colGap,
+      ],
+   );
+   const effectiveInstructors = dayviewStructure.effectiveInstructors;
+   const headersMeta = dayviewStructure.headersMeta;
+   const headerMetrics = dayviewStructure.headerMetrics;
 
    const isDayNearViewport = useMemo(() => {
       if (DISABLE_SECTION_VIRTUALIZATION) return true;
@@ -1280,8 +1763,10 @@ export default memo(function DayviewDomTrack({
    }, [slotsSafe]);
 
    const eventsPrepared = useMemo(() => {
+      if (!dayNearViewportBuffered) return EMPTY_CELL_ITEMS;
+
       const list = Array.isArray(events) ? events : [];
-      if (!list.length || !slotsSafe.length) return [];
+      if (!list.length || !slotsSafe.length) return EMPTY_CELL_ITEMS;
 
       const hasHidden = list.some((ev) => {
          const rid = getReservationId(ev);
@@ -1352,6 +1837,16 @@ export default memo(function DayviewDomTrack({
             String(ev?.eventPrivateMessage || "").trim() ||
             String(getStudentPrivateMessageFromEv(ev) || "").trim();
          const raw = ev?.raw || {};
+         const reservationId =
+            rid != null ? String(rid) : String(ev?.id || "");
+         const isOptimisticPending = !!(
+            raw?._optimisticPending ??
+            raw?._optimistic ??
+            ev?._optimisticPending ??
+            ev?._optimistic
+         );
+         const isDeleting =
+            !!reservationId && deletingReservationIds.has(reservationId);
          const isFavorite = raw?.isFavorite === true || raw?.is_favorite === true;
          const isImportant = raw?.isImportant === true || raw?.is_important === true;
          const statusMarks = [];
@@ -1363,7 +1858,7 @@ export default memo(function DayviewDomTrack({
          const timeText = hhmm(start);
          const baseItem = {
             id: ev?.id != null ? String(ev.id) : "",
-            reservationId: rid != null ? String(rid) : String(ev?.id || ""),
+            reservationId,
             instructorId: mappedInstId,
             slotIdx,
             start,
@@ -1380,6 +1875,8 @@ export default memo(function DayviewDomTrack({
             statusMarks: statusMarks.join(" · "),
             isFavorite,
             isImportant,
+            isOptimisticPending,
+            isDeleting,
          };
 
          if (isEventCanceled(ev)) {
@@ -1432,7 +1929,14 @@ export default memo(function DayviewDomTrack({
       }
 
       return plain;
-   }, [events, headersMeta, slotsSafe, slotIndexByKey]);
+   }, [
+      events,
+      headersMeta,
+      slotsSafe,
+      slotIndexByKey,
+      dayNearViewportBuffered,
+      deletingReservationIds,
+   ]);
 
    const byCell = useMemo(() => {
       const map = new Map();
@@ -1518,15 +2022,40 @@ export default memo(function DayviewDomTrack({
       presenceByReservationUsers,
    ]);
 
+   const sharedUsersById =
+      sharedLookups?.usersById instanceof Map ? sharedLookups.usersById : null;
+   const sharedUsersByPhone =
+      sharedLookups?.usersByPhone instanceof Map
+         ? sharedLookups.usersByPhone
+         : null;
+   const sharedUsersByNormName =
+      sharedLookups?.usersByNormName instanceof Map
+         ? sharedLookups.usersByNormName
+         : null;
+   const sharedInstructorUsersByNormName =
+      sharedLookups?.instructorUsersByNormName instanceof Map
+         ? sharedLookups.instructorUsersByNormName
+         : null;
+   const sharedInstructorsFullById =
+      sharedLookups?.instructorsFullById instanceof Map
+         ? sharedLookups.instructorsFullById
+         : null;
+   const sharedCarsByInstructorId =
+      sharedLookups?.carsByInstructorId instanceof Map
+         ? sharedLookups.carsByInstructorId
+         : null;
+
    const usersById = useMemo(() => {
+      if (sharedUsersById) return sharedUsersById;
       const map = new Map();
       for (const user of Array.isArray(users) ? users : []) {
          if (user?.id == null) continue;
          map.set(String(user.id), user);
       }
       return map;
-   }, [users]);
+   }, [sharedUsersById, users]);
    const usersByPhone = useMemo(() => {
+      if (sharedUsersByPhone) return sharedUsersByPhone;
       const map = new Map();
       for (const user of Array.isArray(users) ? users : []) {
          const key = String(user?.phone || "").replace(/\D+/g, "");
@@ -1534,8 +2063,9 @@ export default memo(function DayviewDomTrack({
          map.set(key, user);
       }
       return map;
-   }, [users]);
+   }, [sharedUsersByPhone, users]);
    const usersByNormName = useMemo(() => {
+      if (sharedUsersByNormName) return sharedUsersByNormName;
       const map = new Map();
       for (const user of Array.isArray(users) ? users : []) {
          const key = norm(`${user?.firstName ?? ""} ${user?.lastName ?? ""}`);
@@ -1543,8 +2073,9 @@ export default memo(function DayviewDomTrack({
          map.set(key, user);
       }
       return map;
-   }, [users]);
+   }, [sharedUsersByNormName, users]);
    const instructorUsersByNormName = useMemo(() => {
+      if (sharedInstructorUsersByNormName) return sharedInstructorUsersByNormName;
       const map = new Map();
       for (const user of Array.isArray(users) ? users : []) {
          if (String(user?.role || "").toUpperCase() !== "INSTRUCTOR") continue;
@@ -1553,16 +2084,18 @@ export default memo(function DayviewDomTrack({
          map.set(key, user);
       }
       return map;
-   }, [users]);
+   }, [sharedInstructorUsersByNormName, users]);
    const instructorsFullById = useMemo(() => {
+      if (sharedInstructorsFullById) return sharedInstructorsFullById;
       const map = new Map();
       for (const inst of Array.isArray(instructorsFull) ? instructorsFull : []) {
          if (inst?.id == null) continue;
          map.set(String(inst.id), inst);
       }
       return map;
-   }, [instructorsFull]);
+   }, [sharedInstructorsFullById, instructorsFull]);
    const carsByInstructorId = useMemo(() => {
+      if (sharedCarsByInstructorId) return sharedCarsByInstructorId;
       const map = new Map();
       for (const car of Array.isArray(cars) ? cars : []) {
          const iid = String(car?.instructorId ?? car?.instructor_id ?? "").trim();
@@ -1570,7 +2103,7 @@ export default memo(function DayviewDomTrack({
          map.set(iid, car);
       }
       return map;
-   }, [cars]);
+   }, [sharedCarsByInstructorId, cars]);
    const dayDateForHeaders = useMemo(() => {
       const d = toDateSafe(dayStart);
       return d || new Date();
@@ -1646,7 +2179,7 @@ export default memo(function DayviewDomTrack({
    ]);
    const blockedKeyMapNormalized = useMemo(() => {
       return normalizeBlockedMapInput(blockedKeyMap);
-   }, [blockedKeyMap]);
+   }, [blockedKeyMap, blackoutVer]);
    const pickUserFromStore = useCallback(
       (userIdRaw, phoneRaw, firstNameSeed, lastNameSeed) => {
          const userId = userIdRaw != null ? String(userIdRaw) : "";
@@ -2055,11 +2588,69 @@ export default memo(function DayviewDomTrack({
       clearLongPress();
    }, [clearLongPress]);
 
+   const buildRangeHitCache = useCallback(() => {
+      const root = rootRef.current;
+      if (!root) return null;
+
+      const rootRect = root.getBoundingClientRect();
+      const els = root.querySelectorAll(RANGE_SLOT_SELECTOR);
+      const items = [];
+
+      for (const el of els) {
+         const rangeKey = String(el.getAttribute("data-range-key") || "").trim();
+         const instructorId = String(el.getAttribute("data-inst-id") || "").trim();
+         const slotKey = String(el.getAttribute("data-slot-key") || "").trim();
+         const slotStart = String(el.getAttribute("data-slot-start") || "").trim();
+         const slotEnd = String(el.getAttribute("data-slot-end") || "").trim();
+         if (!rangeKey || !instructorId || !slotKey || !slotStart || !slotEnd)
+            continue;
+
+         const slotRect = el.getBoundingClientRect();
+         const leftRel = slotRect.left - rootRect.left;
+         const topRel = slotRect.top - rootRect.top;
+         const row = Number(el.getAttribute("data-grid-row"));
+         const col = Number(el.getAttribute("data-grid-col"));
+         const slotIdx = Number(el.getAttribute("data-slot-idx"));
+
+         items.push({
+            rangeKey,
+            instructorId,
+            slotKey,
+            slotStart,
+            slotEnd,
+            blocked: el.getAttribute("data-blocked") === "1",
+            hasEvent: el.getAttribute("data-has-event") === "1",
+            row: Number.isFinite(row) ? row : 0,
+            col: Number.isFinite(col) ? col : 0,
+            slotIdx: Number.isFinite(slotIdx) ? slotIdx : 0,
+            leftRel,
+            topRel,
+            rightRel: leftRel + slotRect.width,
+            bottomRel: topRel + slotRect.height,
+         });
+      }
+
+      items.sort(compareRangeEntry);
+      const cache = {
+         root,
+         built: true,
+         items,
+      };
+      rangeHitCacheRef.current = cache;
+      return cache;
+   }, []);
+
    const updateRangeSelectionFromPointer = useCallback(
       (clientX, clientY) => {
          const root = rootRef.current;
          const drag = rangeDragRef.current;
          if (!root || !drag.active) return;
+
+         let cache = rangeHitCacheRef.current;
+         if (cache.root !== root || !cache.built) {
+            cache = buildRangeHitCache();
+         }
+         if (!cache) return;
 
          const x0 = drag.startX;
          const y0 = drag.startY;
@@ -2078,67 +2669,53 @@ export default memo(function DayviewDomTrack({
          const clippedRight = Math.min(rect.right, rootRect.right);
          const clippedBottom = Math.min(rect.bottom, rootRect.bottom);
          if (clippedRight > clippedLeft && clippedBottom > clippedTop) {
-            setRangeBox({
-               left: clippedLeft - rootRect.left,
-               top: clippedTop - rootRect.top,
-               width: clippedRight - clippedLeft,
-               height: clippedBottom - clippedTop,
-            });
+            const nextBox = {
+               left: Math.round(clippedLeft - rootRect.left),
+               top: Math.round(clippedTop - rootRect.top),
+               width: Math.round(clippedRight - clippedLeft),
+               height: Math.round(clippedBottom - clippedTop),
+            };
+            const nextSig = rangeBoxSig(nextBox);
+            if (nextSig !== rangeBoxSigRef.current) {
+               rangeBoxSigRef.current = nextSig;
+               setRangeBox(nextBox);
+            }
          } else {
-            setRangeBox(null);
+            if (rangeBoxSigRef.current) {
+               rangeBoxSigRef.current = "";
+               setRangeBox(null);
+            }
          }
 
-         const els = root.querySelectorAll(
-            "[data-cp-kind='slot'][data-selectable='1']",
-         );
          const next = [];
-         const seen = new Set();
-         for (const el of els) {
-            const slotRect = el.getBoundingClientRect();
-            if (!rectsIntersect(rect, slotRect)) continue;
-
-            const rangeKey = String(el.getAttribute("data-range-key") || "").trim();
-            const instructorId = String(el.getAttribute("data-inst-id") || "").trim();
-            const slotKey = String(el.getAttribute("data-slot-key") || "").trim();
-            const slotStart = String(el.getAttribute("data-slot-start") || "").trim();
-            const slotEnd = String(el.getAttribute("data-slot-end") || "").trim();
-            const blocked = el.getAttribute("data-blocked") === "1";
-            const row = Number(el.getAttribute("data-grid-row"));
-            const col = Number(el.getAttribute("data-grid-col"));
-            const slotIdx = Number(el.getAttribute("data-slot-idx"));
-
-            if (!rangeKey || !instructorId || !slotKey || !slotStart || !slotEnd)
+         for (const item of cache.items) {
+            const left = rootRect.left + item.leftRel;
+            const top = rootRect.top + item.topRel;
+            const right = rootRect.left + item.rightRel;
+            const bottom = rootRect.top + item.bottomRel;
+            if (
+               !rectIntersectsCoords(
+                  rect.left,
+                  rect.top,
+                  rect.right,
+                  rect.bottom,
+                  left,
+                  top,
+                  right,
+                  bottom,
+               )
+            )
                continue;
-            if (seen.has(rangeKey)) continue;
-            seen.add(rangeKey);
-
-            next.push({
-               rangeKey,
-               instructorId,
-               slotKey,
-               slotStart,
-               slotEnd,
-               blocked,
-               row: Number.isFinite(row) ? row : 0,
-               col: Number.isFinite(col) ? col : 0,
-               slotIdx: Number.isFinite(slotIdx) ? slotIdx : 0,
-            });
+            next.push(item);
          }
-
-         next.sort((a, b) => {
-            if (a.row !== b.row) return a.row - b.row;
-            if (a.slotIdx !== b.slotIdx) return a.slotIdx - b.slotIdx;
-            if (a.col !== b.col) return a.col - b.col;
-            return a.rangeKey.localeCompare(b.rangeKey);
-         });
          setRangeEntries(next);
       },
-      [setRangeEntries],
+      [buildRangeHitCache, setRangeEntries],
    );
 
    const handleRangePointerDownCapture = useCallback(
       (e) => {
-         if (!(e.ctrlKey || e.metaKey)) return;
+         if (!isRangeMultiSelectPressed(e)) return;
          if (e.button !== 0 && e.button !== undefined) return;
 
          const target = e.target;
@@ -2179,12 +2756,18 @@ export default memo(function DayviewDomTrack({
             } catch {}
          }
 
+         buildRangeHitCache();
          updateRangeSelectionFromPointer(e.clientX, e.clientY);
 
          e.preventDefault();
          e.stopPropagation();
       },
-      [clearLongPress, clearRangeSelection, updateRangeSelectionFromPointer],
+      [
+         buildRangeHitCache,
+         clearLongPress,
+         clearRangeSelection,
+         updateRangeSelectionFromPointer,
+      ],
    );
 
    const handleRangePointerMoveCapture = useCallback(
@@ -2246,7 +2829,11 @@ export default memo(function DayviewDomTrack({
 
          drag.active = false;
          drag.pointerId = null;
-         setRangeBox(null);
+         if (rangeBoxSigRef.current) {
+            rangeBoxSigRef.current = "";
+            setRangeBox(null);
+         }
+         invalidateRangeHitCache();
          ignoreClickUntilRef.current = Date.now() + 260;
 
          if (e) {
@@ -2254,7 +2841,7 @@ export default memo(function DayviewDomTrack({
             e.stopPropagation();
          }
       },
-      [updateRangeSelectionFromPointer],
+      [invalidateRangeHitCache, updateRangeSelectionFromPointer],
    );
 
    const handleRangePointerUpCapture = useCallback(
@@ -2357,7 +2944,7 @@ export default memo(function DayviewDomTrack({
    const onGridClick = useCallback(
       (e) => {
          if (Date.now() < ignoreClickUntilRef.current) return;
-         if (!(e.ctrlKey || e.metaKey)) {
+         if (!isRangeMultiSelectPressed(e)) {
             clearRangeSelection();
          }
          const eventEl = e.target?.closest?.("[data-cp-kind='event']");
@@ -2417,7 +3004,7 @@ export default memo(function DayviewDomTrack({
    const onGridDoubleClick = useCallback(
       (e) => {
          if (Date.now() < ignoreClickUntilRef.current) return;
-         if (!(e.ctrlKey || e.metaKey)) {
+         if (!isRangeMultiSelectPressed(e)) {
             clearRangeSelection();
          }
          clearLongPress();
@@ -2769,6 +3356,9 @@ export default memo(function DayviewDomTrack({
                            displayEventByCellKey.get(cellKey) || eventsInCell[0] || null;
                         const hasEventInCell = eventsInCell.length > 0;
                         const slotReservationId = String(displayEvent?.reservationId || "");
+                        const isDeletingEvent = !!displayEvent?.isDeleting;
+                        const isOptimisticCreateEvent =
+                           !!displayEvent?.isOptimisticPending;
 
                         const isSelectedSlot =
                            (!isPad || isLateralPad) &&
@@ -2819,6 +3409,7 @@ export default memo(function DayviewDomTrack({
                                  (isSelectedSlot ? " is-selected-slot" : "") +
                                  (isRangeSelected ? " is-range-selected" : "") +
                                  (hasDraft ? " is-draft" : "") +
+                                 (isDeletingEvent ? " has-deleting-event" : "") +
                                  (isWaitPad ? " is-wait-slot" : "") +
                                  (isCancelPad ? " is-cancel-slot" : "") +
                                  (isLateralPad ? " is-lateral-slot" : "") +
@@ -2872,6 +3463,10 @@ export default memo(function DayviewDomTrack({
                                           (renderSearchId === displayEvent.reservationId
                                              ? " is-search-event"
                                              : "") +
+                                          (isOptimisticCreateEvent
+                                             ? " is-optimistic-create"
+                                             : "") +
+                                          (isDeletingEvent ? " is-deleting" : "") +
                                           (isCancelOriginMarker
                                              ? " is-cancel-origin"
                                              : "")
@@ -3005,4 +3600,65 @@ export default memo(function DayviewDomTrack({
          ) : null}
       </div>
    );
-});
+}
+
+function areTrackPropsEqual(prev, next) {
+   if (prev === next) return true;
+
+   if (prev.dayStart !== next.dayStart) return false;
+   if (prev.dayEnd !== next.dayEnd) return false;
+   if (prev.instructors !== next.instructors) return false;
+   if (prev.events !== next.events) return false;
+   if (prev.slots !== next.slots) return false;
+   if (prev.dayOffsetLeft !== next.dayOffsetLeft) return false;
+   if (prev.layout !== next.layout) return false;
+   if (prev.timeMarks !== next.timeMarks) return false;
+   if (prev.blockedKeyMap !== next.blockedKeyMap) return false;
+   if (prev.blackoutVer !== next.blackoutVer) return false;
+   if (prev.activeEventId !== next.activeEventId) return false;
+   if (prev.activeSearchEventId !== next.activeSearchEventId) return false;
+   if (prev.onActiveEventRectChange !== next.onActiveEventRectChange) return false;
+   if (prev.onCreateSlot !== next.onCreateSlot) return false;
+   if (prev.users !== next.users) return false;
+   if (prev.cars !== next.cars) return false;
+   if (prev.instructorsFull !== next.instructorsFull) return false;
+   if (prev.sharedLookups !== next.sharedLookups) return false;
+   if (prev.createDraftBySlotUsers !== next.createDraftBySlotUsers) return false;
+   if (prev.createDraftBySlotColors !== next.createDraftBySlotColors) return false;
+   if (prev.presenceByReservationUsers !== next.presenceByReservationUsers)
+      return false;
+   if (prev.presenceByReservationColors !== next.presenceByReservationColors)
+      return false;
+   if (prev.isPanInteracting !== next.isPanInteracting) return false;
+   if (prev.panPointerType !== next.panPointerType) return false;
+
+   const panNow = !!prev.isPanInteracting || !!next.isPanInteracting;
+   const pointerType = String(next.panPointerType || prev.panPointerType || "")
+      .trim()
+      .toLowerCase();
+   const isMousePan = panNow && pointerType === "mouse";
+   const xThreshold = isMousePan ? 40 : panNow ? 14 : 1;
+   const yThreshold = isMousePan ? 56 : panNow ? 14 : 1;
+
+   const dx = Math.abs(
+      Number(prev.viewportScrollLeft || 0) - Number(next.viewportScrollLeft || 0),
+   );
+   const dy = Math.abs(
+      Number(prev.viewportScrollTop || 0) - Number(next.viewportScrollTop || 0),
+   );
+   const dw = Math.abs(
+      Number(prev.viewportWidth || 0) - Number(next.viewportWidth || 0),
+   );
+   const dh = Math.abs(
+      Number(prev.viewportHeight || 0) - Number(next.viewportHeight || 0),
+   );
+
+   if (dx >= xThreshold) return false;
+   if (dy >= yThreshold) return false;
+   if (dw > 1) return false;
+   if (dh > 1) return false;
+
+   return true;
+}
+
+export default memo(DayviewDomTrack, areTrackPropsEqual);

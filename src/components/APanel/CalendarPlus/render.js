@@ -934,7 +934,7 @@ export function drawAll({
    const activeBorderColor = resolveColor("--white-p");
 
    const cancelSlotBgColor = resolveColor("--event-yellow");
-   const cancelSlotTextColor = resolveColor("--black-p");
+   const cancelSlotTextColor = resolveColor("--white-p");
 
    const z = zoom || 1;
    const isDense = !!denseMode;

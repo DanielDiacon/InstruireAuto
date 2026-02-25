@@ -1,5 +1,6 @@
 // src/components/APanel/CalendarPlus/ACalendarOptimized.jsx
 import React, {
+   startTransition,
    useMemo,
    useEffect,
    useState,
@@ -17,11 +18,14 @@ import {
 //import { fetchInstructorsGroups } from "../../../store/instructorsGroupSlice";
 import { fetchCars } from "../../../store/carsSlice";
 import {
-   fetchReservationsDelta,
    maybeRefreshReservations,
-   fetchReservationsForMonth,
+   setReservationsFromMonthQuery,
    removeReservationLocal, // ✅ ADD
 } from "../../../store/reservationsSlice";
+import {
+   reservationsApi,
+   useGetReservationsForMonthQuery,
+} from "../../../store/reservationsApi";
 
 import { fetchStudents } from "../../../store/studentsSlice";
 import { fetchUsers } from "../../../store/usersSlice";
@@ -65,6 +69,11 @@ const INTERACTING_DAYS_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 96 : 72;
 const INTERACTING_VIEWPORT_UPDATE_MIN_MS = IS_LOW_SPEC_DEVICE ? 56 : 42;
 const DISABLE_DAY_LAZY_LOAD = false;
 const BLACKOUT_PREFETCH_CONCURRENCY = IS_LOW_SPEC_DEVICE ? 2 : 4;
+const BLACKOUT_BUMP_MIN_MS = IS_LOW_SPEC_DEVICE ? 120 : 90;
+const HYDRATE_DAYS_BATCH_IDLE = IS_LOW_SPEC_DEVICE ? 1 : 2;
+const HYDRATE_DAYS_BATCH_PAN = IS_LOW_SPEC_DEVICE ? 1 : 2;
+const HYDRATE_DAYS_IMMEDIATE_IDLE = IS_LOW_SPEC_DEVICE ? 2 : 3;
+const HYDRATE_DAYS_IMMEDIATE_PAN = IS_LOW_SPEC_DEVICE ? 2 : 3;
 
 function safeReadScrollStateMap() {
    if (typeof window === "undefined") return {};
@@ -422,6 +431,10 @@ function closestZoomPercentFromZoom(zoomVal) {
 }
 
 const EMPTY_RESERVATIONS = [];
+const EMPTY_LIST = [];
+const EMPTY_MAP = new Map();
+const EMPTY_ID_TO_DAY_MAP = new Map();
+const MONTH_INDEX_WORKER_FILE = "/workers/calendarPlusMonthIndexWorker.js";
 
 function setsEqual(a, b) {
    if (a === b) return true;
@@ -447,7 +460,7 @@ const TZ_PARTS_FMT_MAIN = new Intl.DateTimeFormat("en-GB", {
 
 const LESSON_MINUTES = 90;
 const EVENT_H = 48;
-const SLOT_H = 125;
+const SLOT_H = 90;
 const HOURS_COL_W = 60;
 const COL_W = 220;
 const COL_GAP = 0;
@@ -493,7 +506,11 @@ export default function CalendarPlusOptimized({
 
          refreshInFlightRef.current = true;
 
-         Promise.resolve(dispatch(fetchReservationsDelta()))
+         Promise.resolve(
+            dispatch(
+               reservationsApi.util.invalidateTags([{ type: "ReservationsMonth" }]),
+            ),
+         )
             .catch(() => {})
             .finally(() => {
                refreshInFlightRef.current = false;
@@ -513,6 +530,57 @@ export default function CalendarPlusOptimized({
       hasDelete: false,
       unknownCount: 0,
    });
+   const localMutationSuppressUntilRef = useRef(0);
+   const localMutationRecentIdsRef = useRef(new Map());
+   const suppressedRefreshTimerRef = useRef(0);
+
+   useEffect(() => {
+      if (typeof window === "undefined") return;
+
+      const onLocalMutation = (ev) => {
+         const type = String(ev?.detail?.type || "").trim().toLowerCase();
+         if (!type) return;
+         if (type !== "create" && type !== "update") return;
+
+         const holdMs = 1400;
+         const until = Date.now() + holdMs;
+         localMutationSuppressUntilRef.current = Math.max(
+            localMutationSuppressUntilRef.current || 0,
+            until,
+         );
+
+         const ids = [];
+         const oneId =
+            ev?.detail?.reservationId != null
+               ? String(ev.detail.reservationId).trim()
+               : "";
+         if (oneId) ids.push(oneId);
+         const manyIds = Array.isArray(ev?.detail?.reservationIds)
+            ? ev.detail.reservationIds
+            : [];
+         for (const raw of manyIds) {
+            const id = raw != null ? String(raw).trim() : "";
+            if (id) ids.push(id);
+         }
+         if (ids.length) {
+            const map = localMutationRecentIdsRef.current;
+            for (const id of ids) map.set(id, until);
+         }
+      };
+
+      window.addEventListener("calendarplus-local-mutation", onLocalMutation);
+      return () =>
+         window.removeEventListener("calendarplus-local-mutation", onLocalMutation);
+   }, []);
+
+   useEffect(() => {
+      return () => {
+         if (suppressedRefreshTimerRef.current) {
+            clearTimeout(suppressedRefreshTimerRef.current);
+            suppressedRefreshTimerRef.current = 0;
+         }
+      };
+   }, []);
 
    const flushSocketReservationsBurst = useCallback(() => {
       socketBurstRafRef.current = 0;
@@ -547,7 +615,50 @@ export default function CalendarPlusOptimized({
          forceReload: false,
       });
 
-      runReservationsRefresh(`socket-batch:${count}`);
+      const now = Date.now();
+      const suppressUntil = Number(localMutationSuppressUntilRef.current || 0);
+      const recentLocalMap = localMutationRecentIdsRef.current;
+      if (recentLocalMap?.size) {
+         for (const [id, expiresAt] of recentLocalMap.entries()) {
+            if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+               recentLocalMap.delete(id);
+            }
+         }
+      }
+
+      const allKnownIdsMatchLocalEcho =
+         ids.length > 0 && ids.every((id) => recentLocalMap?.has?.(id));
+      const isLikelyLocalEcho =
+         !hasDelete &&
+         suppressUntil > now &&
+         count <= 3 &&
+         Number(meta?.unknownCount || 0) === 0 &&
+         allKnownIdsMatchLocalEcho;
+
+      if (isLikelyLocalEcho) {
+         if (suppressedRefreshTimerRef.current) {
+            clearTimeout(suppressedRefreshTimerRef.current);
+            suppressedRefreshTimerRef.current = 0;
+         }
+         for (const id of ids) recentLocalMap?.delete?.(id);
+         return;
+      }
+
+      const shouldDelayRefresh = !hasDelete && suppressUntil > now && count <= 3;
+
+      if (!shouldDelayRefresh) {
+         runReservationsRefresh(`socket-batch:${count}`);
+         return;
+      }
+
+      const waitMs = Math.max(90, suppressUntil - now + 60);
+      if (suppressedRefreshTimerRef.current) {
+         clearTimeout(suppressedRefreshTimerRef.current);
+      }
+      suppressedRefreshTimerRef.current = setTimeout(() => {
+         suppressedRefreshTimerRef.current = 0;
+         runReservationsRefresh(`socket-batch-delayed:${count}`);
+      }, waitMs);
    }, [runReservationsRefresh]);
 
    const queueSocketReservationsChanged = useCallback(
@@ -675,10 +786,14 @@ export default function CalendarPlusOptimized({
 
    const [visibleDays, setVisibleDays] = useState(() => new Set());
    const [stickyVisibleDays, setStickyVisibleDays] = useState(() => new Set());
+   const [hydratedDays, setHydratedDays] = useState(() => new Set());
    const [isPanInteracting, setIsPanInteracting] = useState(false);
    const visibleDaysCount = visibleDays.size;
    const stickyVisibleDaysStampRef = useRef(new Map());
    const stickyVisibleDaysCounterRef = useRef(0);
+   const hydratedDaysRef = useRef(new Set());
+   const hydrationQueueRef = useRef([]);
+   const hydrationRafRef = useRef(0);
 
    // ✅ Auto-scroll pentru event activ (X + Y): o singură secvență per acțiune.
    const activeEventIdRef = useRef(null);
@@ -707,6 +822,10 @@ export default function CalendarPlusOptimized({
          tries: 0,
       };
    }, []);
+
+   useEffect(() => {
+      hydratedDaysRef.current = hydratedDays;
+   }, [hydratedDays]);
 
    // scroll automat pe X/Y pentru event activ — DAR o singură dată (gate)
    const handleActiveEventRectChange = useCallback((info) => {
@@ -1032,9 +1151,6 @@ export default function CalendarPlusOptimized({
 
       const apply = (on) => {
          window.__WS_DEBUG = !!on;
-         try {
-            localStorage.setItem("__WS_DEBUG", on ? "1" : "0");
-         } catch {}
          if (window.__WS_DEBUG) {
             console.log("[WS DEBUG]", "ON");
          }
@@ -1055,14 +1171,8 @@ export default function CalendarPlusOptimized({
          }
       } catch {}
 
-      // 2) altfel, citește din localStorage (persistă între refresh-uri)
-      if (!forced) {
-         try {
-            apply(localStorage.getItem("__WS_DEBUG") === "1");
-         } catch {
-            apply(false);
-         }
-      }
+      // 2) default: OFF (evităm sesiuni cu debug rămas activ accidental)
+      if (!forced) apply(false);
 
       // 3) toggle fără consolă: Ctrl + Shift + D
       const onKey = (e) => {
@@ -1217,72 +1327,74 @@ export default function CalendarPlusOptimized({
          const now = Date.now();
          const expiresAt = now + 60 * 1000;
 
-         setCreateDraftBySlotUsers((prev) => {
-            const next = new Map(prev);
+         startTransition(() => {
+            setCreateDraftBySlotUsers((prev) => {
+               const next = new Map(prev);
 
-            const removeFromSlot = (slotKey) => {
-               const k = String(slotKey);
-               const entry0 = next.get(k);
-               if (!entry0) return;
+               const removeFromSlot = (slotKey) => {
+                  const k = String(slotKey);
+                  const entry0 = next.get(k);
+                  if (!entry0) return;
 
-               const users0 =
-                  entry0?.users instanceof Set
-                     ? entry0.users
-                     : entry0 instanceof Set
-                       ? entry0
-                       : new Set();
-               const users1 = new Set(users0);
-               users1.delete(uid);
+                  const users0 =
+                     entry0?.users instanceof Set
+                        ? entry0.users
+                        : entry0 instanceof Set
+                          ? entry0
+                          : new Set();
+                  const users1 = new Set(users0);
+                  users1.delete(uid);
 
-               if (users1.size === 0) next.delete(k);
-               else
+                  if (users1.size === 0) next.delete(k);
+                  else
+                     next.set(k, {
+                        users: users1,
+                        expiresAt,
+                        startedByLast: entry0?.startedByLast ?? null,
+                     });
+               };
+
+               const addToSlot = (slotKey) => {
+                  const k = String(slotKey);
+                  const entry0 = next.get(k);
+                  const users0 =
+                     entry0?.users instanceof Set
+                        ? entry0.users
+                        : entry0 instanceof Set
+                          ? entry0
+                          : new Set();
+                  const users1 = new Set(users0);
+                  users1.add(uid);
+
                   next.set(k, {
                      users: users1,
                      expiresAt,
-                     startedByLast: entry0?.startedByLast ?? null,
+                     startedByLast:
+                        payload?.startedBy ?? entry0?.startedByLast ?? null,
                   });
-            };
+               };
 
-            const addToSlot = (slotKey) => {
-               const k = String(slotKey);
-               const entry0 = next.get(k);
-               const users0 =
-                  entry0?.users instanceof Set
-                     ? entry0.users
-                     : entry0 instanceof Set
-                       ? entry0
-                       : new Set();
-               const users1 = new Set(users0);
-               users1.add(uid);
+               if (isClear) {
+                  slotKeys.forEach(removeFromSlot);
 
-               next.set(k, {
-                  users: users1,
-                  expiresAt,
-                  startedByLast:
-                     payload?.startedBy ?? entry0?.startedByLast ?? null,
-               });
-            };
+                  const prevSlot = activeDraftSlotByUserRef.current.get(uid);
+                  if (prevSlot && slotKeys.includes(prevSlot)) {
+                     activeDraftSlotByUserRef.current.delete(uid);
+                  }
 
-            if (isClear) {
-               slotKeys.forEach(removeFromSlot);
-
-               const prevSlot = activeDraftSlotByUserRef.current.get(uid);
-               if (prevSlot && slotKeys.includes(prevSlot)) {
-                  activeDraftSlotByUserRef.current.delete(uid);
+                  return next;
                }
 
+               // START: scoate user-ul din slotul anterior, ca să nu rămână în 2 locuri
+               const prevSlot = activeDraftSlotByUserRef.current.get(uid);
+               if (prevSlot && !slotKeys.includes(prevSlot))
+                  removeFromSlot(prevSlot);
+
+               slotKeys.forEach(addToSlot);
+               activeDraftSlotByUserRef.current.set(uid, slotKeys[0]);
+
                return next;
-            }
-
-            // START: scoate user-ul din slotul anterior, ca să nu rămână în 2 locuri
-            const prevSlot = activeDraftSlotByUserRef.current.get(uid);
-            if (prevSlot && !slotKeys.includes(prevSlot))
-               removeFromSlot(prevSlot);
-
-            slotKeys.forEach(addToSlot);
-            activeDraftSlotByUserRef.current.set(uid, slotKeys[0]);
-
-            return next;
+            });
          });
          // IMPORTANT: redraw only (NU refetch)
          triggerRedraw({
@@ -1316,34 +1428,36 @@ export default function CalendarPlusOptimized({
 
       const uid = uidRaw != null ? String(uidRaw) : null;
 
-      setPresenceByReservationUsers((prev) => {
-         const next = new Map(prev);
+      startTransition(() => {
+         setPresenceByReservationUsers((prev) => {
+            const next = new Map(prev);
 
-         if (!uid) {
-            if (type === "join") {
-               const set = new Set(next.get(rid) || []);
-               set.add("__someone__");
-               next.set(rid, set);
-            } else if (type === "left") {
-               next.delete(rid);
+            if (!uid) {
+               if (type === "join") {
+                  const set = new Set(next.get(rid) || []);
+                  set.add("__someone__");
+                  next.set(rid, set);
+               } else if (type === "left") {
+                  next.delete(rid);
+               }
+               return next;
             }
+
+            const set = new Set(next.get(rid) || []);
+
+            if (type === "join") {
+               set.add(uid);
+               set.delete("__someone__");
+            } else if (type === "left") {
+               set.delete(uid);
+               set.delete("__someone__");
+            }
+
+            if (set.size) next.set(rid, set);
+            else next.delete(rid);
+
             return next;
-         }
-
-         const set = new Set(next.get(rid) || []);
-
-         if (type === "join") {
-            set.add(uid);
-            set.delete("__someone__");
-         } else if (type === "left") {
-            set.delete(uid);
-            set.delete("__someone__");
-         }
-
-         if (set.size) next.set(rid, set);
-         else next.delete(rid);
-
-         return next;
+         });
       });
       // redraw only
       scheduleCalendarRefresh({
@@ -2087,6 +2201,436 @@ export default function CalendarPlusOptimized({
       return out;
    }
 
+   const monthKeyForIndex = useMemo(() => {
+      const d = new Date(currentDate);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+   }, [currentDate]);
+
+   const [monthIndexWorkerDisabled, setMonthIndexWorkerDisabled] =
+      useState(false);
+   const monthIndexWorkerRef = useRef(null);
+   const monthIndexReqIdRef = useRef(0);
+   const [monthIndexWorkerResult, setMonthIndexWorkerResult] = useState({
+      monthKey: "",
+      dayEntries: EMPTY_LIST,
+      searchCatalog: EMPTY_LIST,
+      eventIdToDayEntries: EMPTY_LIST,
+      eventsCount: 0,
+      buildMs: 0,
+   });
+   const canUseMonthIndexWorker =
+      typeof Worker !== "undefined" && !monthIndexWorkerDisabled;
+   const monthIndexPayloadSigByKeyRef = useRef(new Map());
+   const monthIndexSceneMetaRef = useRef({
+      monthKey: "",
+      studentsRef: null,
+      groupsRef: null,
+      instructorMetaRef: null,
+   });
+
+   const monthIndexStudentsById = useMemo(() => {
+      if (!canUseMonthIndexWorker || isDummyMode) return {};
+      const out = {};
+      if (!(studentDict instanceof Map)) return out;
+
+      studentDict.forEach((student, idRaw) => {
+         const id = String(idRaw || "").trim();
+         if (!id) return;
+         out[id] = {
+            firstName: student?.firstName ?? "",
+            lastName: student?.lastName ?? "",
+            phone: student?.phone ?? null,
+            privateMessage: student?.privateMessage ?? "",
+         };
+      });
+
+      return out;
+   }, [canUseMonthIndexWorker, isDummyMode, studentDict]);
+
+   const monthIndexGroupNameById = useMemo(() => {
+      if (!canUseMonthIndexWorker || isDummyMode) return {};
+      const out = {};
+      if (!(instructorsGroupDict instanceof Map)) return out;
+
+      instructorsGroupDict.forEach((group, idRaw) => {
+         const id = String(idRaw || "").trim();
+         if (!id) return;
+         out[id] = group?.name || `Grupa ${group?.id ?? id}`;
+      });
+
+      return out;
+   }, [canUseMonthIndexWorker, isDummyMode, instructorsGroupDict]);
+
+   const monthIndexInstructorMetaById = useMemo(() => {
+      if (!canUseMonthIndexWorker || isDummyMode) return {};
+      const out = {};
+      if (!(instructorMeta instanceof Map)) return out;
+
+      instructorMeta.forEach((meta, idRaw) => {
+         const id = String(idRaw || "").trim();
+         if (!id) return;
+         out[id] = {
+            name: meta?.name ?? "",
+            gearbox: meta?.gearbox ?? "",
+            plateRaw: meta?.plateRaw ?? "",
+         };
+      });
+
+      return out;
+   }, [canUseMonthIndexWorker, isDummyMode, instructorMeta]);
+
+   const monthIndexSnapshot = useMemo(() => {
+      if (!canUseMonthIndexWorker || isDummyMode) {
+         return {
+            reservations: EMPTY_LIST,
+            entriesByKey: EMPTY_MAP,
+            sigByKey: EMPTY_MAP,
+            rawByEntryKey: EMPTY_MAP,
+         };
+      }
+      if (
+         !Array.isArray(reservationsForCurrentMonth) ||
+         !reservationsForCurrentMonth.length
+      ) {
+         return {
+            reservations: EMPTY_LIST,
+            entriesByKey: EMPTY_MAP,
+            sigByKey: EMPTY_MAP,
+            rawByEntryKey: EMPTY_MAP,
+         };
+      }
+
+      const reservations = [];
+      const entriesByKey = new Map();
+      const sigByKey = new Map();
+      const rawByEntryKey = new Map();
+
+      for (let idx = 0; idx < reservationsForCurrentMonth.length; idx++) {
+         const entry = reservationsForCurrentMonth[idx];
+         const r = entry?.r;
+         const start = entry?.start;
+         if (!r || !(start instanceof Date) || Number.isNaN(start.getTime()))
+            continue;
+
+         const userObj =
+            r.user || r.student || r.client || r.reservation?.user || {};
+         const reservationId = getReservationId(r);
+         const reservationIdStr =
+            reservationId != null ? String(reservationId).trim() : "";
+         const instructorId = getReservationInstructorId(r) || "__unknown";
+         const groupId = getReservationGroupId(r);
+         const groupIdStr = groupId != null ? String(groupId).trim() : "";
+         const studentId = getReservationStudentId(r);
+         const studentIdStr = studentId != null ? String(studentId).trim() : "";
+         const startMs = start.getTime();
+         const entryKey = reservationIdStr
+            ? `rid:${reservationIdStr}`
+            : `tmp:${instructorId}|${startMs}|${studentIdStr}|${groupIdStr}|${idx}`;
+
+         const payloadEntry = {
+            entryKey,
+            id: reservationIdStr || null,
+            startMs,
+            endRaw: getReservationEndRaw(r),
+            instructorId,
+            groupId,
+            studentId,
+            userFirst: userObj?.firstName ?? "",
+            userLast: userObj?.lastName ?? "",
+            userPhone:
+               userObj?.phone ?? userObj?.phoneNumber ?? userObj?.mobile ?? null,
+            fallbackName: r.clientName || r.customerName || r.name || "Programare",
+            privateMessage: r.privateMessage ?? "",
+            privateMessaje: r.privateMessaje ?? "",
+            comment: r.comment ?? "",
+            color: r.color || "--default",
+            sector: r.sector || "",
+            gearbox: r.gearbox || "",
+            isConfirmed: !!r.isConfirmed,
+            clientPhone: r.clientPhone ?? "",
+            phoneNumber: r.phoneNumber ?? "",
+            phone: r.phone ?? "",
+            telefon: r.telefon ?? "",
+         };
+
+         const sig = [
+            String(payloadEntry.startMs),
+            String(payloadEntry.endRaw ?? ""),
+            String(payloadEntry.instructorId ?? ""),
+            String(payloadEntry.groupId ?? ""),
+            String(payloadEntry.studentId ?? ""),
+            String(payloadEntry.userFirst ?? ""),
+            String(payloadEntry.userLast ?? ""),
+            String(payloadEntry.userPhone ?? ""),
+            String(payloadEntry.fallbackName ?? ""),
+            String(payloadEntry.privateMessage ?? ""),
+            String(payloadEntry.privateMessaje ?? ""),
+            String(payloadEntry.comment ?? ""),
+            String(payloadEntry.color ?? ""),
+            String(payloadEntry.sector ?? ""),
+            String(payloadEntry.gearbox ?? ""),
+            payloadEntry.isConfirmed ? "1" : "0",
+            String(payloadEntry.clientPhone ?? ""),
+            String(payloadEntry.phoneNumber ?? ""),
+            String(payloadEntry.phone ?? ""),
+            String(payloadEntry.telefon ?? ""),
+         ].join("\u001f");
+
+         reservations.push(payloadEntry);
+         entriesByKey.set(entryKey, payloadEntry);
+         sigByKey.set(entryKey, sig);
+         rawByEntryKey.set(entryKey, r);
+      }
+
+      return {
+         reservations,
+         entriesByKey,
+         sigByKey,
+         rawByEntryKey,
+      };
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      reservationsForCurrentMonth,
+   ]);
+
+   useEffect(() => {
+      if (!canUseMonthIndexWorker) return undefined;
+
+      const base = process.env.PUBLIC_URL || "";
+      const workerPath = `${base}${MONTH_INDEX_WORKER_FILE}`;
+
+      let worker = null;
+      try {
+         worker = new Worker(workerPath);
+      } catch (err) {
+         console.error("[CalendarPlus] month index worker init failed", err);
+         setMonthIndexWorkerDisabled(true);
+         return undefined;
+      }
+
+      monthIndexWorkerRef.current = worker;
+
+      worker.onmessage = (event) => {
+         const msg = event?.data || {};
+         if (Number(msg?.requestId) !== Number(monthIndexReqIdRef.current))
+            return;
+
+         if (msg?.type === "month-index-result") {
+            setMonthIndexWorkerResult({
+               monthKey: String(msg?.monthKey || ""),
+               dayEntries: Array.isArray(msg?.dayEntries)
+                  ? msg.dayEntries
+                  : EMPTY_LIST,
+               searchCatalog: Array.isArray(msg?.searchCatalog)
+                  ? msg.searchCatalog
+                  : EMPTY_LIST,
+               eventIdToDayEntries: Array.isArray(msg?.eventIdToDayEntries)
+                  ? msg.eventIdToDayEntries
+                  : EMPTY_LIST,
+               eventsCount: Number(msg?.eventsCount || 0),
+               buildMs: Number(msg?.buildMs || 0),
+            });
+            return;
+         }
+
+         if (msg?.type === "month-index-error") {
+            console.error(
+               "[CalendarPlus] month index worker error",
+               msg?.error || "unknown",
+            );
+            setMonthIndexWorkerDisabled(true);
+         }
+      };
+
+      worker.onerror = (err) => {
+         console.error("[CalendarPlus] month index worker runtime error", err);
+         setMonthIndexWorkerDisabled(true);
+      };
+
+      return () => {
+         monthIndexWorkerRef.current = null;
+         try {
+            worker.terminate();
+         } catch {}
+      };
+   }, [canUseMonthIndexWorker]);
+
+   useEffect(() => {
+      if (!canUseMonthIndexWorker || isDummyMode) {
+         monthIndexPayloadSigByKeyRef.current = new Map();
+         monthIndexSceneMetaRef.current = {
+            monthKey: "",
+            studentsRef: null,
+            groupsRef: null,
+            instructorMetaRef: null,
+         };
+         return;
+      }
+
+      const worker = monthIndexWorkerRef.current;
+      if (!worker) return;
+
+      const nextSigByKey =
+         monthIndexSnapshot?.sigByKey instanceof Map
+            ? monthIndexSnapshot.sigByKey
+            : EMPTY_MAP;
+      const nextEntriesByKey =
+         monthIndexSnapshot?.entriesByKey instanceof Map
+            ? monthIndexSnapshot.entriesByKey
+            : EMPTY_MAP;
+      const nextReservations = Array.isArray(monthIndexSnapshot?.reservations)
+         ? monthIndexSnapshot.reservations
+         : EMPTY_LIST;
+
+      const prevScene = monthIndexSceneMetaRef.current || {};
+      const shouldReset =
+         prevScene.monthKey !== monthKeyForIndex ||
+         prevScene.studentsRef !== monthIndexStudentsById ||
+         prevScene.groupsRef !== monthIndexGroupNameById ||
+         prevScene.instructorMetaRef !== monthIndexInstructorMetaById;
+
+      const requestId = monthIndexReqIdRef.current + 1;
+      monthIndexReqIdRef.current = requestId;
+
+      if (shouldReset) {
+         monthIndexPayloadSigByKeyRef.current = new Map(nextSigByKey);
+         monthIndexSceneMetaRef.current = {
+            monthKey: monthKeyForIndex,
+            studentsRef: monthIndexStudentsById,
+            groupsRef: monthIndexGroupNameById,
+            instructorMetaRef: monthIndexInstructorMetaById,
+         };
+
+         worker.postMessage({
+            type: "index-month-reset",
+            requestId,
+            payload: {
+               monthKey: monthKeyForIndex,
+               timeZone: MOLDOVA_TZ_ID,
+               lessonMinutes: LESSON_MINUTES,
+               reservations: nextReservations,
+               studentsById: monthIndexStudentsById,
+               groupNameById: monthIndexGroupNameById,
+               instructorMetaById: monthIndexInstructorMetaById,
+            },
+         });
+         return;
+      }
+
+      const prevSigByKey = monthIndexPayloadSigByKeyRef.current || EMPTY_MAP;
+      const removals = [];
+      const upserts = [];
+
+      for (const [entryKey, nextSig] of nextSigByKey.entries()) {
+         if (prevSigByKey.get(entryKey) === nextSig) continue;
+         const nextEntry = nextEntriesByKey.get(entryKey);
+         if (nextEntry) upserts.push(nextEntry);
+      }
+
+      for (const entryKey of prevSigByKey.keys()) {
+         if (!nextSigByKey.has(entryKey)) removals.push(entryKey);
+      }
+
+      if (!removals.length && !upserts.length) return;
+
+      monthIndexPayloadSigByKeyRef.current = new Map(nextSigByKey);
+
+      worker.postMessage({
+         type: "index-month-patch",
+         requestId,
+         payload: {
+            monthKey: monthKeyForIndex,
+            removals,
+            upserts,
+         },
+      });
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      monthKeyForIndex,
+      monthIndexSnapshot,
+      monthIndexStudentsById,
+      monthIndexGroupNameById,
+      monthIndexInstructorMetaById,
+   ]);
+
+   const monthIndexReadyForCurrentMonth = useMemo(() => {
+      if (!canUseMonthIndexWorker || isDummyMode) return true;
+      return monthIndexWorkerResult.monthKey === monthKeyForIndex;
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      monthIndexWorkerResult.monthKey,
+      monthKeyForIndex,
+   ]);
+   const uiDataReady = dataReady && monthIndexReadyForCurrentMonth;
+
+   const eventsByDayWorker = useMemo(() => {
+      if (!canUseMonthIndexWorker || isDummyMode) return EMPTY_MAP;
+      if (!monthIndexReadyForCurrentMonth) return EMPTY_MAP;
+
+      const byDay = new Map();
+      const dayEntries = Array.isArray(monthIndexWorkerResult.dayEntries)
+         ? monthIndexWorkerResult.dayEntries
+         : EMPTY_LIST;
+
+      for (const dayEntry of dayEntries) {
+         const dayTs = Number(dayEntry?.[0] || 0);
+         if (!Number.isFinite(dayTs) || dayTs <= 0) continue;
+
+         const packedEvents = Array.isArray(dayEntry?.[1]) ? dayEntry[1] : EMPTY_LIST;
+         if (!packedEvents.length) {
+            byDay.set(dayTs, EMPTY_LIST);
+            continue;
+         }
+
+         const items = [];
+         for (const item of packedEvents) {
+            const entryKey = String(item?.entryKey || "").trim();
+            const raw = entryKey
+               ? monthIndexSnapshot?.rawByEntryKey?.get?.(entryKey) || null
+               : null;
+
+            items.push({
+               id: item?.id != null ? String(item.id) : "",
+               title: item?.title || "Programare",
+               start: Number(item?.startMs || 0),
+               end: Number(item?.endMs || 0),
+               instructorId: String(item?.instructorId || "__unknown"),
+               groupId: String(item?.groupId || "__ungrouped"),
+               groupName: item?.groupName || "",
+               sector: item?.sector || "",
+               studentId: item?.studentId ?? null,
+               studentFirst: item?.studentFirst || "",
+               studentLast: item?.studentLast || "",
+               studentPhone: item?.studentPhone ?? null,
+               eventPrivateMessage: item?.eventPrivateMessage || "",
+               privateMessage: item?.privateMessage || "",
+               color: item?.color || "--default",
+               gearboxLabel: item?.gearboxLabel ?? null,
+               isConfirmed: !!item?.isConfirmed,
+               programareOrigine: null,
+               instructorPlateNorm: item?.instructorPlateNorm || "",
+               localSlotKey: item?.localSlotKey || "",
+               raw,
+               searchNorm: item?.searchNorm || "",
+               searchPhoneDigits: item?.searchPhoneDigits || "",
+            });
+         }
+
+         byDay.set(dayTs, items);
+      }
+
+      return byDay;
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      monthIndexReadyForCurrentMonth,
+      monthIndexWorkerResult.dayEntries,
+      monthIndexSnapshot,
+   ]);
+
    const mapReservationToEvent = useCallback(
       (r, startDateOverride) => {
          const start =
@@ -2202,8 +2746,12 @@ export default function CalendarPlusOptimized({
       [instructorsGroupDict, instructorMeta, studentDict],
    );
 
-   const eventsByDay = useMemo(() => {
-      if (isDummyMode) return new Map();
+   const eventsByDayFallback = useMemo(() => {
+      if (isDummyMode) return EMPTY_MAP;
+      if (canUseMonthIndexWorker && monthIndexReadyForCurrentMonth) {
+         return EMPTY_MAP;
+      }
+
       const map = new Map();
 
       (reservationsForCurrentMonth || []).forEach(({ r, start }) => {
@@ -2249,7 +2797,30 @@ export default function CalendarPlusOptimized({
          }),
       );
       return map;
-   }, [reservationsForCurrentMonth, mapReservationToEvent, isDummyMode]);
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      monthIndexReadyForCurrentMonth,
+      reservationsForCurrentMonth,
+      mapReservationToEvent,
+   ]);
+
+   const eventsByDay = useMemo(() => {
+      if (
+         canUseMonthIndexWorker &&
+         !isDummyMode &&
+         monthIndexReadyForCurrentMonth
+      ) {
+         return eventsByDayWorker;
+      }
+      return eventsByDayFallback;
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      monthIndexReadyForCurrentMonth,
+      eventsByDayWorker,
+      eventsByDayFallback,
+   ]);
 
    const SECTOR_CANON = {
       botanica: "Botanica",
@@ -2396,6 +2967,10 @@ export default function CalendarPlusOptimized({
    }, [currentDate]);
 
    const loadedDays = allAllowedDays;
+   const loadedDayTimestamps = useMemo(
+      () => loadedDays.map((d) => startOfDayTs(d)),
+      [loadedDays],
+   );
    const dayWidthForTrack = useMemo(
       () => maxColsPerGroup * px(COL_W) * zoom,
       [maxColsPerGroup, zoom],
@@ -2421,7 +2996,7 @@ export default function CalendarPlusOptimized({
       const scroller = scrollRef.current;
       if (!scroller) return;
 
-      const total = loadedDays.length;
+      const total = loadedDayTimestamps.length;
       if (!total) {
          setVisibleDays((prev) => (prev.size ? new Set() : prev));
          return;
@@ -2443,20 +3018,24 @@ export default function CalendarPlusOptimized({
       setVisibleDays((prev) => {
          const next = expandOnly ? new Set(prev) : new Set();
          for (let i = startIdx; i <= endIdx; i++) {
-            next.add(startOfDayTs(loadedDays[i]));
+            next.add(loadedDayTimestamps[i]);
          }
 
-         if (!expandOnly && !next.size && loadedDays.length) {
+         if (!expandOnly && !next.size && loadedDayTimestamps.length) {
             const maxInit = 7;
-            for (let i = 0; i < loadedDays.length && i < maxInit; i++) {
-               next.add(startOfDayTs(loadedDays[i]));
+            for (
+               let i = 0;
+               i < loadedDayTimestamps.length && i < maxInit;
+               i++
+            ) {
+               next.add(loadedDayTimestamps[i]);
             }
          }
 
          if (setsEqual(next, prev)) return prev;
          return next;
       });
-   }, [loadedDays, dayStrideForTrack]);
+   }, [loadedDayTimestamps, dayStrideForTrack]);
 
    useEffect(() => {
       if (DISABLE_DAY_LAZY_LOAD) return;
@@ -2494,6 +3073,172 @@ export default function CalendarPlusOptimized({
          return next;
       });
    }, [visibleDays]);
+
+   const scheduleHydrationPump = useCallback(() => {
+      if (hydrationRafRef.current) return;
+
+      const tick = () => {
+         hydrationRafRef.current = 0;
+         const batch = isPanInteracting
+            ? HYDRATE_DAYS_BATCH_PAN
+            : HYDRATE_DAYS_BATCH_IDLE;
+         if (batch <= 0) return;
+
+         setHydratedDays((prev) => {
+            const queue = hydrationQueueRef.current;
+            if (!queue.length) return prev;
+
+            let next = prev;
+            let changed = false;
+            let added = 0;
+
+            while (queue.length && added < batch) {
+               const ts = Number(queue.shift() || 0);
+               if (!ts || next.has(ts)) continue;
+               if (!changed) {
+                  next = new Set(prev);
+                  changed = true;
+               }
+               next.add(ts);
+               added += 1;
+            }
+
+            return changed ? next : prev;
+         });
+
+         if (hydrationQueueRef.current.length) {
+            hydrationRafRef.current = requestAnimationFrame(tick);
+         }
+      };
+
+      hydrationRafRef.current = requestAnimationFrame(tick);
+   }, [isPanInteracting]);
+
+   useEffect(() => {
+      return () => {
+         if (hydrationRafRef.current) {
+            cancelAnimationFrame(hydrationRafRef.current);
+            hydrationRafRef.current = 0;
+         }
+      };
+   }, []);
+
+   useEffect(() => {
+      if (hydrationRafRef.current) {
+         cancelAnimationFrame(hydrationRafRef.current);
+         hydrationRafRef.current = 0;
+      }
+      hydrationQueueRef.current = [];
+
+      if (DISABLE_DAY_LAZY_LOAD) {
+         const next = new Set(loadedDayTimestamps);
+         hydratedDaysRef.current = next;
+         setHydratedDays(next);
+         return;
+      }
+
+      setHydratedDays((prev) => (prev.size ? new Set() : prev));
+   }, [loadedDayTimestamps]);
+
+   const hydrationTargetDays = useMemo(() => {
+      if (DISABLE_DAY_LAZY_LOAD) return new Set(loadedDayTimestamps);
+
+      const target = new Set(visibleDays);
+      stickyVisibleDays.forEach((ts) => target.add(ts));
+      return target;
+   }, [
+      loadedDayTimestamps,
+      visibleDays,
+      stickyVisibleDays,
+   ]);
+
+   const buildHydrationPlan = useCallback(
+      (targetSet) => {
+         if (!targetSet || !targetSet.size) return [];
+
+         const total = loadedDayTimestamps.length;
+         if (!total) return [];
+
+         const stride = dayStrideForTrack > 0 ? dayStrideForTrack : 1;
+         const scroller = scrollRef.current;
+         const centerIdx = scroller
+            ? Math.max(
+                 0,
+                 Math.min(
+                    total - 1,
+                    Math.floor(
+                       ((scroller.scrollLeft || 0) + (scroller.clientWidth || 0) * 0.5) /
+                          stride,
+                    ),
+                 ),
+              )
+            : 0;
+
+         const ranked = [];
+         for (let i = 0; i < total; i++) {
+            const ts = loadedDayTimestamps[i];
+            if (!targetSet.has(ts)) continue;
+            ranked.push({ ts, idx: i, dist: Math.abs(i - centerIdx) });
+         }
+
+         ranked.sort((a, b) => {
+            if (a.dist !== b.dist) return a.dist - b.dist;
+            return a.idx - b.idx;
+         });
+         return ranked.map((x) => x.ts);
+      },
+      [loadedDayTimestamps, dayStrideForTrack],
+   );
+
+   useEffect(() => {
+      if (DISABLE_DAY_LAZY_LOAD) return;
+
+      const ordered = buildHydrationPlan(hydrationTargetDays);
+      if (!ordered.length) {
+         hydrationQueueRef.current = [];
+         return;
+      }
+
+      const hydratedNow = hydratedDaysRef.current;
+      const missing = ordered.filter((ts) => !hydratedNow.has(ts));
+      if (!missing.length) {
+         hydrationQueueRef.current = [];
+         return;
+      }
+
+      const immediateCount = isPanInteracting
+         ? HYDRATE_DAYS_IMMEDIATE_PAN
+         : HYDRATE_DAYS_IMMEDIATE_IDLE;
+      const immediate =
+         immediateCount > 0 ? missing.slice(0, immediateCount) : EMPTY_RESERVATIONS;
+      const queued = missing.slice(immediate.length);
+
+      if (immediate.length) {
+         setHydratedDays((prev) => {
+            let next = prev;
+            let changed = false;
+            for (const ts of immediate) {
+               if (next.has(ts)) continue;
+               if (!changed) {
+                  next = new Set(prev);
+                  changed = true;
+               }
+               next.add(ts);
+            }
+            return changed ? next : prev;
+         });
+      }
+
+      hydrationQueueRef.current = queued;
+      if (queued.length) {
+         scheduleHydrationPump();
+      }
+   }, [
+      buildHydrationPlan,
+      hydrationTargetDays,
+      isPanInteracting,
+      scheduleHydrationPump,
+   ]);
 
    useEffect(() => {
       const el = scrollRef.current;
@@ -2632,22 +3377,49 @@ export default function CalendarPlusOptimized({
    const blackoutKeyMapRef = useRef(new Map());
    const blackoutInFlightRef = useRef(new Set());
    const [blackoutVer, setBlackoutVer] = useState(0);
-   const blackoutBumpRafRef = useRef(0);
+   const blackoutBumpTimerRef = useRef(0);
+   const blackoutLastBumpTsRef = useRef(0);
    const blackoutPrefetchRunRef = useRef(0);
 
-   const requestBlackoutVersionBump = useCallback(() => {
-      if (blackoutBumpRafRef.current) return;
-      blackoutBumpRafRef.current = requestAnimationFrame(() => {
-         blackoutBumpRafRef.current = 0;
+   const requestBlackoutVersionBump = useCallback((force = false) => {
+      const now =
+         typeof performance !== "undefined" ? performance.now() : Date.now();
+
+      const flushNow = () => {
+         blackoutLastBumpTsRef.current = now;
          setBlackoutVer((v) => v + 1);
-      });
+      };
+
+      if (force) {
+         if (blackoutBumpTimerRef.current) {
+            clearTimeout(blackoutBumpTimerRef.current);
+            blackoutBumpTimerRef.current = 0;
+         }
+         flushNow();
+         return;
+      }
+
+      const elapsed = now - (blackoutLastBumpTsRef.current || 0);
+      if (elapsed >= BLACKOUT_BUMP_MIN_MS && !blackoutBumpTimerRef.current) {
+         flushNow();
+         return;
+      }
+
+      if (blackoutBumpTimerRef.current) return;
+      const waitMs = Math.max(12, BLACKOUT_BUMP_MIN_MS - elapsed);
+      blackoutBumpTimerRef.current = window.setTimeout(() => {
+         blackoutBumpTimerRef.current = 0;
+         blackoutLastBumpTsRef.current =
+            typeof performance !== "undefined" ? performance.now() : Date.now();
+         setBlackoutVer((v) => v + 1);
+      }, waitMs);
    }, []);
 
    useEffect(() => {
       return () => {
-         if (blackoutBumpRafRef.current) {
-            cancelAnimationFrame(blackoutBumpRafRef.current);
-            blackoutBumpRafRef.current = 0;
+         if (blackoutBumpTimerRef.current) {
+            clearTimeout(blackoutBumpTimerRef.current);
+            blackoutBumpTimerRef.current = 0;
          }
       };
    }, []);
@@ -2668,15 +3440,34 @@ export default function CalendarPlusOptimized({
 
    const monthRange = useMemo(
       () => getMonthRangeYMD(currentDate),
-      [currentMonthValue],
+      [currentDate],
    );
+
+   const monthQueryArgs = useMemo(
+      () => ({
+         date: currentDate,
+         extraFilters: extraFilters || {},
+      }),
+      [currentDate, extraFilters],
+   );
+
+   const { data: monthReservationsData, isFetching: monthReservationsFetching } =
+      useGetReservationsForMonthQuery(monthQueryArgs, {
+         refetchOnMountOrArgChange: true,
+         refetchOnReconnect: true,
+      });
+
+   useEffect(() => {
+      if (!monthReservationsData) return;
+      dispatch(setReservationsFromMonthQuery(monthReservationsData));
+   }, [dispatch, monthReservationsData]);
 
    useEffect(() => {
       blackoutKeyMapRef.current = new Map();
       blackoutInFlightRef.current = new Set();
-      setBlackoutVer((v) => v + 1);
+      requestBlackoutVersionBump(true);
       blackoutPrefetchRunRef.current += 1;
-   }, [currentMonthValue]);
+   }, [currentMonthValue, requestBlackoutVersionBump]);
    // ✅ Scroll state (X/Y) per lună — persist + restore din localStorage
    const scrollPosRef = useRef({ x: 0, y: 0 });
    const scrollSaveTimerRef = useRef(null);
@@ -2685,11 +3476,14 @@ export default function CalendarPlusOptimized({
    const restoredScrollRef = useRef({ monthKey: null, dataReady: null });
    const forceMonthScrollResetRef = useRef(false);
    const pendingMonthJumpRef = useRef(null);
-   const lastMonthFetchKeyRef = useRef("");
-   const extraFiltersKey = useMemo(
-      () => JSON.stringify(extraFilters || {}),
-      [extraFilters],
-   );
+   const initialAutoRevealRef = useRef({ monthKey: "", done: false });
+
+   useEffect(() => {
+      initialAutoRevealRef.current = {
+         monthKey: currentMonthValue,
+         done: false,
+      };
+   }, [currentMonthValue]);
 
    const persistScrollNow = useCallback(() => {
       if (orderEditOpen) return; // NU salvăm când e editorul deschis
@@ -2722,21 +3516,6 @@ export default function CalendarPlusOptimized({
       };
    }, []);
 
-   useEffect(() => {
-      const fetchKey = `${currentMonthValue}|${extraFiltersKey}`;
-      if (lastMonthFetchKeyRef.current === fetchKey) return;
-      lastMonthFetchKeyRef.current = fetchKey;
-
-      dispatch(
-         fetchReservationsForMonth({
-            date: currentDate,
-            extraFilters: extraFilters || {},
-         }),
-      ).catch((e) => {
-         console.error("[CalendarPlus] fetchReservationsForMonth error", e);
-      });
-   }, [dispatch, currentDate, currentMonthValue, extraFilters, extraFiltersKey]);
-
    // ✅ RESTORE din localStorage (o dată per lună; re-aplică când treci din dummy -> real)
    useLayoutEffect(() => {
       const el = scrollRef.current;
@@ -2764,7 +3543,25 @@ export default function CalendarPlusOptimized({
          dataReady,
       };
 
-      if (!saved) return;
+      if (!saved) {
+         const syncWithoutSavedPosition = () => {
+            const x = el.scrollLeft || 0;
+            const y = el.scrollTop || 0;
+            scrollPosRef.current = { x, y };
+            try {
+               recomputeVisibleDays({ extraOverscan: 0 });
+            } catch {}
+         };
+
+         requestAnimationFrame(() =>
+            requestAnimationFrame(syncWithoutSavedPosition),
+         );
+
+         if (!pendingMonthJumpRef.current) {
+            pendingMonthJumpRef.current = currentMonthValue;
+         }
+         return;
+      }
 
       const apply = () => {
          const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
@@ -2798,14 +3595,16 @@ export default function CalendarPlusOptimized({
    }, [isDummyMode, instructors]);
 
    const ensureBlackoutsFor = useCallback(
-      async (instId) => {
+      async (instId, options = {}) => {
+         const deferVersionBump = options?.deferVersionBump === true;
          const key = String(instId || "").trim();
-         if (!key) return;
+         if (!key) return false;
 
-         if (blackoutKeyMapRef.current.has(key)) return;
-         if (blackoutInFlightRef.current.has(key)) return;
+         if (blackoutKeyMapRef.current.has(key)) return false;
+         if (blackoutInFlightRef.current.has(key)) return false;
 
          blackoutInFlightRef.current.add(key);
+         let changed = false;
 
          try {
             let list;
@@ -2832,15 +3631,20 @@ export default function CalendarPlusOptimized({
             }
 
             blackoutKeyMapRef.current.set(key, set);
-            requestBlackoutVersionBump();
+            changed = true;
          } catch (e) {
             console.error("getInstructorBlackouts error for", key, e);
 
             blackoutKeyMapRef.current.set(key, new Set());
-            requestBlackoutVersionBump();
+            changed = true;
          } finally {
             blackoutInFlightRef.current.delete(key);
          }
+
+         if (changed && !deferVersionBump) {
+            requestBlackoutVersionBump();
+         }
+         return changed;
       },
       [monthRange, requestBlackoutVersionBump],
    );
@@ -2853,6 +3657,7 @@ export default function CalendarPlusOptimized({
    useEffect(() => {
       if (!instIdsAll.length) return;
       if (!DISABLE_DAY_LAZY_LOAD && !visibleDaysCount) return;
+      if (isPanInteracting) return;
 
       const runId = blackoutPrefetchRunRef.current + 1;
       blackoutPrefetchRunRef.current = runId;
@@ -2873,6 +3678,24 @@ export default function CalendarPlusOptimized({
          }
       };
 
+      const runPrefetchForInstructor = (iid) => {
+         Promise.resolve(
+            ensureBlackoutsFor(iid, {
+               deferVersionBump: true,
+            }),
+         )
+            .then((changed) => {
+               if (changed) requestBlackoutVersionBump();
+            })
+            .catch(() => {})
+            .finally(() => {
+               active -= 1;
+               if (cancelled || blackoutPrefetchRunRef.current !== runId) return;
+               if (index >= queue.length && active <= 0) return;
+               schedulePump();
+            });
+      };
+
       const pump = () => {
          if (cancelled || blackoutPrefetchRunRef.current !== runId) return;
          while (
@@ -2881,14 +3704,7 @@ export default function CalendarPlusOptimized({
          ) {
             const iid = queue[index++];
             active += 1;
-            Promise.resolve(ensureBlackoutsFor(iid))
-               .catch(() => {})
-               .finally(() => {
-                  active -= 1;
-                  if (cancelled || blackoutPrefetchRunRef.current !== runId) return;
-                  if (index >= queue.length && active <= 0) return;
-                  schedulePump();
-               });
+            runPrefetchForInstructor(iid);
          }
       };
 
@@ -2898,7 +3714,13 @@ export default function CalendarPlusOptimized({
          cancelled = true;
          blackoutPrefetchRunRef.current += 1;
       };
-   }, [instIdsAll, ensureBlackoutsFor, visibleDaysCount]);
+   }, [
+      instIdsAll,
+      ensureBlackoutsFor,
+      visibleDaysCount,
+      isPanInteracting,
+      requestBlackoutVersionBump,
+   ]);
 
    // ✅ BUS listener (cu blackouts-changed)
    useEffect(() => {
@@ -2956,7 +3778,7 @@ export default function CalendarPlusOptimized({
                blackoutInFlightRef.current = new Set();
             }
 
-            setBlackoutVer((v) => v + 1);
+            requestBlackoutVersionBump();
             return; // IMPORTANT: nu refetch reservations
          }
 
@@ -2976,7 +3798,11 @@ export default function CalendarPlusOptimized({
             setFocusToken((t) => t + 1);
          }
       });
-   }, [runReservationsRefresh, joinReservationSafe]);
+   }, [
+      runReservationsRefresh,
+      joinReservationSafe,
+      requestBlackoutVersionBump,
+   ]);
 
    const standardSlotsByDay = useMemo(() => {
       const map = new Map();
@@ -2986,41 +3812,40 @@ export default function CalendarPlusOptimized({
       });
       return map;
    }, [loadedDays, mkStandardSlotsForDay]);
-   const blackoutKeyMapSnapshot = useMemo(() => {
-      const m = blackoutKeyMapRef.current;
-      return m instanceof Map ? new Map(m) : new Map();
-   }, [blackoutVer]);
-
    const calendarViewModel = useMemo(
       () => ({
          eventsByDay,
          instIdsAll,
          standardSlotsByDay,
-         blackoutKeyMap: blackoutKeyMapSnapshot,
+         blackoutKeyMap: blackoutKeyMapRef.current,
          blackoutVer,
       }),
-      [
-         eventsByDay,
-         instIdsAll,
-         standardSlotsByDay,
-         blackoutVer,
-         blackoutKeyMapSnapshot,
-      ],
+      [eventsByDay, instIdsAll, standardSlotsByDay, blackoutVer],
    );
 
    useEffect(() => {
       const pendingMonthKey = pendingMonthJumpRef.current;
       if (!pendingMonthKey || pendingMonthKey !== currentMonthValue) return;
       if (reservationsLoading) return;
-
-      pendingMonthJumpRef.current = null;
+      if (!monthIndexReadyForCurrentMonth) return;
 
       const firstDayWithEvents =
          loadedDays.find((day) => {
             const dayTs = startOfDayTs(day);
             const list = eventsByDay.get(dayTs);
             return Array.isArray(list) && list.length > 0;
-         }) || loadedDays[0];
+         }) || null;
+
+      const monthItems = Array.isArray(monthReservationsData?.items)
+         ? monthReservationsData.items
+         : null;
+      const monthHasItems = Array.isArray(monthItems) && monthItems.length > 0;
+
+      // dacă backendul confirmă rezervări dar proiecția pe zi încă nu e gata,
+      // păstrăm pending și reîncercăm la următorul render.
+      if (!firstDayWithEvents && monthHasItems) return;
+
+      pendingMonthJumpRef.current = null;
 
       const targetDayTs = firstDayWithEvents
          ? startOfDayTs(firstDayWithEvents)
@@ -3031,8 +3856,72 @@ export default function CalendarPlusOptimized({
    }, [
       currentMonthValue,
       reservationsLoading,
+      monthIndexReadyForCurrentMonth,
       loadedDays,
       eventsByDay,
+      monthReservationsData,
+      centerDayTsInScrollerReliable,
+   ]);
+
+   useEffect(() => {
+      const marker = initialAutoRevealRef.current;
+      if (!marker || marker.monthKey !== currentMonthValue || marker.done) return;
+      if (reservationsLoading || monthReservationsFetching) return;
+
+      const firstDayWithEvents =
+         loadedDays.find((day) => {
+            const dayTs = startOfDayTs(day);
+            const list = eventsByDay.get(dayTs);
+            return Array.isArray(list) && list.length > 0;
+         }) || null;
+
+      const monthItems = Array.isArray(monthReservationsData?.items)
+         ? monthReservationsData.items
+         : null;
+      const monthItemsKnown = Array.isArray(monthItems);
+      const monthHasItems = monthItemsKnown && monthItems.length > 0;
+
+      if (!firstDayWithEvents) {
+         if (!monthItemsKnown) return;
+         if (monthHasItems) return;
+         marker.done = true;
+         return;
+      }
+
+      marker.done = true;
+
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+
+      const stride = Math.max(1, Number(dayStrideForTrack) || 1);
+      const viewLeft = Math.max(0, scroller.scrollLeft || 0);
+      const viewRight = viewLeft + Math.max(1, scroller.clientWidth || 0);
+      const startIdx = Math.max(0, Math.floor(viewLeft / stride));
+      const endIdx = Math.min(
+         loadedDays.length - 1,
+         Math.max(startIdx, Math.ceil(viewRight / stride)),
+      );
+
+      let viewportHasEvents = false;
+      for (let i = startIdx; i <= endIdx; i++) {
+         const ts = startOfDayTs(loadedDays[i]);
+         const list = eventsByDay.get(ts);
+         if (Array.isArray(list) && list.length > 0) {
+            viewportHasEvents = true;
+            break;
+         }
+      }
+
+      if (viewportHasEvents) return;
+      centerDayTsInScrollerReliable(startOfDayTs(firstDayWithEvents));
+   }, [
+      currentMonthValue,
+      reservationsLoading,
+      monthReservationsFetching,
+      monthReservationsData,
+      loadedDays,
+      eventsByDay,
+      dayStrideForTrack,
       centerDayTsInScrollerReliable,
    ]);
 
@@ -3108,8 +3997,53 @@ export default function CalendarPlusOptimized({
 
    const searchInputRef = useRef(null);
 
-   // Index compact pentru search/focus: un singur parcurs peste evenimente.
-   const { searchCatalog, eventIdToDayTs } = useMemo(() => {
+   const workerSearchIndex = useMemo(() => {
+      if (!canUseMonthIndexWorker || isDummyMode || !monthIndexReadyForCurrentMonth) {
+         return {
+            searchCatalog: EMPTY_LIST,
+            eventIdToDayTs: EMPTY_ID_TO_DAY_MAP,
+         };
+      }
+
+      const catalog = Array.isArray(monthIndexWorkerResult.searchCatalog)
+         ? monthIndexWorkerResult.searchCatalog
+         : EMPTY_LIST;
+      const idToDayMap = new Map();
+      const rawPairs = Array.isArray(monthIndexWorkerResult.eventIdToDayEntries)
+         ? monthIndexWorkerResult.eventIdToDayEntries
+         : EMPTY_LIST;
+
+      for (const pair of rawPairs) {
+         const eventId = pair?.[0] != null ? String(pair[0]) : "";
+         const dayTs = Number(pair?.[1] || 0);
+         if (!eventId || !Number.isFinite(dayTs)) continue;
+         if (!idToDayMap.has(eventId)) idToDayMap.set(eventId, dayTs);
+      }
+
+      return {
+         searchCatalog: catalog,
+         eventIdToDayTs: idToDayMap,
+      };
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      monthIndexReadyForCurrentMonth,
+      monthIndexWorkerResult.searchCatalog,
+      monthIndexWorkerResult.eventIdToDayEntries,
+   ]);
+
+   const fallbackSearchIndex = useMemo(() => {
+      if (
+         canUseMonthIndexWorker &&
+         !isDummyMode &&
+         monthIndexReadyForCurrentMonth
+      ) {
+         return {
+            searchCatalog: EMPTY_LIST,
+            eventIdToDayTs: EMPTY_ID_TO_DAY_MAP,
+         };
+      }
+
       const catalog = [];
       const idToDayMap = new Map();
 
@@ -3138,7 +4072,25 @@ export default function CalendarPlusOptimized({
          searchCatalog: catalog,
          eventIdToDayTs: idToDayMap,
       };
-   }, [eventsByDay]);
+   }, [
+      canUseMonthIndexWorker,
+      isDummyMode,
+      monthIndexReadyForCurrentMonth,
+      eventsByDay,
+   ]);
+
+   const searchCatalog =
+      canUseMonthIndexWorker &&
+      !isDummyMode &&
+      monthIndexReadyForCurrentMonth
+         ? workerSearchIndex.searchCatalog
+         : fallbackSearchIndex.searchCatalog;
+   const eventIdToDayTs =
+      canUseMonthIndexWorker &&
+      !isDummyMode &&
+      monthIndexReadyForCurrentMonth
+         ? workerSearchIndex.eventIdToDayTs
+         : fallbackSearchIndex.eventIdToDayTs;
 
    // când vine focusRequest (după editare)
    useEffect(() => {
@@ -3232,20 +4184,6 @@ export default function CalendarPlusOptimized({
          setCurrentDate(newDate);
          forceMonthScrollResetRef.current = true;
          pendingMonthJumpRef.current = newMonthKey;
-         const immediateFetchKey = `${newMonthKey}|${extraFiltersKey}`;
-         lastMonthFetchKeyRef.current = immediateFetchKey;
-
-         dispatch(
-            fetchReservationsForMonth({
-               date: newDate,
-               extraFilters: extraFilters || {},
-            }),
-         ).catch((e) => {
-            if (lastMonthFetchKeyRef.current === immediateFetchKey) {
-               lastMonthFetchKeyRef.current = "";
-            }
-            console.error("[CalendarPlus] fetchReservationsForMonth error", e);
-         });
 
          if (typeof onMonthChange === "function") onMonthChange(newDate);
          restoredScrollRef.current = { monthKey: null, dataReady: null };
@@ -3269,9 +4207,6 @@ export default function CalendarPlusOptimized({
          monthOptions,
          onMonthChange,
          disarmAutoScrollY,
-         dispatch,
-         extraFilters,
-         extraFiltersKey,
       ],
    );
 
@@ -3296,8 +4231,8 @@ export default function CalendarPlusOptimized({
 
    const layoutVars = useMemo(
       () => ({
-         "--event-h": `${EVENT_H * zoom}px`,
-         "--slot-h-fixed": `${SLOT_H * zoom}px`,
+         "--event-h": `${EVENT_H}px`,
+         "--slot-h-fixed": `${SLOT_H}px`,
          "--hours-col-w": `${HOURS_COL_W * zoom}px`,
          "--group-gap": `${GROUP_GAP * zoom}px`,
          "--day-header-h": `44px`,
@@ -3550,7 +4485,7 @@ export default function CalendarPlusOptimized({
    useEffect(() => {
       const handler = (e) => {
          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-            if (!dataReady) return;
+            if (!uiDataReady) return;
             e.preventDefault();
             if (searchInputRef.current) {
                searchInputRef.current.focus();
@@ -3560,7 +4495,7 @@ export default function CalendarPlusOptimized({
       };
       window.addEventListener("keydown", handler);
       return () => window.removeEventListener("keydown", handler);
-   }, [dataReady]);
+   }, [uiDataReady]);
 
    useEffect(() => {
       const scroller = scrollRef.current;
@@ -3576,7 +4511,9 @@ export default function CalendarPlusOptimized({
             const nowMs = performance.now();
             const prevScrollPos = scrollPosRef.current || { x: left, y: top };
             const deltaXSinceLastFrame = left - (Number(prevScrollPos.x) || 0);
+            const deltaYSinceLastFrame = top - (Number(prevScrollPos.y) || 0);
             const absDeltaX = Math.abs(deltaXSinceLastFrame);
+            const absDeltaY = Math.abs(deltaYSinceLastFrame);
             const isInteractingNow =
                !!suspendFlagsRef.current?.isInteracting ||
                isPanVirtualizationLockedRef.current;
@@ -3590,6 +4527,8 @@ export default function CalendarPlusOptimized({
             const isDragPhase = isInteractingNow && !isInertiaPhase;
             const isMouseDrag = isDragPhase && panPointerType === "mouse";
             const isMouseInertia = isInertiaPhase && panPointerType === "mouse";
+            const isMousePanMostlyHorizontal =
+               (isMouseDrag || isMouseInertia) && absDeltaX >= absDeltaY * 1.05;
 
             if (DISABLE_DAY_LAZY_LOAD) {
                scrollPosRef.current = { x: left, y: top };
@@ -3620,25 +4559,25 @@ export default function CalendarPlusOptimized({
                const nextHeight = el.clientHeight || 0;
                const viewportXThreshold = isInteractingNow
                   ? isMouseDrag
-                     ? 2
+                     ? 10
                      : isMouseInertia
-                       ? 8
+                       ? 10
                      : IS_LOW_SPEC_DEVICE
                        ? 20
                        : 14
                   : 1;
                const viewportYThreshold = isInteractingNow
                   ? isMouseDrag
-                     ? 2
+                     ? 12
                      : isMouseInertia
-                       ? 8
+                       ? 10
                      : IS_LOW_SPEC_DEVICE
                        ? 26
                        : 18
                   : 1;
                const minViewportUpdateMs = isInteractingNow
                   ? isMouseDrag
-                     ? 0
+                     ? 24
                      : isMouseInertia
                        ? 24
                      : INTERACTING_VIEWPORT_UPDATE_MIN_MS
@@ -3689,17 +4628,20 @@ export default function CalendarPlusOptimized({
             if (!isInteractingNow) {
                schedulePersistScroll(left, top);
             }
+            const dayStrideNow = Math.max(1, Number(dayStrideForTrack) || 1);
+            const mouseDragDaysThreshold = Math.max(
+               Math.round(dayStrideNow * (IS_LOW_SPEC_DEVICE ? 0.42 : 0.34)),
+               IS_LOW_SPEC_DEVICE ? 170 : 140,
+            );
+            const mouseInertiaDaysThreshold = Math.max(
+               Math.round(dayStrideNow * (IS_LOW_SPEC_DEVICE ? 0.34 : 0.28)),
+               IS_LOW_SPEC_DEVICE ? 130 : 110,
+            );
             const daysThreshold = isInteractingNow
                ? isMouseDrag
-                  ? Math.max(
-                       Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.22),
-                       12,
-                    )
+                  ? mouseDragDaysThreshold
                   : isMouseInertia
-                    ? Math.max(
-                         Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.35),
-                         28,
-                      )
+                    ? mouseInertiaDaysThreshold
                   : Math.max(
                        Math.round(VISIBLE_DAYS_SCROLL_THRESHOLD_PX * 0.9),
                        IS_LOW_SPEC_DEVICE ? 72 : 56,
@@ -3707,9 +4649,9 @@ export default function CalendarPlusOptimized({
                : VISIBLE_DAYS_SCROLL_THRESHOLD_PX;
             const viewportXThreshold = isInteractingNow
                ? isMouseDrag
-                  ? 3
+                  ? 20
                   : isMouseInertia
-                    ? 8
+                    ? 14
                   : Math.max(
                        Math.round(VIEWPORT_X_SCROLL_THRESHOLD_PX * 1.1),
                        IS_LOW_SPEC_DEVICE ? 96 : 80,
@@ -3717,9 +4659,9 @@ export default function CalendarPlusOptimized({
                : VIEWPORT_X_SCROLL_THRESHOLD_PX;
             const rowsThreshold = isInteractingNow
                ? isMouseDrag
-                  ? 4
+                  ? 22
                   : isMouseInertia
-                    ? 10
+                    ? 14
                   : Math.max(
                        Math.round(VISIBLE_ROWS_SCROLL_THRESHOLD_PX * 1.1),
                        IS_LOW_SPEC_DEVICE ? 96 : 80,
@@ -3733,9 +4675,9 @@ export default function CalendarPlusOptimized({
                !isInteractingNow ||
                nowMs - (lastVisibleDaysUpdateTsRef.current || 0) >=
                   (isMouseDrag
-                     ? 12
+                     ? 56
                      : isMouseInertia
-                       ? 28
+                       ? 44
                        : INTERACTING_DAYS_UPDATE_MIN_MS);
             const shouldRecomputeDays =
                crossedDaysThreshold && enoughTimeForDaysUpdate;
@@ -3743,12 +4685,25 @@ export default function CalendarPlusOptimized({
                lastVisibleDaysScrollLeftRef.current = left;
                lastVisibleDaysUpdateTsRef.current = nowMs;
                const absDx = Math.abs(deltaXSinceLastFrame);
+               const dxRatio = absDx / dayStrideNow;
                let extraOverscanBefore = 0;
                let extraOverscanAfter = 0;
+               let extraOverscan = 0;
                if (isInteractingNow && absDx > 0.1) {
-                  const leadOverscan =
-                     absDx > 560 ? (IS_LOW_SPEC_DEVICE ? 1 : 2) : 1;
-                  const trailOverscan = 0;
+                  let leadOverscan = 1;
+                  if (isMouseDrag || isMouseInertia) {
+                     if (dxRatio >= 0.65) {
+                        leadOverscan = IS_LOW_SPEC_DEVICE ? 3 : 5;
+                     } else if (dxRatio >= 0.4) {
+                        leadOverscan = IS_LOW_SPEC_DEVICE ? 2 : 4;
+                     } else {
+                        leadOverscan = IS_LOW_SPEC_DEVICE ? 2 : 3;
+                     }
+                     extraOverscan = 1;
+                  } else {
+                     leadOverscan = absDx > 560 ? (IS_LOW_SPEC_DEVICE ? 1 : 2) : 1;
+                  }
+                  const trailOverscan = isMouseDrag || isMouseInertia ? 1 : 0;
                   if (deltaXSinceLastFrame >= 0) {
                      extraOverscanAfter = leadOverscan;
                      extraOverscanBefore = trailOverscan;
@@ -3759,7 +4714,7 @@ export default function CalendarPlusOptimized({
                }
                recomputeVisibleDays({
                   expandOnly: false,
-                  extraOverscan: 0,
+                  extraOverscan,
                   extraOverscanBefore,
                   extraOverscanAfter,
                });
@@ -3785,9 +4740,11 @@ export default function CalendarPlusOptimized({
                      ? Math.round(left / viewportSnapStep) * viewportSnapStep
                      : left;
                const nextTop =
-                  viewportSnapStep > 1
-                     ? Math.round(top / viewportSnapStep) * viewportSnapStep
-                     : top;
+                  isMousePanMostlyHorizontal
+                     ? prev.top || 0
+                     : viewportSnapStep > 1
+                       ? Math.round(top / viewportSnapStep) * viewportSnapStep
+                       : top;
                const leftDelta = Math.abs((prev.left || 0) - nextLeft);
                const topDelta =
                   prevTop < 0 ? Infinity : Math.abs(nextTop - prevTop);
@@ -3799,9 +4756,9 @@ export default function CalendarPlusOptimized({
                   isInteractingNow &&
                   nowMs - (lastViewportUpdateTsRef.current || 0) <
                      (isMouseDrag
-                        ? 12
+                        ? 48
                         : isMouseInertia
-                          ? 24
+                          ? 36
                           : INTERACTING_VIEWPORT_UPDATE_MIN_MS);
 
                if (
@@ -3864,13 +4821,13 @@ export default function CalendarPlusOptimized({
             scrollLazyRafRef.current = null;
          }
       };
-   }, [recomputeVisibleDays, schedulePersistScroll]);
+   }, [recomputeVisibleDays, schedulePersistScroll, dayStrideForTrack]);
 
    return (
       <div className="dayview__wrapper">
          <div className="dayview" style={layoutVars}>
             <CalendarPlusToolbar
-               dataReady={dataReady}
+               dataReady={uiDataReady}
                searchInputRef={searchInputRef}
                searchInput={searchInput}
                onSearchInputChange={handleSearchInputChange}
@@ -3898,7 +4855,9 @@ export default function CalendarPlusOptimized({
                loadedDays={loadedDays}
                visibleDays={visibleDays}
                stickyVisibleDays={stickyVisibleDays}
+               hydratedDays={hydratedDays}
                isPanInteracting={isPanInteracting}
+               panPointerType={panInputTypeRef.current || "mouse"}
                isDummyMode={isDummyMode}
                allowedInstBySector={allowedInstBySector}
                baseMetrics={baseMetrics}

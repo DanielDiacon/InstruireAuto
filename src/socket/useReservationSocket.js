@@ -118,6 +118,8 @@ export function useReservationSocket(token, opts = {}) {
    } = opts;
 
    const socketRef = useRef(null);
+   const eventQueueRef = useRef([]);
+   const eventFlushRafRef = useRef(0);
 
    // debug: câte instanțe de hook ai în app
    const instanceIdRef = useRef(Math.random().toString(36).slice(2, 8));
@@ -183,49 +185,7 @@ export function useReservationSocket(token, opts = {}) {
 
       socketRef.current = socket;
 
-      const handleConnect = () => {
-         dbg(
-            "[WS connected]",
-            "socket.id=",
-            socket.id,
-            "instance=",
-            instanceIdRef.current
-         );
-         try {
-            handlersRef.current.onConnect?.(socket);
-         } catch (_) {}
-      };
-
-      const handleDisconnect = (reason) => {
-         dbg(
-            "[WS disconnected]",
-            "reason=",
-            reason,
-            "instance=",
-            instanceIdRef.current
-         );
-         try {
-            handlersRef.current.onDisconnect?.(reason);
-         } catch (_) {}
-      };
-
-      const handleConnectError = (err) => {
-         dbg(
-            "[WS connect_error]",
-            err?.message || err,
-            "instance=",
-            instanceIdRef.current
-         );
-      };
-
-      const handleAny = (eventName, payload) => {
-         if (!isCalendarEventName(eventName)) return;
-
-         if (typeof window !== "undefined" && window.__WS_DEBUG) {
-            // eslint-disable-next-line no-console
-            console.log("[WS ANY]", eventName, payload);
-         }
-
+      const processQueuedEvent = (eventName, payload) => {
          try {
             handlersRef.current.onAnyEvent?.({ eventName, payload });
          } catch (_) {}
@@ -266,6 +226,79 @@ export function useReservationSocket(token, opts = {}) {
          } catch (_) {}
       };
 
+      const flushEventQueue = () => {
+         eventFlushRafRef.current = 0;
+
+         const queue = eventQueueRef.current;
+         if (!queue.length) return;
+
+         const chunk = queue.splice(0, 140);
+         for (const item of chunk) {
+            processQueuedEvent(item.eventName, item.payload);
+         }
+
+         if (queue.length) {
+            eventFlushRafRef.current = window.requestAnimationFrame(flushEventQueue);
+         }
+      };
+
+      const scheduleEventFlush = () => {
+         if (eventFlushRafRef.current) return;
+         eventFlushRafRef.current = window.requestAnimationFrame(flushEventQueue);
+      };
+
+      const handleConnect = () => {
+         dbg(
+            "[WS connected]",
+            "socket.id=",
+            socket.id,
+            "instance=",
+            instanceIdRef.current
+         );
+         try {
+            handlersRef.current.onConnect?.(socket);
+         } catch (_) {}
+      };
+
+      const handleDisconnect = (reason) => {
+         dbg(
+            "[WS disconnected]",
+            "reason=",
+            reason,
+            "instance=",
+            instanceIdRef.current
+         );
+         try {
+            handlersRef.current.onDisconnect?.(reason);
+         } catch (_) {}
+      };
+
+      const handleConnectError = (err) => {
+         dbg(
+            "[WS connect_error]",
+            err?.message || err,
+            "instance=",
+            instanceIdRef.current
+         );
+      };
+
+      const handleAny = (eventName, payload) => {
+         if (!isCalendarEventName(eventName)) return;
+
+         if (typeof window !== "undefined" && window.__WS_DEBUG) {
+            // eslint-disable-next-line no-console
+            console.log("[WS ANY]", eventName);
+         }
+
+         const queue = eventQueueRef.current;
+         // Evită creșterea necontrolată în burst-uri mari.
+         if (queue.length >= 1200) {
+            queue.splice(0, queue.length - 800);
+         }
+         queue.push({ eventName, payload });
+         scheduleEventFlush();
+      };
+
       socket.on("connect", handleConnect);
       socket.on("disconnect", handleDisconnect);
       socket.on("connect_error", handleConnectError);
@@ -274,6 +307,12 @@ export function useReservationSocket(token, opts = {}) {
       if (socket.connected) handleConnect();
 
       return () => {
+         if (eventFlushRafRef.current) {
+            cancelAnimationFrame(eventFlushRafRef.current);
+            eventFlushRafRef.current = 0;
+         }
+         eventQueueRef.current = [];
+
          try {
             socket.off("connect", handleConnect);
             socket.off("disconnect", handleDisconnect);

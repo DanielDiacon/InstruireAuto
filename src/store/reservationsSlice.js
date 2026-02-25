@@ -246,6 +246,7 @@ export const fetchReservationsForMonth = createAsyncThunk(
          const range = buildMonthRange(date);
          const res = await filterReservations({
             ...(extraFilters || {}),
+            scope: "all",
             ...range,
          });
          const items = normalizeItemsFromResponse(res);
@@ -409,6 +410,17 @@ const reservationsSlice = createSlice({
       // NEW: poți seta manual range-ul activ dacă vrei
       setActiveRange(state, action) {
          state.activeRange = action.payload || null;
+      },
+      setReservationsFromMonthQuery(state, action) {
+         const { items, range } = action.payload || {};
+         state.list = Array.isArray(items) ? items : [];
+         state.loadingAll = false;
+         state.loading = false;
+         state.errorAll = null;
+         state.error = null;
+         state.lastSyncedAt = new Date().toISOString();
+         state.hydrated = true;
+         if (range) state.activeRange = range;
       },
    },
    extraReducers: (builder) => {
@@ -654,6 +666,7 @@ export const {
    resetBusy,
    clearStudentReservations,
    setActiveRange,
+   setReservationsFromMonthQuery,
    addReservationLocal,
    removeReservationLocal,
    patchReservationLocal,

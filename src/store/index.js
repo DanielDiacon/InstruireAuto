@@ -16,6 +16,7 @@ import localforage from "localforage";
 import groupsReducer from "./groupsSlice";
 import studentsReducer from "./studentsSlice";
 import reservationsReducer from "./reservationsSlice";
+import { reservationsApi } from "./reservationsApi";
 import instructorsReducer from "./instructorsSlice";
 import instructorsGroupsReducer from "./instructorsGroupSlice";
 import carsReducer from "./carsSlice";
@@ -26,6 +27,7 @@ const rootReducer = combineReducers({
    students: studentsReducer,
    instructors: instructorsReducer,
    reservations: reservationsReducer,
+   [reservationsApi.reducerPath]: reservationsApi.reducer,
    instructorsGroups: instructorsGroupsReducer,
    cars: carsReducer,
    users: usersReducer,
@@ -148,7 +150,7 @@ export const store = configureStore({
                     ignoredPaths: serializableIgnoredPaths,
                  }
                : false,
-      }),
+      }).concat(reservationsApi.middleware),
 });
 
 export const persistor = persistStore(store);

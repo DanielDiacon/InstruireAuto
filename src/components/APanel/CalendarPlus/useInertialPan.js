@@ -44,8 +44,6 @@ export default function useInertialPan(
    const panInputTypeRef = useRef("");
    const last = useRef({ x: 0, y: 0 });
    const vel = useRef({ x: 0, y: 0 });
-   const raf = useRef(null);
-   const acc = useRef({ dx: 0, dy: 0 });
    const inertiaRaf = useRef(null);
    const moveRafRef = useRef(null);
    const pendingMoveRef = useRef(null);
@@ -55,26 +53,12 @@ export default function useInertialPan(
    const pointerTypeRef = useRef("");
 
    const SLOP_PX = slopPx;
+   const MIN_PENDING_MOVE_DELTA_PX = 0.2;
 
    const ignoreRef = useRef(shouldIgnore);
    useEffect(() => {
       ignoreRef.current = shouldIgnore;
    }, [shouldIgnore]);
-
-   const scheduleApply = () => {
-      if (raf.current) return;
-      raf.current = requestAnimationFrame(() => {
-         raf.current = null;
-         const el = scrollRef.current;
-         if (!el) return;
-         if (acc.current.dx || acc.current.dy) {
-            el.scrollLeft -= acc.current.dx;
-            el.scrollTop -= acc.current.dy;
-            acc.current.dx = 0;
-            acc.current.dy = 0;
-         }
-      });
-   };
 
    // 🔑 CHEIA: urmărim scrollRef.current; când apare elementul, rulăm din nou efectul
    const targetEl = scrollRef?.current || null;
@@ -110,7 +94,7 @@ export default function useInertialPan(
          vel.current.y = 0;
          isPanning.current = false;
          isDown.current = false;
-         el.style.cursor = "grab";
+         if (el.style.cursor !== "grab") el.style.cursor = "grab";
          endInteraction({ pointerType: panInputTypeRef.current || "mouse" });
          panInputTypeRef.current = "";
       };
@@ -128,6 +112,7 @@ export default function useInertialPan(
 
          const dx = (cx - last.current.x) / (pixelScaleX || 1);
          const dy = (cy - last.current.y) / (pixelScaleY || 1);
+         if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return;
 
          if (!isPanning.current) {
             const panPointerType = String(pointerTypeRef.current || "").toLowerCase();
@@ -135,8 +120,8 @@ export default function useInertialPan(
                panPointerType === "touch"
                   ? Math.max(SLOP_PX, 10)
                   : panPointerType === "mouse"
-                    ? Math.max(2, Math.min(SLOP_PX, 4))
-                    : Math.max(2, Math.min(SLOP_PX, 5));
+                    ? Math.max(5, Math.min(SLOP_PX + 1, 9))
+                    : Math.max(4, Math.min(SLOP_PX, 7));
             if (Math.hypot(dx, dy) < dynamicSlop) return;
             isPanning.current = true;
             suppressClickOnce.current = true;
@@ -164,16 +149,17 @@ export default function useInertialPan(
 
          last.current.x = cx;
          last.current.y = cy;
-
-         acc.current.dx += dx;
-         acc.current.dy += dy;
+         if (Math.abs(dx) >= 0.01) {
+            el.scrollLeft -= dx;
+         }
+         if (Math.abs(dy) >= 0.01) {
+            el.scrollTop -= dy;
+         }
 
          const panPointerType = String(pointerTypeRef.current || "").toLowerCase();
          const blend = panPointerType === "touch" ? 0.24 : 0.2;
          vel.current.x = vel.current.x * (1 - blend) + dx * blend;
          vel.current.y = vel.current.y * (1 - blend) + dy * blend;
-
-         scheduleApply();
       };
 
       const flushPendingMove = () => {
@@ -200,7 +186,11 @@ export default function useInertialPan(
          pointerTypeRef.current = String(e.pointerType || "");
          panInputTypeRef.current = pointerTypeRef.current || "mouse";
 
-         const c = e.getCoalescedEvents?.()?.at(-1) ?? e;
+         const coalesced = e.getCoalescedEvents?.();
+         const c =
+            coalesced && coalesced.length
+               ? coalesced[coalesced.length - 1]
+               : e;
          last.current.x = c.clientX;
          last.current.y = c.clientY;
          pendingMoveRef.current = null;
@@ -209,7 +199,7 @@ export default function useInertialPan(
             moveRafRef.current = null;
          }
 
-         el.style.cursor = "grabbing";
+         if (el.style.cursor !== "grabbing") el.style.cursor = "grabbing";
 
          if (inertiaRaf.current) {
             cancelAnimationFrame(inertiaRaf.current);
@@ -223,18 +213,41 @@ export default function useInertialPan(
          if (!isDown.current) return;
          if (!isPanning.current && ignoreRef.current?.(e.target)) return;
 
-         const c = e.getCoalescedEvents?.()?.at(-1) ?? e;
+         const coalesced = e.getCoalescedEvents?.();
+         const c =
+            coalesced && coalesced.length
+               ? coalesced[coalesced.length - 1]
+               : e;
+         const nextX = c.clientX;
+         const nextY = c.clientY;
+         const pointerId = e.pointerId ?? null;
+         const pending = pendingMoveRef.current;
+         if (
+            pending &&
+            pending.pointerId === pointerId &&
+            Math.abs(nextX - pending.x) < MIN_PENDING_MOVE_DELTA_PX &&
+            Math.abs(nextY - pending.y) < MIN_PENDING_MOVE_DELTA_PX
+         ) {
+            if (
+               isPanning.current &&
+               String(pointerTypeRef.current || "").toLowerCase() === "touch" &&
+               e.cancelable
+            ) {
+               e.preventDefault();
+            }
+            return;
+         }
          pendingMoveRef.current = {
-            x: c.clientX,
-            y: c.clientY,
-            pointerId: e.pointerId ?? null,
+            x: nextX,
+            y: nextY,
+            pointerId,
             target: e.target,
          };
          if (
             isPanning.current &&
             String(pointerTypeRef.current || "").toLowerCase() === "touch"
          ) {
-            e.preventDefault();
+            if (e.cancelable) e.preventDefault();
          }
          schedulePendingMove();
       };
@@ -265,7 +278,7 @@ export default function useInertialPan(
          isDown.current = false;
          releaseCaptureIfAny();
          pointerTypeRef.current = "";
-         el.style.cursor = "grab";
+         if (el.style.cursor !== "grab") el.style.cursor = "grab";
          el.classList?.remove?.("is-panning");
 
          if (!isPanning.current) {
@@ -377,7 +390,6 @@ export default function useInertialPan(
       window.addEventListener("dvcancelinertia-all", onCancelInertia);
 
       return () => {
-         if (raf.current) cancelAnimationFrame(raf.current);
          if (inertiaRaf.current) cancelAnimationFrame(inertiaRaf.current);
          if (moveRafRef.current) cancelAnimationFrame(moveRafRef.current);
          pendingMoveRef.current = null;
@@ -399,6 +411,7 @@ export default function useInertialPan(
    }, [
       targetEl, // 👈 când se schimbă scrollRef.current, reatașăm handler-ele
       suspendFlagsRef,
+      SLOP_PX,
       pixelScaleX,
       pixelScaleY,
       slopPx,

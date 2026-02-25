@@ -221,7 +221,7 @@
    }
 
    &.is-selected-slot {
-      box-shadow: inset 0 0 0 2px var(--accent-l);
+      box-shadow: inset 0 0 0 2px var(--white-p);
    }
 }
 
@@ -269,7 +269,7 @@
    }
 
    &.is-selected-reservation {
-      border-color: var(--accent-l);
+      border-color: var(--white-p);
    }
 }
 
@@ -332,6 +332,10 @@
    content-visibility: visible !important;
    contain: layout paint !important;
    contain-intrinsic-size: auto !important;
+   opacity: 1 !important;
+   transform: none !important;
+   transition: none !important;
+   will-change: auto !important;
 }
 
 .cpdom__grid {
@@ -376,11 +380,17 @@
 
 .cpdom__sub--meta {
    margin-top: 2px;
+   display: -webkit-box;
+   -webkit-line-clamp: 2;
+   -webkit-box-orient: vertical;
+   white-space: normal;
+   line-height: 1.15;
+   max-height: 2.3em;
 }
 
 .cpdom__head-note-input {
    width: 100%;
-   min-height: 34px;
+   min-height: 44px;
    border: 0;
    border-radius: 0;
    resize: none;
@@ -405,22 +415,61 @@
    min-height: 42px;
    position: relative;
    display: block;
+   isolation: isolate;
+   transition:
+      background-color 0.16s ease,
+      box-shadow 0.16s ease;
 
    &.is-blocked {
-      background: color-mix(in srgb, var(--red-l) 26%, transparent);
+      background: var(--event-red);
+
+      .cpdom__empty,
+      .cpdom__empty--regular,
+      .cpdom__empty--closing {
+         background: var(--event-red);
+      }
    }
 
-   &.is-selected-slot {
-      box-shadow: inset 0 0 0 2px var(--accent-l);
+   &.is-selected-slot::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 5;
+      box-shadow: inset 0 0 0 2px var(--white-p);
    }
 
-   &.is-range-selected {
-      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-l) 78%, transparent);
-      background: color-mix(in srgb, var(--accent-l) 14%, transparent);
+   &.is-range-selected::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 5;
+      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--white-p) 82%, transparent);
    }
 
    &.is-draft {
       box-shadow: inset 0 0 0 1px var(--cpdom-draft-color, var(--accent-l));
+   }
+
+   &.is-draft::before {
+      content: "";
+      position: absolute;
+      inset: 2px;
+      pointer-events: none;
+      z-index: 2;
+      border: 1px dashed
+         color-mix(
+            in srgb,
+            var(--cpdom-draft-color, var(--accent-l)) 86%,
+            var(--white-p)
+         );
+      background: color-mix(
+         in srgb,
+         var(--cpdom-draft-color, var(--accent-l)) 18%,
+         transparent
+      );
+      animation: cpdom-draft-pulse 0.85s ease-in-out infinite alternate;
    }
 }
 
@@ -430,6 +479,8 @@
    display: flex;
    width: 100%;
    height: 100%;
+   position: relative;
+   z-index: 1;
 }
 
 .cpdom__empty {
@@ -455,7 +506,7 @@
 }
 
 .cpdom__blocked-label {
-   color: var(--red-l);
+   color: var(--white-p);
    font-size: 9px;
    line-height: 1.1;
    font-weight: 700;
@@ -500,13 +551,52 @@
    cursor: pointer;
    position: relative;
    padding: 3px 4px;
+   overflow: hidden;
+   transition:
+      opacity 0.16s ease,
+      transform 0.16s ease,
+      filter 0.16s ease,
+      box-shadow 0.16s ease;
+   will-change: opacity, transform;
+
+   &.is-optimistic-create {
+      opacity: 0.84;
+   }
+
+   &.is-optimistic-create::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      pointer-events: none;
+      z-index: 2;
+      border: 1px dashed color-mix(in srgb, var(--white-p) 74%, transparent);
+      background: color-mix(in srgb, var(--black-p) 36%, transparent);
+      animation: cpdom-preview-pulse 0.8s ease-in-out infinite alternate;
+   }
+
+   &.is-deleting {
+      opacity: 0.28;
+      transform: scale(0.98);
+      filter: saturate(0.35);
+      pointer-events: none;
+   }
+
+   &.is-deleting::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      pointer-events: none;
+      z-index: 2;
+      border: 1px dashed color-mix(in srgb, var(--white-s) 76%, transparent);
+      background: color-mix(in srgb, var(--black-p) 45%, transparent);
+   }
 
    &.is-selected-event {
-      box-shadow: inset 0 0 0 2px var(--accent-l);
+      box-shadow: inset 0 0 0 2px var(--white-p);
    }
 
    &.is-active-event {
-      box-shadow: inset 0 0 0 2px var(--accent-l);
+      box-shadow: inset 0 0 0 2px var(--white-p);
    }
 
    &.is-search-event {
@@ -514,15 +604,64 @@
    }
 
    &.is-cancel-origin {
-      color: var(--black-p);
+      color: var(--white-p);
 
       .cpdom__event-meta,
       .dayview__event-person-name,
       .dayview__event-phone,
       .dayview__event-note {
-         color: var(--black-p);
+         color: var(--white-p);
       }
    }
+}
+
+@keyframes cpdom-draft-pulse {
+   from {
+      opacity: 0.45;
+   }
+   to {
+      opacity: 0.88;
+   }
+}
+
+@keyframes cpdom-preview-pulse {
+   from {
+      opacity: 0.34;
+   }
+   to {
+      opacity: 0.84;
+   }
+}
+
+.cpdom__event .dayview__event-person-name,
+.cpdom__event .dayview__event-phone,
+.cpdom__event .dayview__event-note {
+   display: -webkit-box;
+   -webkit-box-orient: vertical;
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: normal;
+   overflow-wrap: anywhere;
+   word-break: break-word;
+   line-height: 1.1;
+}
+
+.cpdom__event .dayview__event-person-name {
+   color: var(--white-p);
+   font-size: 10px;
+   -webkit-line-clamp: 2;
+}
+
+.cpdom__event .dayview__event-phone {
+   color: var(--white-s);
+   font-size: 9px;
+   -webkit-line-clamp: 1;
+}
+
+.cpdom__event .dayview__event-note {
+   color: var(--white-s);
+   font-size: 9px;
+   -webkit-line-clamp: 2;
 }
 
 .cpdom__event-meta {
@@ -590,8 +729,13 @@
 .cpdom__range-box {
    position: absolute;
    pointer-events: none;
-   border: 1px dashed var(--accent-l);
-   background: color-mix(in srgb, var(--accent-l) 16%, transparent);
+   border: 1px dashed var(--white-p);
+   background: color-mix(in srgb, var(--white-p) 16%, transparent);
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--white-p) 18%, transparent);
    z-index: 50;
+}
+
+.dv-pan.is-panning .dayview__track,
+.dv-pan.is-panning .dayview__track * {
+   pointer-events: none !important;
 }

@@ -23,12 +23,17 @@ export function buildMonthRange(dateLike) {
 /** GET /api/reservations/filter — filtrează după câmpurile din swagger */
 export async function filterReservations(filters = {}) {
    const {
+      scope,
       userId,
       instructorId,
       instructorsGroupId,
       carId,
       startDateFrom,
       startDateTo,
+      from,
+      to,
+      dateFrom,
+      dateTo,
       sector,
       gearbox,
       color,
@@ -44,6 +49,8 @@ export async function filterReservations(filters = {}) {
 
    const qs = new URLSearchParams();
 
+   if (scope != null) qs.set("scope", String(scope));
+
    // id-uri
    if (userId != null) qs.set("userId", String(userId));
    if (instructorId != null) qs.set("instructorId", String(instructorId));
@@ -52,8 +59,20 @@ export async function filterReservations(filters = {}) {
    if (carId != null) qs.set("carId", String(carId));
 
    // interval dată
-   if (startDateFrom) qs.set("startDateFrom", startDateFrom);
-   if (startDateTo) qs.set("startDateTo", startDateTo);
+   const effectiveFrom = startDateFrom || from || dateFrom;
+   const effectiveTo = startDateTo || to || dateTo;
+   if (effectiveFrom) {
+      qs.set("startDateFrom", effectiveFrom);
+      // Compat backend-uri care folosesc aliasuri diferite.
+      qs.set("from", effectiveFrom);
+      qs.set("dateFrom", effectiveFrom);
+   }
+   if (effectiveTo) {
+      qs.set("startDateTo", effectiveTo);
+      // Compat backend-uri care folosesc aliasuri diferite.
+      qs.set("to", effectiveTo);
+      qs.set("dateTo", effectiveTo);
+   }
 
    // diverse filtre
    if (sector) qs.set("sector", sector);
@@ -111,6 +130,7 @@ export async function getReservationsForMonth(dateLike, extraFilters = {}) {
    const range = buildMonthRange(dateLike);
    return await filterReservations({
       ...extraFilters,
+      scope: "all",
       ...range,
    });
 }

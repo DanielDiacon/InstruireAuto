@@ -188,12 +188,13 @@
       align-items: center;
       justify-content: center;
       height: auto !important;
-      background: var(--black-p);
    }
 
    &__group-title {
       padding: 6px 12px;
       background: var(--black-p);
+      border: 1px solid var(--bd);
+      font-weight: 500;
       border-radius: 30px;
       font-size: 12px;
    }

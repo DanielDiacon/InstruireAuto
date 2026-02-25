@@ -23,7 +23,11 @@ import {
 
 import { fetchStudents } from "../../store/studentsSlice";
 import { fetchInstructors } from "../../store/instructorsSlice";
-import { fetchReservationsDelta } from "../../store/reservationsSlice";
+import {
+   fetchReservationsDelta,
+   addReservationLocal,
+   removeReservationLocal,
+} from "../../store/reservationsSlice";
 import {
    triggerCalendarRefresh,
    scheduleCalendarRefresh,
@@ -1110,7 +1114,13 @@ export default function CreateRezervation({
    }, []);
 
    const runPostCreateSync = useCallback(
-      ({ createResult, startTimeToSend, studentIdNum, instructorIdNum }) => {
+      ({
+         createResult,
+         startTimeToSend,
+         studentIdNum,
+         instructorIdNum,
+         optimisticId,
+      }) => {
          // rulează după close, ca UI-ul să rămână instant
          setTimeout(() => {
             const sync = async () => {
@@ -1189,6 +1199,11 @@ export default function CreateRezervation({
                      triggerCalendarRefresh();
                   } catch {}
                } catch {}
+               finally {
+                  if (optimisticId) {
+                     dispatch(removeReservationLocal(optimisticId));
+                  }
+               }
             };
 
             sync();
@@ -1243,6 +1258,58 @@ export default function CreateRezervation({
          ],
       };
 
+      const optimisticId = `tmp-create-popup-${Date.now()}-${Math.random()
+         .toString(36)
+         .slice(2, 8)}`;
+      const optimisticStartLocal = `${selectedDate.getFullYear()}-${String(
+         selectedDate.getMonth() + 1,
+      ).padStart(2, "0")}-${String(selectedDate.getDate()).padStart(
+         2,
+         "0",
+      )}T${selectedTime.oraStart}:00`;
+      const optimisticUser = selectedStudent
+         ? {
+              id: selectedStudent.id ?? studentIdNum,
+              firstName: selectedStudent.firstName ?? "",
+              lastName: selectedStudent.lastName ?? "",
+              phone:
+                 selectedStudent.phone ??
+                 selectedStudent.phoneNumber ??
+                 selectedStudent.mobile ??
+                 "",
+              privateMessage: selectedStudent.privateMessage ?? "",
+           }
+         : null;
+
+      dispatch(
+         addReservationLocal({
+            id: optimisticId,
+            userId: studentIdNum,
+            instructorId: instructorIdNum,
+            startTime: optimisticStartLocal,
+            sector: sector || "Botanica",
+            gearbox:
+               (gearbox || "Manual").toLowerCase() === "automat"
+                  ? "Automat"
+                  : "Manual",
+            privateMessage: privateMessage || "",
+            color: colorToken || "--black-t",
+            isFavorite: !!isFavorite,
+            isImportant: !!isImportant,
+            _optimistic: true,
+            _optimisticPending: true,
+            ...(optimisticUser ? { user: optimisticUser } : {}),
+         }),
+      );
+
+      try {
+         triggerCalendarRefresh({
+            source: "popup",
+            type: "create-optimistic",
+            forceReload: false,
+         });
+      } catch {}
+
       setSaving(true);
       closeSelf();
 
@@ -1257,9 +1324,11 @@ export default function CreateRezervation({
                startTimeToSend,
                studentIdNum,
                instructorIdNum,
+               optimisticId,
             });
          } catch (e) {
             console.error("[CreateRezervation] create failed:", e);
+            dispatch(removeReservationLocal(optimisticId));
             try {
                scheduleCalendarRefresh({
                   source: "popup",
@@ -1286,6 +1355,8 @@ export default function CreateRezervation({
       isImportant,
       pushPill,
       closeSelf,
+      dispatch,
+      selectedStudent,
       runPostCreateSync,
    ]);
 

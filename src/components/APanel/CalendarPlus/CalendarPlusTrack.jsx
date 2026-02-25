@@ -2,6 +2,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef } from "react";
 
 import DayOrderEditorModal from "./DayOrderEditorModal";
 import DayviewDomTrack from "./DayviewDomTrack";
+import { norm } from "./utils";
 import {
    computeHorizontalTileWindow,
    createHorizontalTileEngineState,
@@ -9,6 +10,11 @@ import {
 } from "../calendarTileEngine";
 
 const TRACK_DAY_GAP_PX = 10;
+const TRACK_COL_GAP_PX = 4;
+const TRACK_ROW_GAP_PX = 8;
+const TRACK_HEADER_HEIGHT_PX = 88;
+const TRACK_SLOT_HEIGHT_PX = 90;
+const TRACK_COL_EXTRA_WIDTH_PX = 10;
 const Z_BASE = 0.6;
 const IS_LOW_SPEC_DEVICE =
    typeof navigator !== "undefined" &&
@@ -19,20 +25,23 @@ const IS_LOW_SPEC_DEVICE =
 const EMPTY_EVENTS = [];
 const EMPTY_SLOTS = [];
 const EMPTY_MAP = new Map();
+const digitsOnly = (s = "") => s.toString().replace(/\D+/g, "");
 
 const startOfDayTs = (d) => {
    const x = new Date(d);
    return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 };
 
-const CalendarPlusTrack = memo(function CalendarPlusTrack({
+function CalendarPlusTrack({
    scrollRef,
    rowHeight,
    dayRefs,
    loadedDays,
    visibleDays,
    stickyVisibleDays,
+   hydratedDays,
    isPanInteracting,
+   panPointerType = "mouse",
    isDummyMode,
    allowedInstBySector,
    baseMetrics,
@@ -68,6 +77,60 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
    const blackoutKeyMap = viewModel?.blackoutKeyMap || null;
    const blackoutVer = viewModel?.blackoutVer ?? 0;
 
+   const sharedLookups = useMemo(() => {
+      const usersById = new Map();
+      const usersByPhone = new Map();
+      const usersByNormName = new Map();
+      const instructorUsersByNormName = new Map();
+      const instructorsFullById = new Map();
+      const carsByInstructorId = new Map();
+
+      for (const inst of Array.isArray(instructors) ? instructors : []) {
+         const idRaw = inst?.id;
+         if (idRaw == null) continue;
+         instructorsFullById.set(String(idRaw), inst);
+      }
+
+      for (const car of Array.isArray(cars) ? cars : []) {
+         const iidRaw = car?.instructorId ?? car?.instructor_id ?? null;
+         if (iidRaw == null) continue;
+         carsByInstructorId.set(String(iidRaw), car);
+      }
+
+      for (const user of Array.isArray(users) ? users : []) {
+         const idRaw = user?.id;
+         if (idRaw != null) {
+            usersById.set(String(idRaw), user);
+         }
+
+         const phoneKey = digitsOnly(user?.phone);
+         if (phoneKey && !usersByPhone.has(phoneKey)) {
+            usersByPhone.set(phoneKey, user);
+         }
+
+         const nameKey = norm(`${user?.firstName ?? ""} ${user?.lastName ?? ""}`);
+         if (nameKey && !usersByNormName.has(nameKey)) {
+            usersByNormName.set(nameKey, user);
+         }
+         if (
+            nameKey &&
+            String(user?.role ?? "").toUpperCase() === "INSTRUCTOR" &&
+            !instructorUsersByNormName.has(nameKey)
+         ) {
+            instructorUsersByNormName.set(nameKey, user);
+         }
+      }
+
+      return {
+         usersById,
+         usersByPhone,
+         usersByNormName,
+         instructorUsersByNormName,
+         instructorsFullById,
+         carsByInstructorId,
+      };
+   }, [users, instructors, cars]);
+
    const eventsByDayForView = useMemo(() => {
       if (!allowedInstBySector) return eventsByDay;
 
@@ -95,7 +158,11 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
       [],
    );
    const domColWidth = useMemo(
-      () => Math.max(80, Math.round(Number(baseMetrics?.colw || 0))),
+      () =>
+         Math.max(
+            80,
+            Math.round(Number(baseMetrics?.colw || 0) + TRACK_COL_EXTRA_WIDTH_PX),
+         ),
       [baseMetrics?.colw],
    );
    const domDayWidth = useMemo(
@@ -106,14 +173,14 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
    const canvasLayout = useMemo(
       () => ({
          colWidth: domColWidth,
-         colGap: 4 * zoom,
-         headerHeight: 100 * zoom,
-         slotHeight: 125 * zoom,
+         colGap: TRACK_COL_GAP_PX,
+         headerHeight: TRACK_HEADER_HEIGHT_PX,
+         slotHeight: TRACK_SLOT_HEIGHT_PX,
          colsPerRow: maxColsPerGroup,
-         rowGap: 8 * zoom,
+         rowGap: TRACK_ROW_GAP_PX,
          dayWidth: domDayWidth,
       }),
-      [domColWidth, domDayWidth, zoom, maxColsPerGroup],
+      [domColWidth, domDayWidth, maxColsPerGroup],
    );
 
    const isGroupAForDate = useCallback((dateObj) => {
@@ -156,17 +223,17 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
          viewportWidth,
          isInteracting: isPanInteracting,
          itemsPerTile: 1,
-         baseOverscanTiles: IS_LOW_SPEC_DEVICE ? 1 : 2,
-         panOverscanTiles: IS_LOW_SPEC_DEVICE ? 2 : 3,
+         baseOverscanTiles: 1,
+         panOverscanTiles: IS_LOW_SPEC_DEVICE ? 1 : 2,
          idlePrefetchTiles: 0,
          panPrefetchTiles: IS_LOW_SPEC_DEVICE
-            ? Math.max(2, Math.min(4, daysInViewport + 1))
-            : Math.max(3, Math.min(5, daysInViewport + 1)),
+            ? Math.max(1, Math.min(2, daysInViewport))
+            : Math.max(1, Math.min(3, daysInViewport)),
          maxCacheTiles: Math.max(
-            IS_LOW_SPEC_DEVICE ? 10 : 12,
-            daysInViewport + (IS_LOW_SPEC_DEVICE ? 3 : 4),
+            IS_LOW_SPEC_DEVICE ? 6 : 8,
+            daysInViewport + (IS_LOW_SPEC_DEVICE ? 1 : 2),
          ),
-         keepAliveMs: isPanInteracting ? 900 : 600,
+         keepAliveMs: isPanInteracting ? 520 : 420,
          directionEpsilonPx: 2,
       });
    }, [
@@ -245,16 +312,16 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                      const viewportRight =
                         viewportLeft + Math.max(0, Number(viewportWidth) || 0);
                      const viewportBandMargin = Math.max(
-                        Math.round((Number(domDayWidth) || 0) * 1.35),
+                        Math.round((Number(domDayWidth) || 0) * 0.75),
                         Math.round(
                            (Number(viewportWidth) || 0) *
                               (isPanInteracting
                                  ? IS_LOW_SPEC_DEVICE
-                                    ? 0.7
-                                    : 0.82
+                                    ? 0.34
+                                    : 0.42
                                  : IS_LOW_SPEC_DEVICE
-                                   ? 0.78
-                                   : 0.92),
+                                   ? 0.4
+                                   : 0.5),
                         ),
                      );
                      const inViewportBand =
@@ -270,13 +337,25 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                      const tileVisible =
                         dayTileIdx >= (dayTileWindow.activeTileStart ?? 0) &&
                         dayTileIdx <= (dayTileWindow.activeTileEnd ?? -1);
-                     const stickyAllowed = !isPanInteracting;
-                     const isVisible = forceAllDaysVisible
+                     const panType = String(panPointerType || "")
+                        .trim()
+                        .toLowerCase();
+                     const isMousePan = isPanInteracting && panType === "mouse";
+                     const useStateVisibility = !isMousePan;
+                     const isCandidateVisible = forceAllDaysVisible
                         ? tileVisible || inViewportBand
                         : tileVisible ||
                           inViewportBand ||
-                          visibleDays.has(ts) ||
-                          (stickyAllowed && stickyVisibleDays?.has?.(ts));
+                          (useStateVisibility &&
+                             (visibleDays.has(ts) ||
+                                stickyVisibleDays?.has?.(ts)));
+                     const shouldBypassHydration =
+                        isMousePan && (tileVisible || inViewportBand);
+                     const isHydrated =
+                        forceAllDaysVisible ||
+                        shouldBypassHydration ||
+                        hydratedDays?.has?.(ts);
+                     const isVisible = isCandidateVisible && isHydrated;
                      const dayInstructors = isGroupA
                         ? canvasInstructorsA
                         : canvasInstructorsB;
@@ -311,6 +390,7 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                               minWidth: `${domDayWidth}px`,
                               display: "flex",
                               flexDirection: "column",
+                              contain: "layout paint",
                            }}
                         >
                            <header className="dayview__group-header">
@@ -350,6 +430,7 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                                     cars={cars}
                                     instructorsFull={instructors}
                                     users={users}
+                                    sharedLookups={sharedLookups}
                                     zoom={zoom / Z_BASE}
                                     presenceByReservationUsers={
                                        presenceByReservationUsers
@@ -364,6 +445,7 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
                                        createDraftBySlotUsers
                                     }
                                     isPanInteracting={isPanInteracting}
+                                    panPointerType={panPointerType}
                                  />
                               ) : (
                                  <div className="dayview__skeleton" />
@@ -377,6 +459,76 @@ const CalendarPlusTrack = memo(function CalendarPlusTrack({
          </div>
       </div>
    );
-});
+}
 
-export default CalendarPlusTrack;
+function areTrackPropsEqual(prev, next) {
+   if (prev === next) return true;
+
+   if (prev.scrollRef !== next.scrollRef) return false;
+   if (prev.rowHeight !== next.rowHeight) return false;
+   if (prev.dayRefs !== next.dayRefs) return false;
+   if (prev.loadedDays !== next.loadedDays) return false;
+   if (prev.visibleDays !== next.visibleDays) return false;
+   if (prev.stickyVisibleDays !== next.stickyVisibleDays) return false;
+   if (prev.hydratedDays !== next.hydratedDays) return false;
+   if (prev.isPanInteracting !== next.isPanInteracting) return false;
+   if (prev.panPointerType !== next.panPointerType) return false;
+   if (prev.isDummyMode !== next.isDummyMode) return false;
+   if (prev.allowedInstBySector !== next.allowedInstBySector) return false;
+   if (prev.baseMetrics !== next.baseMetrics) return false;
+   if (prev.maxColsPerGroup !== next.maxColsPerGroup) return false;
+   if (prev.zoom !== next.zoom) return false;
+   if (prev.timeMarks !== next.timeMarks) return false;
+   if (prev.handleCreateFromEmpty !== next.handleCreateFromEmpty) return false;
+   if (prev.activeEventId !== next.activeEventId) return false;
+   if (prev.activeSearchEventId !== next.activeSearchEventId) return false;
+   if (prev.handleActiveEventRectChange !== next.handleActiveEventRectChange)
+      return false;
+   if (prev.cars !== next.cars) return false;
+   if (prev.instructors !== next.instructors) return false;
+   if (prev.users !== next.users) return false;
+   if (prev.canvasInstructorsA !== next.canvasInstructorsA) return false;
+   if (prev.canvasInstructorsB !== next.canvasInstructorsB) return false;
+   if (prev.viewModel !== next.viewModel) return false;
+   if (prev.forceAllDaysVisible !== next.forceAllDaysVisible) return false;
+   if (prev.createDraftBySlotUsers !== next.createDraftBySlotUsers) return false;
+   if (prev.createDraftBySlotColors !== next.createDraftBySlotColors) return false;
+   if (prev.presenceByReservationUsers !== next.presenceByReservationUsers)
+      return false;
+   if (prev.presenceByReservationColors !== next.presenceByReservationColors)
+      return false;
+   if (prev.orderEditOpen !== next.orderEditOpen) return false;
+   if (prev.onToggleOrderEdit !== next.onToggleOrderEdit) return false;
+   if (prev.onCloseOrderEdit !== next.onCloseOrderEdit) return false;
+   if (prev.onSaveOrder !== next.onSaveOrder) return false;
+
+   const panNow = !!prev.isPanInteracting || !!next.isPanInteracting;
+   const pointerType = String(next.panPointerType || prev.panPointerType || "")
+      .trim()
+      .toLowerCase();
+   const isMousePan = panNow && pointerType === "mouse";
+   const xThreshold = isMousePan ? 40 : panNow ? 14 : 1;
+   const yThreshold = isMousePan ? 56 : panNow ? 14 : 1;
+
+   const dx = Math.abs(
+      Number(prev.viewportScrollLeft || 0) - Number(next.viewportScrollLeft || 0),
+   );
+   const dy = Math.abs(
+      Number(prev.viewportScrollTop || 0) - Number(next.viewportScrollTop || 0),
+   );
+   const dw = Math.abs(
+      Number(prev.viewportWidth || 0) - Number(next.viewportWidth || 0),
+   );
+   const dh = Math.abs(
+      Number(prev.viewportHeight || 0) - Number(next.viewportHeight || 0),
+   );
+
+   if (dx >= xThreshold) return false;
+   if (dy >= yThreshold) return false;
+   if (dw > 1) return false;
+   if (dh > 1) return false;
+
+   return true;
+}
+
+export default memo(CalendarPlusTrack, areTrackPropsEqual);

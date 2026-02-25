@@ -265,7 +265,7 @@ const getInstructorIdFromReservation = (r) =>
    toPositiveIntOrNull(r?.instructorId ?? r?.instructor?.id ?? null);
 
 const getInstructorSectorFromReservation = (r) =>
-   asStrLower(r?.instructorSector ?? r?.instructor?.sector ?? "");
+   asStrLower(r?.instructorSector ?? r?.instructor?.sector ?? r?.sector ?? "");
 
 function detectBotanicaInstructorFromReservations(
    reservations = [],
@@ -293,6 +293,49 @@ function detectBotanicaInstructorFromReservations(
       }
    }
    return bestId;
+}
+
+function normalizeInstructorsList(raw) {
+   if (Array.isArray(raw)) return raw;
+   if (Array.isArray(raw?.data)) return raw.data;
+   if (Array.isArray(raw?.items)) return raw.items;
+   if (Array.isArray(raw?.results)) return raw.results;
+   if (Array.isArray(raw?.rows)) return raw.rows;
+   if (Array.isArray(raw?.instructors)) return raw.instructors;
+   if (Array.isArray(raw?.data?.items)) return raw.data.items;
+   if (Array.isArray(raw?.data?.results)) return raw.data.results;
+   return [];
+}
+
+function getInstructorSectorLabel(instr) {
+   const raw =
+      instr?.sector ??
+      instr?.sectorName ??
+      instr?.sector_name ??
+      instr?.sectorSlug ??
+      instr?.location ??
+      instr?.groupSector ??
+      instr?.branch ??
+      null;
+   return asStrLower(raw);
+}
+
+function detectBotanicaInstructorFromCatalog(
+   instructors = [],
+   candidateIds = [],
+) {
+   const allowed = new Set(normalizeInstructorIds(candidateIds));
+   if (!allowed.size) return null;
+
+   for (const instr of instructors || []) {
+      const id = toPositiveIntOrNull(instr?.id);
+      if (!id || !allowed.has(id)) continue;
+      const sec = getInstructorSectorLabel(instr);
+      if (!sec.includes("botanica")) continue;
+      return id;
+   }
+
+   return null;
 }
 
 const getStartFromReservation = (r) =>
@@ -754,12 +797,22 @@ export default function SAddProg({ onClose }) {
       () => Math.min(Number(numarLectii) || 0, remainingTo30),
       [numarLectii, remainingTo30],
    );
+   const hasCompletedFirst15Ciocana = useMemo(
+      () => isCiocanaSplitScenario && lectiiExistente >= 15,
+      [isCiocanaSplitScenario, lectiiExistente],
+   );
    const ciocanaPhase1Target = useMemo(
       () =>
          isCiocanaSplitScenario
-            ? Math.min(CIOCANA_BOTANICA_FIRST_LESSONS, requiredSubmitCount)
+            ? hasCompletedFirst15Ciocana
+               ? 0
+               : Math.min(CIOCANA_BOTANICA_FIRST_LESSONS, requiredSubmitCount)
             : 0,
-      [isCiocanaSplitScenario, requiredSubmitCount],
+      [
+         isCiocanaSplitScenario,
+         hasCompletedFirst15Ciocana,
+         requiredSubmitCount,
+      ],
    );
    const ciocanaPhase2Target = useMemo(
       () => Math.max(0, requiredSubmitCount - ciocanaPhase1Target),
@@ -1087,21 +1140,11 @@ export default function SAddProg({ onClose }) {
          if (!botanicaId && typeof InstructorsAPI?.getInstructors === "function") {
             try {
                const allInstructors = await InstructorsAPI.getInstructors();
-               const arr = Array.isArray(allInstructors)
-                  ? allInstructors
-                  : Array.isArray(allInstructors?.items)
-                    ? allInstructors.items
-                    : [];
-               botanicaId =
-                  arr
-                     .filter((i) =>
-                        allInstructorIds.includes(
-                           toPositiveIntOrNull(i?.id) || -1,
-                        ),
-                     )
-                     .find((i) => asStrLower(i?.sector).includes("botanica"))
-                     ?.id ?? null;
-               botanicaId = toPositiveIntOrNull(botanicaId);
+               const arr = normalizeInstructorsList(allInstructors);
+               botanicaId = detectBotanicaInstructorFromCatalog(
+                  arr,
+                  allInstructorIds,
+               );
             } catch {
                botanicaId = null;
             }
@@ -1288,6 +1331,29 @@ export default function SAddProg({ onClose }) {
             }
          }
 
+         if (isCiocanaSplitScenario && wantGroup) {
+            const split = await buildCiocanaSplitAvailabilityFromBusyItem(
+               busyItem,
+               entityId,
+            );
+
+            setCiocanaBotanicaInstructorId(split.botanicaId);
+            setCiocanaRemainingInstructorIds(split.remainingInstructorIds);
+            setCiocanaPhase1BusyCountByKey(split.phase1BusyMap);
+            setCiocanaPhase1BlockedCountByKey(split.phase1BlockedMap);
+            setCiocanaPhase1Capacity(split.phase1Cap);
+            setCiocanaPhase2BusyCountByKey(split.phase2BusyMap);
+            setCiocanaPhase2BlockedCountByKey(split.phase2BlockedMap);
+            setCiocanaPhase2Capacity(split.phase2Cap);
+
+            setActiveInstructorIds(split.allInstructorIds);
+            setCapacity(split.phase1Cap);
+            setServerBusyCountByKey(split.phase1BusyMap);
+            setServerBlockedCountByKey(split.phase1BlockedMap);
+            setLastLiveRefreshAt(Date.now());
+            return;
+         }
+
          // Busy map
          const reservations = Array.isArray(busyItem?.reservations)
             ? busyItem.reservations
@@ -1348,7 +1414,9 @@ export default function SAddProg({ onClose }) {
          dispatch,
          cutie,
          sector,
+         isCiocanaSplitScenario,
          clearCiocanaSplitState,
+         buildCiocanaSplitAvailabilityFromBusyItem,
          minSelectableDate,
          maxSelectableDate,
          minDay,
@@ -1367,7 +1435,9 @@ export default function SAddProg({ onClose }) {
 
       const inferredCutie = autoAnchor.cutie || "manual";
       const inferredSector =
-         autoAnchor.type === "group"
+         autoAnchor.type === "group" && lectiiExistente >= 15
+            ? "Ciocana"
+            : autoAnchor.type === "group"
             ? "Botanica"
             : autoAnchor.sector || "Botanica";
 
@@ -1403,6 +1473,7 @@ export default function SAddProg({ onClose }) {
       initLoading,
       autoEligible,
       autoAnchor,
+      lectiiExistente,
       loadAvailabilityForAnchor,
       notify,
    ]);
@@ -2347,7 +2418,7 @@ export default function SAddProg({ onClose }) {
             }
 
             const firstTarget = Math.min(
-               CIOCANA_BOTANICA_FIRST_LESSONS,
+               ciocanaPhase1Target,
                mustSubmitExactly,
             );
             const secondTarget = Math.max(0, mustSubmitExactly - firstTarget);
@@ -2395,21 +2466,23 @@ export default function SAddProg({ onClose }) {
             };
             if (canUseForUser && userIdNum) payloadPhase2.userId = userIdNum;
 
-            if (canUseForUser) await createFnForUser(payloadPhase1);
-            else await createFnSelf(payloadPhase1);
+            if (payloadPhase1.reservations.length > 0) {
+               if (canUseForUser) await createFnForUser(payloadPhase1);
+               else await createFnSelf(payloadPhase1);
 
-            // Etapa 2 pornește doar după confirmarea în DB a tuturor sloturilor din etapa 1.
-            const phase1Confirmed = await confirmSlotsPersistedForUser(
-               userIdNum,
-               phase1,
-            );
-            if (!phase1Confirmed) {
-               notify(
-                  "error",
-                  "Primele lecții (Botanica) nu au fost confirmate integral. Etapa 2 nu se trimite.",
+               // Etapa 2 pornește doar după confirmarea în DB a tuturor sloturilor din etapa 1.
+               const phase1Confirmed = await confirmSlotsPersistedForUser(
+                  userIdNum,
+                  phase1,
                );
-               setShowList(true);
-               return;
+               if (!phase1Confirmed) {
+                  notify(
+                     "error",
+                     "Primele lecții (Botanica) nu au fost confirmate integral. Etapa 2 nu se trimite.",
+                  );
+                  setShowList(true);
+                  return;
+               }
             }
 
             if (payloadPhase2.reservations.length > 0) {
@@ -2542,13 +2615,12 @@ export default function SAddProg({ onClose }) {
 
    const ciocanaPhaseStatusText = useMemo(() => {
       if (!ciocanaSplitReady) return null;
-      if (ciocanaCurrentPhase === 1) {
-         return `Etapa 1/2 (Botanica): ${ciocanaSelectedPhase1Count}/${ciocanaPhase1Target}`;
+      if (ciocanaPhase1Target > 0) {
+         return `Etapa 1/2 (Botanica): ${ciocanaSelectedPhase1Count}/${ciocanaPhase1Target} · Etapa 2/2 (Ciocana): ${ciocanaSelectedPhase2Count}/${ciocanaPhase2Target}`;
       }
       return `Etapa 2/2 (Ciocana): ${ciocanaSelectedPhase2Count}/${ciocanaPhase2Target}`;
    }, [
       ciocanaSplitReady,
-      ciocanaCurrentPhase,
       ciocanaSelectedPhase1Count,
       ciocanaSelectedPhase2Count,
       ciocanaPhase1Target,
