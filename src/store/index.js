@@ -9,7 +9,6 @@ import {
    PERSIST,
    PURGE,
    REGISTER,
-   createTransform,
 } from "redux-persist";
 import localforage from "localforage";
 
@@ -33,65 +32,6 @@ const rootReducer = combineReducers({
    users: usersReducer,
 });
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-// Prune: păstrăm în storage doar rezervările din [-30; +60] zile
-const pruneReservations = createTransform(
-   (state) => {
-      if (!state?.list) return state;
-      const now = new Date();
-      now.setHours(0, 0, 0, 0);
-      const minTs = now.getTime() - 30 * DAY_MS;
-      const maxTs = now.getTime() + 60 * DAY_MS;
-
-      const filtered = state.list.filter((r) => {
-         const sRaw =
-            r.startTime ??
-            r.start ??
-            r.startedAt ??
-            r.start_at ??
-            r.startDate ??
-            r.start_date;
-         if (!sRaw) return false;
-         const s = new Date(sRaw);
-         const ts = new Date(
-            s.getFullYear(),
-            s.getMonth(),
-            s.getDate()
-         ).getTime();
-         return ts >= minTs && ts <= maxTs;
-      });
-      return { ...state, list: filtered };
-   },
-   (state) => {
-      if (!state?.list) return state;
-      const now = new Date();
-      now.setHours(0, 0, 0, 0);
-      const minTs = now.getTime() - 30 * DAY_MS;
-      const maxTs = now.getTime() + 60 * DAY_MS;
-
-      const filtered = state.list.filter((r) => {
-         const sRaw =
-            r.startTime ??
-            r.start ??
-            r.startedAt ??
-            r.start_at ??
-            r.startDate ??
-            r.start_date;
-         if (!sRaw) return false;
-         const s = new Date(sRaw);
-         const ts = new Date(
-            s.getFullYear(),
-            s.getMonth(),
-            s.getDate()
-         ).getTime();
-         return ts >= minTs && ts <= maxTs;
-      });
-      return { ...state, list: filtered };
-   },
-   { whitelist: ["reservations"] }
-);
-
 const persistConfig = {
    key: "root",
    storage: localforage, // IndexedDB
@@ -104,7 +44,6 @@ const persistConfig = {
       "users",
    ],
    version: 1,
-   transforms: [pruneReservations],
 };
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);

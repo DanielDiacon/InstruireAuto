@@ -1,33 +1,8 @@
 import { createApi, fakeBaseQuery } from "@reduxjs/toolkit/query/react";
-import { buildMonthRange, filterReservations } from "../api/reservationsService";
-
-function normalizeItemsFromResponse(res) {
-   if (Array.isArray(res)) return res;
-   if (!res || typeof res !== "object") return [];
-
-   const candidates = [
-      res.items,
-      res.data,
-      res.results,
-      res.rows,
-      res.reservations,
-      res.list,
-   ];
-
-   for (const candidate of candidates) {
-      if (Array.isArray(candidate)) return candidate;
-      if (candidate && typeof candidate === "object") {
-         if (Array.isArray(candidate.items)) return candidate.items;
-         if (Array.isArray(candidate.data)) return candidate.data;
-         if (Array.isArray(candidate.results)) return candidate.results;
-         if (Array.isArray(candidate.rows)) return candidate.rows;
-         if (Array.isArray(candidate.reservations)) return candidate.reservations;
-         if (Array.isArray(candidate.list)) return candidate.list;
-      }
-   }
-
-   return [];
-}
+import {
+   buildMonthRange,
+   filterReservationsAllPages,
+} from "../api/reservationsService";
 
 function stableSerialize(value) {
    if (value === null || value === undefined) return "";
@@ -56,12 +31,16 @@ export const reservationsApi = createApi({
          async queryFn({ date, extraFilters } = {}) {
             try {
                const range = buildMonthRange(date);
-               const response = await filterReservations({
-                  ...(extraFilters || {}),
-                  scope: "all",
-                  ...range,
-               });
-               const items = normalizeItemsFromResponse(response);
+               const items = await filterReservationsAllPages(
+                  {
+                     ...(extraFilters || {}),
+                     scope: "all",
+                     sortBy: "startTime",
+                     sortOrder: "asc",
+                     ...range,
+                  },
+                  { pageSize: 500, maxItems: 15000 },
+               );
                return { data: { items, range } };
             } catch (error) {
                return {

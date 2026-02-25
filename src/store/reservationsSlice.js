@@ -11,7 +11,7 @@ import {
    // meta endpoint (ETag / updated_since)
    getReservationsMeta,
    // NOU: filtrare + range pe lună
-   filterReservations,
+   filterReservationsAllPages,
    buildMonthRange,
 } from "../api/reservationsService";
 
@@ -229,8 +229,20 @@ export const fetchReservationsFiltered = createAsyncThunk(
    "reservations/fetchReservationsFiltered",
    async (filters, { rejectWithValue }) => {
       try {
-         const res = await filterReservations(filters);
-         const items = normalizeItemsFromResponse(res);
+         const items = await filterReservationsAllPages(
+            {
+               ...(filters || {}),
+               sortBy: filters?.sortBy ?? "startTime",
+               sortOrder: filters?.sortOrder ?? "asc",
+            },
+            {
+               pageSize: Math.max(
+                  1,
+                  Math.trunc(Number(filters?.limit) || 500),
+               ),
+               maxItems: 15000,
+            },
+         );
          return { items, filters };
       } catch (e) {
          return rejectWithValue(e.message);
@@ -244,12 +256,16 @@ export const fetchReservationsForMonth = createAsyncThunk(
    async ({ date, extraFilters } = {}, { rejectWithValue }) => {
       try {
          const range = buildMonthRange(date);
-         const res = await filterReservations({
-            ...(extraFilters || {}),
-            scope: "all",
-            ...range,
-         });
-         const items = normalizeItemsFromResponse(res);
+         const items = await filterReservationsAllPages(
+            {
+               ...(extraFilters || {}),
+               scope: "all",
+               sortBy: "startTime",
+               sortOrder: "asc",
+               ...range,
+            },
+            { pageSize: 500, maxItems: 15000 },
+         );
          return { items, range };
       } catch (e) {
          return rejectWithValue(e.message);

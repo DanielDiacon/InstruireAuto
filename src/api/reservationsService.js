@@ -125,14 +125,263 @@ export async function filterReservations(filters = {}) {
    }
 }
 
+function normalizeFilteredItemsFromResponse(res) {
+   if (Array.isArray(res)) return res;
+   if (!res || typeof res !== "object") return [];
+
+   const candidates = [
+      res.items,
+      res.data,
+      res.results,
+      res.rows,
+      res.reservations,
+      res.list,
+   ];
+
+   for (const candidate of candidates) {
+      if (Array.isArray(candidate)) return candidate;
+      if (candidate && typeof candidate === "object") {
+         if (Array.isArray(candidate.items)) return candidate.items;
+         if (Array.isArray(candidate.data)) return candidate.data;
+         if (Array.isArray(candidate.results)) return candidate.results;
+         if (Array.isArray(candidate.rows)) return candidate.rows;
+         if (Array.isArray(candidate.reservations)) return candidate.reservations;
+         if (Array.isArray(candidate.list)) return candidate.list;
+      }
+   }
+
+   return [];
+}
+
+function readTotalCountFromFilteredResponse(res) {
+   if (!res || typeof res !== "object") return null;
+
+   const candidates = [
+      res.total,
+      res.totalCount,
+      res.count,
+      res.totalItems,
+      res.pagination?.total,
+      res.pagination?.count,
+      res.meta?.total,
+      res.meta?.count,
+      res.data?.total,
+      res.data?.count,
+   ];
+
+   for (const raw of candidates) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= 0) return n;
+   }
+   return null;
+}
+
+function reservationRowKey(row, indexFallback = 0) {
+   if (!row || typeof row !== "object") return `idx:${indexFallback}`;
+
+   const id =
+      row.id ??
+      row._id ??
+      row.reservationId ??
+      row.reservation_id ??
+      row.uuid ??
+      row.reservation?.id ??
+      null;
+   if (id != null) return `id:${String(id)}`;
+
+   const start =
+      row.startTime ??
+      row.start ??
+      row.start_time ??
+      row.dateTime ??
+      row.datetime ??
+      row.date ??
+      row.reservation?.startTime ??
+      row.reservation?.start ??
+      row.reservation?.dateTime ??
+      "";
+   const instructorId =
+      row.instructorId ??
+      row.instructor_id ??
+      row.instructor?.id ??
+      row.reservation?.instructorId ??
+      row.reservation?.instructor_id ??
+      row.reservation?.instructor?.id ??
+      "";
+   const userId =
+      row.userId ??
+      row.user_id ??
+      row.studentId ??
+      row.student_id ??
+      row.user?.id ??
+      row.student?.id ??
+      row.reservation?.userId ??
+      row.reservation?.user_id ??
+      row.reservation?.studentId ??
+      row.reservation?.student_id ??
+      "";
+
+   const fallbackSig = `${String(start)}|${String(instructorId)}|${String(
+      userId,
+   )}`;
+   if (fallbackSig.replace(/\|/g, "").trim()) return `sig:${fallbackSig}`;
+   return `idx:${indexFallback}`;
+}
+
+/**
+ * Iterează prin pagini pentru /reservations/filter și întoarce lista agregată.
+ * Util când backend-ul are limită implicită și în producție luna are multe rânduri.
+ */
+export async function filterReservationsAllPages(
+   filters = {},
+   { pageSize = 500, maxPages = null, maxItems = 15000 } = {},
+) {
+   const DAY_MS = 24 * 60 * 60 * 1000;
+   const safePageSize = Math.max(1, Math.trunc(Number(pageSize) || 500));
+   const safeMaxItems = Math.max(1, Math.trunc(Number(maxItems) || 15000));
+   const pagesByItemsCap = Math.max(1, Math.ceil(safeMaxItems / safePageSize));
+   const safeMaxPages = maxPages != null
+      ? Math.max(1, Math.min(Math.trunc(Number(maxPages) || 1), pagesByItemsCap))
+      : pagesByItemsCap;
+
+   const base = { ...(filters || {}) };
+   const startSkip = Math.max(0, Math.trunc(Number(base.skip) || 0));
+   delete base.skip;
+   delete base.limit;
+
+   const byKey = new Map();
+   const pageSignatures = new Set();
+   let skip = startSkip;
+
+   const rangeFromRaw =
+      base.startDateFrom ?? base.from ?? base.dateFrom ?? null;
+   const rangeToRaw = base.startDateTo ?? base.to ?? base.dateTo ?? null;
+   const rangeFrom = rangeFromRaw ? new Date(rangeFromRaw) : null;
+   const rangeTo = rangeToRaw ? new Date(rangeToRaw) : null;
+   const hasValidRange =
+      rangeFrom instanceof Date &&
+      !Number.isNaN(rangeFrom.getTime()) &&
+      rangeTo instanceof Date &&
+      !Number.isNaN(rangeTo.getTime()) &&
+      rangeTo.getTime() >= rangeFrom.getTime();
+
+   const fetchByDayFallback = async () => {
+      if (!hasValidRange) return null;
+
+      const outByKey = new Map();
+      let dayStartMs = Date.UTC(
+         rangeFrom.getUTCFullYear(),
+         rangeFrom.getUTCMonth(),
+         rangeFrom.getUTCDate(),
+         0,
+         0,
+         0,
+         0,
+      );
+      const dayEndBoundMs = Date.UTC(
+         rangeTo.getUTCFullYear(),
+         rangeTo.getUTCMonth(),
+         rangeTo.getUTCDate(),
+         23,
+         59,
+         59,
+         999,
+      );
+
+      let guard = 0;
+      while (dayStartMs <= dayEndBoundMs && guard < 124) {
+         const fromMs = Math.max(dayStartMs, rangeFrom.getTime());
+         const toMs = Math.min(dayStartMs + DAY_MS - 1, rangeTo.getTime());
+
+         const fromIso = new Date(fromMs).toISOString();
+         const toIso = new Date(toMs).toISOString();
+
+         const response = await filterReservations({
+            ...base,
+            startDateFrom: fromIso,
+            from: fromIso,
+            dateFrom: fromIso,
+            startDateTo: toIso,
+            to: toIso,
+            dateTo: toIso,
+            limit: safePageSize,
+            skip: 0,
+         });
+
+         const items = normalizeFilteredItemsFromResponse(response);
+         for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            const key = reservationRowKey(row, dayStartMs + i);
+            const prev = outByKey.get(key);
+            outByKey.set(key, prev ? { ...prev, ...row } : row);
+            if (outByKey.size >= safeMaxItems) {
+               return Array.from(outByKey.values());
+            }
+         }
+
+         dayStartMs += DAY_MS;
+         guard += 1;
+      }
+
+      return Array.from(outByKey.values());
+   };
+
+   for (let page = 0; page < safeMaxPages; page++) {
+      const response = await filterReservations({
+         ...base,
+         limit: safePageSize,
+         skip,
+      });
+
+      const items = normalizeFilteredItemsFromResponse(response);
+      if (!items.length) break;
+
+      const firstKey = reservationRowKey(items[0], skip);
+      const lastKey = reservationRowKey(items[items.length - 1], skip + items.length);
+      const pageSignature = `${items.length}|${firstKey}|${lastKey}`;
+      if (pageSignatures.has(pageSignature)) {
+         const fallbackItems = await fetchByDayFallback();
+         if (Array.isArray(fallbackItems) && fallbackItems.length) {
+            return fallbackItems;
+         }
+         break;
+      }
+      pageSignatures.add(pageSignature);
+
+      for (let i = 0; i < items.length; i++) {
+         const row = items[i];
+         const key = reservationRowKey(row, skip + i);
+         const prev = byKey.get(key);
+         byKey.set(key, prev ? { ...prev, ...row } : row);
+         if (byKey.size >= safeMaxItems) {
+            return Array.from(byKey.values());
+         }
+      }
+
+      const total = readTotalCountFromFilteredResponse(response);
+      if (Number.isFinite(total) && byKey.size >= total) break;
+      if (byKey.size >= safeMaxItems) break;
+      if (items.length < safePageSize) break;
+
+      skip += items.length;
+   }
+
+   return Array.from(byKey.values());
+}
+
 /** Scurtătură: rezervări doar pentru o anumită lună */
 export async function getReservationsForMonth(dateLike, extraFilters = {}) {
    const range = buildMonthRange(dateLike);
-   return await filterReservations({
-      ...extraFilters,
-      scope: "all",
-      ...range,
-   });
+   return await filterReservationsAllPages(
+      {
+         ...extraFilters,
+         scope: "all",
+         sortBy: "startTime",
+         sortOrder: "asc",
+         ...range,
+      },
+      { pageSize: 500, maxItems: 15000 },
+   );
 }
 /**
  * Întoarce { changed:boolean, etag?:string, serverTime?:string }
