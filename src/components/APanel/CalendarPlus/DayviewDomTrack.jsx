@@ -611,6 +611,11 @@ function buildEffectiveInstructorsLayout(instructors) {
 
    for (const inst of list) {
       if (!inst) continue;
+      if (isGapInstructor(inst)) {
+         real.push({ ...inst, _isGapColumn: true, _padType: "gap" });
+         continue;
+      }
+
       const padType = detectPadType(inst);
       if (!padType) {
          real.push(inst);
@@ -620,6 +625,10 @@ function buildEffectiveInstructorsLayout(instructors) {
       if (padType === "cancel") cancelPads.push({ ...inst, _padType: "cancel" });
       else if (padType === "lateral")
          lateralPads.push({ ...inst, _padType: "lateral" });
+      else if (padType === "wait")
+         waitPads.push({ ...inst, _padType: "wait" });
+      else if (padType === "gap")
+         real.push({ ...inst, _isGapColumn: true, _padType: "gap" });
       else waitPads.push({ ...inst, _padType: "wait" });
    }
 

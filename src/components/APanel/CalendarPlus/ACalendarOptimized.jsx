@@ -74,6 +74,7 @@ const HYDRATE_DAYS_BATCH_IDLE = IS_LOW_SPEC_DEVICE ? 1 : 2;
 const HYDRATE_DAYS_BATCH_PAN = IS_LOW_SPEC_DEVICE ? 1 : 2;
 const HYDRATE_DAYS_IMMEDIATE_IDLE = IS_LOW_SPEC_DEVICE ? 2 : 3;
 const HYDRATE_DAYS_IMMEDIATE_PAN = IS_LOW_SPEC_DEVICE ? 2 : 3;
+const MAX_ORDER_POSITION = 80;
 
 function safeReadScrollStateMap() {
    if (typeof window === "undefined") return {};
@@ -4261,36 +4262,7 @@ export default function CalendarPlusOptimized({
             return true;
          });
 
-         const getOrderPart = (inst) => {
-            const id = String(inst?.id || "");
-            const meta = instructorMeta.get(id) || {};
-            const raw =
-               meta?.order ??
-               inst?.order ??
-               inst?.uiOrder ??
-               inst?.sortOrder ??
-               inst?.position ??
-               null;
-
-            const { a, b } = parseDualOrder(raw);
-            return mode === "B" ? b : a;
-         };
-
-         const nameKey = (inst) => safeFullName(inst).toLowerCase();
-
-         const sorted = list.slice().sort((a, b) => {
-            const ao = getOrderPart(a);
-            const bo = getOrderPart(b);
-            if (ao !== bo) return ao - bo;
-
-            const an = nameKey(a);
-            const bn = nameKey(b);
-            if (an !== bn) return an < bn ? -1 : 1;
-
-            return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
-         });
-
-         const mapped = sorted.map((i) => {
+         const mapped = list.map((i) => {
             const id = String(i.id || "");
             const meta = instructorMeta.get(id) || {};
             const full = safeFullName(i);
@@ -4309,9 +4281,58 @@ export default function CalendarPlusOptimized({
                id,
                name: full || "Necunoscut",
                sectorSlug: meta?.sectorNorm || null,
-               order: mode === "B" ? b : a, // ✅ pt debug dacă vrei
+               order: mode === "B" ? b : a,
             };
          });
+
+         const sorted = mapped.slice().sort((a, b) => {
+            const ao = Number.isFinite(a?.order) ? a.order : Number.POSITIVE_INFINITY;
+            const bo = Number.isFinite(b?.order) ? b.order : Number.POSITIVE_INFINITY;
+            if (ao !== bo) return ao - bo;
+
+            const an = String(a?.name || "").toLowerCase();
+            const bn = String(b?.name || "").toLowerCase();
+            if (an !== bn) return an < bn ? -1 : 1;
+
+            return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
+         });
+
+         // Păstrăm pozițiile absolute din order (1-based); sloturile lipsă rămân goluri.
+         const positioned = [];
+         for (const inst of sorted) {
+            const orderRaw = Number(inst?.order);
+            const order = Number.isFinite(orderRaw)
+               ? Math.max(1, Math.min(MAX_ORDER_POSITION, Math.trunc(orderRaw)))
+               : null;
+
+            if (!order) {
+               positioned.push(inst);
+               continue;
+            }
+
+            const desiredIndex = order - 1;
+            while (positioned.length < desiredIndex) positioned.push(null);
+
+            if (positioned.length === desiredIndex) {
+               positioned.push(inst);
+            } else if (positioned[desiredIndex] == null) {
+               positioned[desiredIndex] = inst;
+            } else {
+               // Coliziune: păstrăm instructorul nou, deplasând restul la dreapta.
+               positioned.splice(desiredIndex, 0, inst);
+            }
+         }
+
+         const mappedWithGaps = positioned.map(
+            (inst, idx) =>
+               inst || {
+                  id: `__gapcol_${mode}_${idx + 1}`,
+                  name: "",
+                  sectorSlug: null,
+                  _isGapColumn: true,
+                  _padType: "gap",
+               },
+         );
 
          const padCols = [
             { id: "__pad_1", name: "Anulari", sectorSlug: null },
@@ -4320,7 +4341,7 @@ export default function CalendarPlusOptimized({
             { id: "__pad_4", name: "Laterală", sectorSlug: null },
          ];
 
-         return [...padCols, ...mapped];
+         return [...padCols, ...mappedWithGaps];
       },
       [isDummyMode, instructors, allowedInstBySector, instructorMeta],
    );
