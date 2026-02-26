@@ -836,6 +836,9 @@ export default function CalendarPlusOptimized({
       const activeId = activeEventIdRef.current;
       const gate = autoScrollYOnceRef.current;
       const tries = Number(gate?.tries || 0);
+      const gateKey = String(gate?.key || "");
+      const preferTopAlignY =
+         gateKey.startsWith("search:") || gateKey.startsWith("search-init:");
 
       if (!activeId || !gate || gate.done) return;
       if (gate.eventId && String(gate.eventId) !== String(activeId)) return;
@@ -869,7 +872,23 @@ export default function CalendarPlusOptimized({
          else if (rightX != null) centerX = rightX;
       }
 
-      const stickyTopInset = 52;
+      const measuredHeaderHeight = (() => {
+         const headerEl = scroller.querySelector?.(".dayview__group-header");
+         const rectH = Number(headerEl?.getBoundingClientRect?.().height || 0);
+         if (Number.isFinite(rectH) && rectH > 0) return rectH;
+         const styleObj =
+            typeof window !== "undefined" && typeof window.getComputedStyle === "function"
+               ? window.getComputedStyle(scroller)
+               : null;
+         const cssRaw = Number(
+            parseFloat(
+               String(styleObj?.getPropertyValue?.("--day-header-h") || ""),
+            ),
+         );
+         return Number.isFinite(cssRaw) && cssRaw > 0 ? cssRaw : 0;
+      })();
+
+      const stickyTopInset = measuredHeaderHeight;
       const viewportPaddingY = 8;
       const viewportPaddingX = 14;
       const visibleTop = scRect.top + stickyTopInset + viewportPaddingY;
@@ -893,10 +912,15 @@ export default function CalendarPlusOptimized({
       }
 
       let wantedTop = scroller.scrollTop;
-      if (topY != null && topY < visibleTop) {
-         wantedTop += topY - visibleTop - viewportPaddingY;
-      } else if (bottomY != null && bottomY > visibleBottom) {
-         wantedTop += bottomY - visibleBottom + viewportPaddingY;
+      if (!isYVisible) {
+         if (preferTopAlignY && topY != null) {
+            const targetTopAnchor = visibleTop + viewportPaddingY;
+            wantedTop = scroller.scrollTop + (topY - targetTopAnchor);
+         } else {
+            const visibleCenterY =
+               visibleTop + Math.max(1, visibleBottom - visibleTop) / 2;
+            wantedTop = scroller.scrollTop + (centerY - visibleCenterY);
+         }
       } else {
          const centerRel = centerY - scRect.top;
          wantedTop = scroller.scrollTop + (centerRel - scHeight / 2);
@@ -4385,6 +4409,7 @@ export default function CalendarPlusOptimized({
          const qDigits = digitsOnly(raw);
 
          const hits = [];
+         const seenHitKeys = new Set();
 
          for (const item of searchCatalog) {
             const text = item.searchNorm;
@@ -4396,9 +4421,17 @@ export default function CalendarPlusOptimized({
                matched = true;
 
             if (matched) {
+               const eventId = String(item.eventId || "").trim();
+               const dayTs = Number(item.dayTs || 0);
+               if (!eventId || !Number.isFinite(dayTs)) continue;
+
+               const hitKey = `${dayTs}|${eventId}`;
+               if (seenHitKeys.has(hitKey)) continue;
+               seenHitKeys.add(hitKey);
+
                hits.push({
-                  dayTs: item.dayTs,
-                  eventId: item.eventId,
+                  dayTs,
+                  eventId,
                });
             }
          }

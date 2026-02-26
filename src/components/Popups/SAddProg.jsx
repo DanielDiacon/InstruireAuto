@@ -247,8 +247,18 @@ function normalizeInstructorIds(ids) {
 const PRIVILEGED_FOR_USER_ROLES = new Set(["ADMIN", "MANAGER", "INSTRUCTOR"]);
 
 function userCanUseForUserEndpoint(userLike) {
-   const role = asStr(userLike?.role).trim().toUpperCase();
-   return PRIVILEGED_FOR_USER_ROLES.has(role);
+   const roleCandidates = [];
+
+   if (userLike?.role != null) roleCandidates.push(userLike.role);
+   if (Array.isArray(userLike?.roles)) roleCandidates.push(...userLike.roles);
+   if (Array.isArray(userLike?.authorities))
+      roleCandidates.push(...userLike.authorities);
+
+   for (const raw of roleCandidates) {
+      const role = asStr(raw).trim().toUpperCase().replace(/^ROLE_/, "");
+      if (PRIVILEGED_FOR_USER_ROLES.has(role)) return true;
+   }
+   return false;
 }
 
 function getUserIdFromContext(userLike) {
@@ -263,6 +273,11 @@ function getUserIdFromContext(userLike) {
 
 const getInstructorIdFromReservation = (r) =>
    toPositiveIntOrNull(r?.instructorId ?? r?.instructor?.id ?? null);
+
+const getReservationIdFromReservation = (r) =>
+   toPositiveIntOrNull(
+      r?.id ?? r?._id ?? r?.reservationId ?? r?.reservation?.id ?? null,
+   );
 
 const getInstructorSectorFromReservation = (r) =>
    asStrLower(r?.instructorSector ?? r?.instructor?.sector ?? r?.sector ?? "");
@@ -339,12 +354,167 @@ function detectBotanicaInstructorFromCatalog(
 }
 
 const getStartFromReservation = (r) =>
-   r?.startTime ?? r?.start ?? r?.dateTime ?? r?.datetime ?? r?.begin ?? null;
+   r?.startTime ??
+   r?.start ??
+   r?.dateTime ??
+   r?.datetime ??
+   r?.begin ??
+   r?.reservation?.startTime ??
+   r?.reservation?.start ??
+   r?.reservation?.dateTime ??
+   r?.reservation?.datetime ??
+   r?.reservation?.begin ??
+   null;
 
 function sortIsoAsc(arr) {
    return (Array.isArray(arr) ? arr : [])
       .slice()
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+const SERVER_ERROR_ISO_RE =
+   /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})/g;
+
+function normalizeIsoOrNull(value) {
+   const ms = new Date(value).getTime();
+   if (!Number.isFinite(ms)) return null;
+   return new Date(ms).toISOString();
+}
+
+function parseEmbeddedJsonFromString(text) {
+   if (typeof text !== "string") return null;
+   const start = text.indexOf("{");
+   const end = text.lastIndexOf("}");
+   if (start < 0 || end <= start) return null;
+   const snippet = text.slice(start, end + 1);
+   try {
+      return JSON.parse(snippet);
+   } catch {
+      return null;
+   }
+}
+
+function collectErrorTextParts(errorLike) {
+   const out = [];
+   const seenObj = new Set();
+
+   const pushText = (value) => {
+      if (typeof value !== "string") return;
+      const text = value.trim();
+      if (!text) return;
+      out.push(text);
+   };
+
+   const walk = (value, depth = 0) => {
+      if (depth > 4 || value == null) return;
+      if (typeof value === "string") {
+         pushText(value);
+         const embedded = parseEmbeddedJsonFromString(value);
+         if (embedded) walk(embedded, depth + 1);
+         return;
+      }
+      if (typeof value === "number" || typeof value === "boolean") {
+         pushText(String(value));
+         return;
+      }
+      if (Array.isArray(value)) {
+         for (const x of value) walk(x, depth + 1);
+         return;
+      }
+      if (typeof value === "object") {
+         if (seenObj.has(value)) return;
+         seenObj.add(value);
+         for (const k of [
+            "message",
+            "error",
+            "errors",
+            "detail",
+            "details",
+            "data",
+            "response",
+            "body",
+         ]) {
+            if (k in value) walk(value[k], depth + 1);
+         }
+      }
+   };
+
+   walk(errorLike);
+   return Array.from(new Set(out));
+}
+
+function extractServerConflictSelectedDates(errorLike, selectedIsoDates = []) {
+   const texts = collectErrorTextParts(errorLike);
+   if (!texts.length || !Array.isArray(selectedIsoDates) || !selectedIsoDates.length)
+      return [];
+
+   const conflictIsoSet = new Set();
+   for (const text of texts) {
+      const matches = text.match(SERVER_ERROR_ISO_RE) || [];
+      for (const rawIso of matches) {
+         const iso = normalizeIsoOrNull(rawIso);
+         if (iso) conflictIsoSet.add(iso);
+      }
+   }
+   if (!conflictIsoSet.size) return [];
+
+   const conflictLocalKeySet = new Set();
+   for (const iso of conflictIsoSet) {
+      conflictLocalKeySet.add(localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ));
+   }
+
+   const out = [];
+   const seen = new Set();
+   for (const raw of selectedIsoDates) {
+      const normalized = normalizeIsoOrNull(raw);
+      if (!normalized) continue;
+      const localKey = localKeyFromTs(
+         new Date(normalized).getTime(),
+         MOLDOVA_TZ,
+      );
+      if (
+         !conflictIsoSet.has(normalized) &&
+         !conflictLocalKeySet.has(localKey)
+      ) {
+         continue;
+      }
+      if (seen.has(raw)) continue;
+      seen.add(raw);
+      out.push(raw);
+   }
+
+   return out;
+}
+
+function normalizeCreatedReservationsFromCreateResponse(raw) {
+   const base = raw?.data ?? raw;
+   if (!base) return [];
+   if (Array.isArray(base)) return base;
+
+   const directArrays = [
+      base?.reservations,
+      base?.items,
+      base?.results,
+      base?.rows,
+      base?.created,
+      base?.data,
+   ];
+   for (const arr of directArrays) {
+      if (Array.isArray(arr)) return arr;
+   }
+
+   const nestedObjects = [
+      base?.reservation,
+      base?.item,
+      base?.result,
+      base?.createdReservation,
+   ];
+   for (const obj of nestedObjects) {
+      if (obj && typeof obj === "object") return [obj];
+   }
+
+   if (base && typeof base === "object") return [base];
+   return [];
 }
 
 /* ================= busy item picking (CRITICAL FIX) ================= */
@@ -845,14 +1015,40 @@ export default function SAddProg({ onClose }) {
       return set;
    }, [userReservations]);
 
+   // Când revii la completarea Poligonului, ascundem temporar lecțiile Oras
+   // din disponibilitate, ca utilizatorul să poată alege liber noua lecție Poligon.
+   const ciocanaBackfillPhase1Mode = useMemo(() => {
+      if (!isCiocanaSplitScenario || ciocanaPhase1Target <= 0) return false;
+      let phase1Count = 0;
+      let hasPhase2 = false;
+      for (const iso of selectedDates || []) {
+         const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+         const phase = ciocanaPhaseByKeyRef.current.get(key);
+         if (phase === 1) phase1Count += 1;
+         if (phase === 2) hasPhase2 = true;
+      }
+      return hasPhase2 && phase1Count < ciocanaPhase1Target;
+   }, [isCiocanaSplitScenario, ciocanaPhase1Target, selectedDates]);
+
+   const selectedDatesForAvailability = useMemo(() => {
+      if (!ciocanaBackfillPhase1Mode) return selectedDates;
+      const filtered = [];
+      for (const iso of selectedDates || []) {
+         const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+         if (ciocanaPhaseByKeyRef.current.get(key) === 2) continue;
+         filtered.push(iso);
+      }
+      return filtered;
+   }, [selectedDates, ciocanaBackfillPhase1Mode]);
+
    // zile selectate în popup (1/zi)
    const selectedBookedDaySet = useMemo(() => {
       const set = new Set();
-      for (const iso of selectedDates || []) {
+      for (const iso of selectedDatesForAvailability || []) {
          set.add(localDateStrTZ(new Date(iso), MOLDOVA_TZ));
       }
       return set;
-   }, [selectedDates]);
+   }, [selectedDatesForAvailability]);
 
    // union (DB + popup)
    const bookedDaySet = useMemo(() => {
@@ -864,20 +1060,20 @@ export default function SAddProg({ onClose }) {
    // selected key set
    const selectedKeySet = useMemo(() => {
       const set = new Set();
-      for (const iso of selectedDates)
+      for (const iso of selectedDatesForAvailability)
          set.add(localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ));
       return set;
-   }, [selectedDates]);
+   }, [selectedDatesForAvailability]);
 
    // selectedCountByKey
    const selectedCountByKey = useMemo(() => {
       const map = new Map();
-      for (const iso of selectedDates) {
+      for (const iso of selectedDatesForAvailability) {
          const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
          map.set(key, (map.get(key) || 0) + 1);
       }
       return map;
-   }, [selectedDates]);
+   }, [selectedDatesForAvailability]);
 
    useEffect(() => {
       if (!isCiocanaSplitScenario) {
@@ -933,6 +1129,61 @@ export default function SAddProg({ onClose }) {
       if (!ciocanaSplitReady) return 0;
       return ciocanaSelectedPhase1Count < ciocanaPhase1Target ? 1 : 2;
    }, [ciocanaSplitReady, ciocanaSelectedPhase1Count, ciocanaPhase1Target]);
+
+   // În etapa 2 (Oras) nu permitem sloturi înapoi în timp:
+   // tot ce este <= ultima lecție selectată rămâne blocat.
+   const ciocanaPhase2ChronologyLockTs = useMemo(() => {
+      if (!ciocanaSplitReady) return null;
+      if (ciocanaCurrentPhase !== 2) return null;
+
+      let maxTs = null;
+
+      for (const iso of selectedDates) {
+         const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+         const phase = ciocanaPhaseByKeyRef.current.get(key);
+         if (phase !== 1 && phase !== 2) continue;
+
+         const ts = new Date(iso).getTime();
+         if (!Number.isFinite(ts)) continue;
+         if (maxTs == null || ts > maxTs) maxTs = ts;
+      }
+
+      // fallback util pentru etapa 2 pornită în popup nou (fără selecții în sesiunea curentă)
+      if (maxTs == null && ciocanaPhase1Target === 0) {
+         for (const r of userReservations || []) {
+            const st = getStartFromReservation(r);
+            if (!st) continue;
+            const ts = new Date(st).getTime();
+            if (!Number.isFinite(ts)) continue;
+            if (maxTs == null || ts > maxTs) maxTs = ts;
+         }
+      }
+
+      return Number.isFinite(maxTs) ? maxTs : null;
+   }, [
+      ciocanaSplitReady,
+      ciocanaCurrentPhase,
+      selectedDates,
+      ciocanaPhase1Target,
+      userReservations,
+   ]);
+
+   const ciocanaPhase2ChronologyLockDay = useMemo(() => {
+      if (!Number.isFinite(ciocanaPhase2ChronologyLockTs)) return null;
+      return localDateStrTZ(new Date(ciocanaPhase2ChronologyLockTs), MOLDOVA_TZ);
+   }, [ciocanaPhase2ChronologyLockTs]);
+
+   const isBlockedByCiocanaPhase2Chronology = useCallback(
+      (dateObj, hhmm = "00:00") => {
+         if (!Number.isFinite(ciocanaPhase2ChronologyLockTs)) return false;
+         if (!(dateObj instanceof Date)) return false;
+         const iso = toUtcIsoFromMoldova(dateObj, hhmm);
+         const ts = new Date(iso).getTime();
+         if (!Number.isFinite(ts)) return false;
+         return ts <= ciocanaPhase2ChronologyLockTs;
+      },
+      [ciocanaPhase2ChronologyLockTs],
+   );
 
    const activeBusyCountByKey = useMemo(() => {
       if (ciocanaSplitReady && ciocanaCurrentPhase === 1)
@@ -1152,7 +1403,7 @@ export default function SAddProg({ onClose }) {
 
          if (!botanicaId) {
             throw new Error(
-               `Nu am putut identifica instructorul de Botanica în grupul ${groupId}.`,
+               `Nu am putut identifica instructorul de Poligon în grupul ${groupId}.`,
             );
          }
 
@@ -1161,7 +1412,7 @@ export default function SAddProg({ onClose }) {
          );
          if (ciocanaPhase2Target > 0 && !remainingInstructorIds.length) {
             throw new Error(
-               `Grupul ${groupId} nu are instructori rămași pentru etapa Ciocana.`,
+               `Grupul ${groupId} nu are instructori rămași pentru etapa Oras.`,
             );
          }
 
@@ -1907,7 +2158,7 @@ export default function SAddProg({ onClose }) {
                      conflicts.push({
                         iso,
                         reason:
-                           "Depășești etapa Botanica (primele 7 lecții).",
+                           "Depășești etapa Poligon (primele 7 lecții).",
                      });
                      continue;
                   }
@@ -1918,14 +2169,14 @@ export default function SAddProg({ onClose }) {
                   if (ciocanaPhase2Target <= 0) {
                      conflicts.push({
                         iso,
-                        reason: "Nu mai sunt lecții pentru etapa Ciocana.",
+                        reason: "Nu mai sunt lecții pentru etapa Oras.",
                      });
                      continue;
                   }
                   if (keptPhase2 >= ciocanaPhase2Target) {
                      conflicts.push({
                         iso,
-                        reason: "Depășești etapa Ciocana.",
+                        reason: "Depășești etapa Oras.",
                      });
                      continue;
                   }
@@ -2055,17 +2306,63 @@ export default function SAddProg({ onClose }) {
 
       const iso = toUtcIsoFromMoldova(data, oraSelectata.oraStart);
       const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
-      if (selectedKeySet.has(key)) return;
 
       let phaseForNew = 0;
       if (ciocanaSplitReady) {
-         phaseForNew =
-            ciocanaSelectedPhase1Count < ciocanaPhase1Target ? 1 : 2;
+         phaseForNew = ciocanaSelectedPhase1Count < ciocanaPhase1Target ? 1 : 2;
          if (phaseForNew === 2 && ciocanaPhase2Target <= 0) {
-            notify("warn", "Nu mai sunt sloturi pentru etapa Ciocana.");
+            notify("warn", "Nu mai sunt sloturi pentru etapa Oras.");
             return;
          }
       }
+
+      if (
+         phaseForNew === 2 &&
+         isBlockedByCiocanaPhase2Chronology(data, oraSelectata.oraStart)
+      ) {
+         notify(
+            "warn",
+            "Pentru etapa Oras poți alege doar sloturi după ultima lecție selectată.",
+         );
+         return;
+      }
+
+      let nextSelectedDates = selectedDates;
+      let autoRemovedPhase2 = [];
+      if (phaseForNew === 1 && ciocanaSplitReady && ciocanaPhase1Target > 0) {
+         let cutoffDay = localDateStrTZ(new Date(iso), MOLDOVA_TZ);
+         for (const existingIso of selectedDates || []) {
+            const existingKey = localKeyFromTs(
+               new Date(existingIso).getTime(),
+               MOLDOVA_TZ,
+            );
+            if (ciocanaPhaseByKeyRef.current.get(existingKey) !== 1) continue;
+            const phase1Day = localDateStrTZ(new Date(existingIso), MOLDOVA_TZ);
+            if (phase1Day > cutoffDay) cutoffDay = phase1Day;
+         }
+
+         const kept = [];
+         for (const existingIso of selectedDates || []) {
+            const existingKey = localKeyFromTs(
+               new Date(existingIso).getTime(),
+               MOLDOVA_TZ,
+            );
+            const phase = ciocanaPhaseByKeyRef.current.get(existingKey);
+            const day = localDateStrTZ(new Date(existingIso), MOLDOVA_TZ);
+            if (phase === 2 && day <= cutoffDay) {
+               ciocanaPhaseByKeyRef.current.delete(existingKey);
+               autoRemovedPhase2.push(existingIso);
+               continue;
+            }
+            kept.push(existingIso);
+         }
+         nextSelectedDates = kept;
+      }
+
+      const keyExistsAfterCleanup = nextSelectedDates.some(
+         (x) => localKeyFromTs(new Date(x).getTime(), MOLDOVA_TZ) === key,
+      );
+      if (keyExistsAfterCleanup) return;
 
       const { full, used, blocked, sum, total } = getSlotMeta(key);
       if (full) {
@@ -2079,11 +2376,17 @@ export default function SAddProg({ onClose }) {
       if (phaseForNew) ciocanaPhaseByKeyRef.current.set(key, phaseForNew);
       else ciocanaPhaseByKeyRef.current.delete(key);
 
-      setSelectedDates((prev) => sortIsoAsc([...prev, iso]));
+      setSelectedDates(sortIsoAsc([...nextSelectedDates, iso]));
       notify(
          "success",
          `Adăugat: ${formatDateRO(iso)} la ${formatTimeRO(iso)}.`,
       );
+      if (autoRemovedPhase2.length > 0) {
+         notify(
+            "info",
+            `Am eliminat automat ${autoRemovedPhase2.length} lecții Oras (înainte/egal cu noul Poligon).`,
+         );
+      }
 
       setData(null);
       setOraSelectata(null);
@@ -2114,6 +2417,23 @@ export default function SAddProg({ onClose }) {
             const tmpSelCount = new Map(selectedCountByKey);
             let tmpPhase1Count = ciocanaSelectedPhase1Count;
             let tmpPhase2Count = ciocanaSelectedPhase2Count;
+            let tmpChronologyLockTs = Number.isFinite(
+               ciocanaPhase2ChronologyLockTs,
+            )
+               ? ciocanaPhase2ChronologyLockTs
+               : null;
+            if (!Number.isFinite(tmpChronologyLockTs)) {
+               for (const iso of selectedDates || []) {
+                  const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+                  const phase = ciocanaPhaseByKeyRef.current.get(key);
+                  if (phase !== 1 && phase !== 2) continue;
+                  const ts = new Date(iso).getTime();
+                  if (!Number.isFinite(ts)) continue;
+                  if (tmpChronologyLockTs == null || ts > tmpChronologyLockTs) {
+                     tmpChronologyLockTs = ts;
+                  }
+               }
+            }
 
             const additions = [];
             const additionsMeta = [];
@@ -2176,7 +2496,17 @@ export default function SAddProg({ onClose }) {
                   if (usedServer + usedTmp + blocked >= total) continue;
 
                   const iso = toUtcIsoFromMoldova(d, ora.oraStart);
-                  found = { iso, key, dayStr, phase };
+                  const isoTs = new Date(iso).getTime();
+                  if (
+                     phase === 2 &&
+                     Number.isFinite(tmpChronologyLockTs) &&
+                     Number.isFinite(isoTs) &&
+                     isoTs <= tmpChronologyLockTs
+                  ) {
+                     continue;
+                  }
+
+                  found = { iso, key, dayStr, phase, ts: isoTs };
                   break;
                }
 
@@ -2187,6 +2517,11 @@ export default function SAddProg({ onClose }) {
                   keysTaken.add(found.key);
                   if (found.phase === 1) tmpPhase1Count += 1;
                   if (found.phase === 2) tmpPhase2Count += 1;
+                  if (Number.isFinite(found.ts)) {
+                     if (tmpChronologyLockTs == null || found.ts > tmpChronologyLockTs) {
+                        tmpChronologyLockTs = found.ts;
+                     }
+                  }
                   tmpSelCount.set(
                      found.key,
                      (tmpSelCount.get(found.key) || 0) + 1,
@@ -2251,7 +2586,9 @@ export default function SAddProg({ onClose }) {
          ciocanaPhase2Capacity,
          ciocanaSelectedPhase1Count,
          ciocanaSelectedPhase2Count,
+         ciocanaPhase2ChronologyLockTs,
          notify,
+         selectedDates,
       ],
    );
 
@@ -2275,6 +2612,83 @@ export default function SAddProg({ onClose }) {
    const trimiteProgramari = async () => {
       if (submitGuardRef.current) return;
       submitGuardRef.current = true;
+
+      let submitBatchIso = [];
+      const submitBatchKeySet = new Set();
+      const beforeSubmitKeySet = new Set();
+      const createdReservationIds = new Set();
+
+      const markSubmitBatch = (isoDates, beforeReservations) => {
+         submitBatchIso = Array.isArray(isoDates) ? isoDates.slice() : [];
+
+         submitBatchKeySet.clear();
+         for (const iso of submitBatchIso) {
+            const normalized = normalizeIsoOrNull(iso);
+            if (!normalized) continue;
+            submitBatchKeySet.add(
+               localKeyFromTs(new Date(normalized).getTime(), MOLDOVA_TZ),
+            );
+         }
+
+         beforeSubmitKeySet.clear();
+         for (const r of Array.isArray(beforeReservations) ? beforeReservations : []) {
+            const st = getStartFromReservation(r);
+            if (!st) continue;
+            beforeSubmitKeySet.add(busyLocalKeyFromStored(st));
+         }
+      };
+
+      const registerCreatedFromResponse = (raw) => {
+         const created = normalizeCreatedReservationsFromCreateResponse(raw);
+         for (const item of created) {
+            const st = getStartFromReservation(item);
+            const key = st ? busyLocalKeyFromStored(st) : null;
+            if (key && !submitBatchKeySet.has(key)) continue;
+            if (key && beforeSubmitKeySet.has(key)) continue;
+
+            const id = getReservationIdFromReservation(item);
+            if (id) createdReservationIds.add(id);
+         }
+      };
+
+      const collectRollbackIdsFromLive = async () => {
+         const ids = new Set(createdReservationIds);
+         if (!user?.id || !submitBatchKeySet.size) return Array.from(ids);
+
+         const live = await dispatch(fetchUserReservations(user.id))
+            .unwrap()
+            .catch(() => []);
+         const arr = Array.isArray(live) ? live : [];
+         for (const r of arr) {
+            const st = getStartFromReservation(r);
+            if (!st) continue;
+            const key = busyLocalKeyFromStored(st);
+            if (!submitBatchKeySet.has(key)) continue;
+            if (beforeSubmitKeySet.has(key)) continue;
+            const id = getReservationIdFromReservation(r);
+            if (id) ids.add(id);
+         }
+         return Array.from(ids);
+      };
+
+      const rollbackPartialCreates = async () => {
+         const deleteFn = ReservationsAPI?.deleteReservation;
+         if (typeof deleteFn !== "function") {
+            return { attempted: false, total: 0, failed: 0 };
+         }
+
+         let ids = [];
+         try {
+            ids = await collectRollbackIdsFromLive();
+         } catch {
+            ids = Array.from(createdReservationIds);
+         }
+         if (!ids.length) return { attempted: false, total: 0, failed: 0 };
+
+         const results = await Promise.allSettled(ids.map((id) => deleteFn(id)));
+         const failed = results.filter((r) => r.status === "rejected").length;
+         return { attempted: true, total: ids.length, failed };
+      };
 
       setLoading(true);
       try {
@@ -2367,6 +2781,8 @@ export default function SAddProg({ onClose }) {
             return;
          }
 
+         markSubmitBatch(ok, latestArr);
+
          const normalizedGearbox =
             (cutie || "").toLowerCase() === "automat" ? "Automat" : "Manual";
 
@@ -2413,7 +2829,7 @@ export default function SAddProg({ onClose }) {
 
             if (!groupIdNum || !botanicaId) {
                throw new Error(
-                  "Date incomplete pentru split Ciocana (groupId/botanica instructor).",
+                  "Date incomplete pentru split Poligon-Oras (groupId/instructor Poligon).",
                );
             }
 
@@ -2440,7 +2856,7 @@ export default function SAddProg({ onClose }) {
             if (phase1.length !== firstTarget || phase2.length !== secondTarget) {
                notify(
                   "warn",
-                  `Split invalid: Botanica ${phase1.length}/${firstTarget}, Ciocana ${phase2.length}/${secondTarget}.`,
+                  `Split invalid: Poligon ${phase1.length}/${firstTarget}, Oras ${phase2.length}/${secondTarget}.`,
                );
                setShowList(true);
                return;
@@ -2467,8 +2883,10 @@ export default function SAddProg({ onClose }) {
             if (canUseForUser && userIdNum) payloadPhase2.userId = userIdNum;
 
             if (payloadPhase1.reservations.length > 0) {
-               if (canUseForUser) await createFnForUser(payloadPhase1);
-               else await createFnSelf(payloadPhase1);
+               const phase1Result = canUseForUser
+                  ? await createFnForUser(payloadPhase1)
+                  : await createFnSelf(payloadPhase1);
+               registerCreatedFromResponse(phase1Result);
 
                // Etapa 2 pornește doar după confirmarea în DB a tuturor sloturilor din etapa 1.
                const phase1Confirmed = await confirmSlotsPersistedForUser(
@@ -2478,7 +2896,7 @@ export default function SAddProg({ onClose }) {
                if (!phase1Confirmed) {
                   notify(
                      "error",
-                     "Primele lecții (Botanica) nu au fost confirmate integral. Etapa 2 nu se trimite.",
+                     "Primele lecții (Poligon) nu au fost confirmate integral. Etapa 2 nu se trimite.",
                   );
                   setShowList(true);
                   return;
@@ -2486,8 +2904,10 @@ export default function SAddProg({ onClose }) {
             }
 
             if (payloadPhase2.reservations.length > 0) {
-               if (canUseForUser) await createFnForUser(payloadPhase2);
-               else await createFnSelf(payloadPhase2);
+               const phase2Result = canUseForUser
+                  ? await createFnForUser(payloadPhase2)
+                  : await createFnSelf(payloadPhase2);
+               registerCreatedFromResponse(phase2Result);
             }
          } else {
             const topLevel =
@@ -2497,7 +2917,6 @@ export default function SAddProg({ onClose }) {
                        instructorId: null,
                     }
                   : {
-                       instructorsGroupId: null,
                        instructorId: Number(chosenId),
                     };
 
@@ -2507,10 +2926,14 @@ export default function SAddProg({ onClose }) {
                   mapReservationPayload(isoDate, sector),
                ),
             };
+            if (type === "instructor" && canUseForUser)
+               payload.excludedInstructorIds = [];
             if (canUseForUser && userIdNum) payload.userId = userIdNum;
 
-            if (canUseForUser) await createFnForUser(payload);
-            else await createFnSelf(payload);
+            const batchResult = canUseForUser
+               ? await createFnForUser(payload)
+               : await createFnSelf(payload);
+            registerCreatedFromResponse(batchResult);
          }
 
          // set desired instructor doar dacă lipsește
@@ -2566,6 +2989,70 @@ export default function SAddProg({ onClose }) {
             window.location.reload();
          }, 0);
       } catch (e) {
+         let rollbackInfo = null;
+         try {
+            rollbackInfo = await rollbackPartialCreates();
+         } catch {
+            rollbackInfo = null;
+         }
+
+         if (rollbackInfo?.attempted) {
+            if (rollbackInfo.failed > 0) {
+               notify(
+                  "error",
+                  `Trimiterea a eșuat și anularea automată a fost parțială (${rollbackInfo.failed}/${rollbackInfo.total} eșuate).`,
+               );
+            } else {
+               notify(
+                  "info",
+                  `Trimiterea a eșuat. Am anulat automat rezervările create parțial (${rollbackInfo.total}).`,
+               );
+            }
+         }
+
+         const conflictSource =
+            submitBatchIso.length > 0 ? submitBatchIso : selectedDates;
+         const serverConflicts = extractServerConflictSelectedDates(
+            e,
+            conflictSource,
+         );
+         if (serverConflicts.length) {
+            const normalizedDropSet = new Set(
+               serverConflicts
+                  .map((iso) => normalizeIsoOrNull(iso))
+                  .filter(Boolean),
+            );
+
+            for (const iso of serverConflicts) {
+               const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+               ciocanaPhaseByKeyRef.current.delete(key);
+            }
+
+            setRejected((prev) =>
+               mergeRejected(
+                  prev,
+                  serverConflicts.map((iso) => ({
+                     iso,
+                     reason: "Slot ocupat / rezervat între timp (confirmat de server).",
+                  })),
+               ),
+            );
+            setSelectedDates((prev) =>
+               prev.filter((iso) => {
+                  const norm = normalizeIsoOrNull(iso);
+                  return !norm || !normalizedDropSet.has(norm);
+               }),
+            );
+            setShowList(true);
+
+            notify(
+               "warn",
+               `Serverul a respins ${serverConflicts.length} sloturi ocupate. Le-am mutat la conflicte (roșu).`,
+            );
+            if (e?.message) notify("alert", `Detalii: ${e.message}`);
+            return;
+         }
+
          notify("error", "A apărut o eroare la trimitere.");
          if (e?.message) notify("alert", `Detalii: ${e.message}`);
          setShowList(true);
@@ -2603,6 +3090,11 @@ export default function SAddProg({ onClose }) {
    const dayLocal = data ? localDateStrTZ(data, MOLDOVA_TZ) : null;
    const dayIsBooked = !!(dayLocal && bookedDaySet.has(dayLocal));
    const dayIsFullyBlocked = !!(dayLocal && fullyBlockedDaySet.has(dayLocal));
+   const dayIsBeforeCiocanaChronologyLock = !!(
+      dayLocal &&
+      ciocanaPhase2ChronologyLockDay &&
+      dayLocal <= ciocanaPhase2ChronologyLockDay
+   );
 
    const liveRefreshLabel = useMemo(() => {
       if (!lastLiveRefreshAt) return "never";
@@ -2616,9 +3108,9 @@ export default function SAddProg({ onClose }) {
    const ciocanaPhaseStatusText = useMemo(() => {
       if (!ciocanaSplitReady) return null;
       if (ciocanaPhase1Target > 0) {
-         return `Etapa 1/2 (Botanica): ${ciocanaSelectedPhase1Count}/${ciocanaPhase1Target} · Etapa 2/2 (Ciocana): ${ciocanaSelectedPhase2Count}/${ciocanaPhase2Target}`;
+         return `Poligon: ${ciocanaSelectedPhase1Count}/${ciocanaPhase1Target} · Oras: ${ciocanaSelectedPhase2Count}/${ciocanaPhase2Target}`;
       }
-      return `Etapa 2/2 (Ciocana): ${ciocanaSelectedPhase2Count}/${ciocanaPhase2Target}`;
+      return `Etapa 2/2 (Oras): ${ciocanaSelectedPhase2Count}/${ciocanaPhase2Target}`;
    }, [
       ciocanaSplitReady,
       ciocanaSelectedPhase1Count,
@@ -2812,21 +3304,16 @@ export default function SAddProg({ onClose }) {
             ) : (
                <>
                   {/* ====== PICK ====== */}
-                  <div
-                     className="saddprogramari__muted-note"
-                     style={{ marginBottom: 8 }}
-                  >
-                     Live refresh: <b>{liveRefreshLabel}</b>
-                  </div>
                   {isCiocanaSplitScenario && (
                      <div
-                        className="saddprogramari__muted-note"
+                        className="saddprogramari__guide"
                         style={{ marginBottom: 8 }}
                      >
                         {ciocanaPhaseStatusText ||
-                           "Pregătesc split-ul Ciocana (Botanica + Ciocana)..."}
+                           "Pregătesc împărțirea lecțiilor (Poligon + Oras)..."}
                      </div>
                   )}
+                 
 
                   {!showList ? (
                      <>
@@ -2862,6 +3349,11 @@ export default function SAddProg({ onClose }) {
                                     if (bookedDaySet.has(day)) return false;
                                     if (fullyBlockedDaySet.has(day))
                                        return false;
+                                    if (
+                                       ciocanaPhase2ChronologyLockDay &&
+                                       day <= ciocanaPhase2ChronologyLockDay
+                                    )
+                                       return false;
 
                                     return true;
                                  }}
@@ -2875,6 +3367,11 @@ export default function SAddProg({ onClose }) {
                                     if (bookedDaySet.has(day))
                                        return "saddprogramari__day--inactive";
                                     if (fullyBlockedDaySet.has(day))
+                                       return "saddprogramari__day--inactive";
+                                    if (
+                                       ciocanaPhase2ChronologyLockDay &&
+                                       day <= ciocanaPhase2ChronologyLockDay
+                                    )
                                        return "saddprogramari__day--inactive";
                                     return "";
                                  }}
@@ -2905,6 +3402,12 @@ export default function SAddProg({ onClose }) {
                                        Ziua este blocată complet. Alege altă zi.
                                     </div>
                                  )}
+                                 {data && dayIsBeforeCiocanaChronologyLock && (
+                                    <div className="saddprogramari__disclaimer">
+                                       Pentru etapa Oras poți selecta doar după
+                                       ultima lecție deja stabilită.
+                                    </div>
+                                 )}
 
                                  {oreDisponibile.map((ora) => {
                                     const key =
@@ -2928,11 +3431,18 @@ export default function SAddProg({ onClose }) {
                                        : false;
                                     const isSelected =
                                        oraSelectata?.eticheta === ora.eticheta;
+                                    const blockedByChronology =
+                                       !!data &&
+                                       isBlockedByCiocanaPhase2Chronology(
+                                          data,
+                                          ora.oraStart,
+                                       );
 
                                     const disabled =
                                        !data ||
                                        dayIsBooked ||
                                        dayIsFullyBlocked ||
+                                       blockedByChronology ||
                                        reachedPackLimit ||
                                        alreadyPicked ||
                                        full;
@@ -2945,6 +3455,9 @@ export default function SAddProg({ onClose }) {
                                           "Ai deja o programare în această zi";
                                     else if (dayIsFullyBlocked)
                                        title = "Zi blocată complet";
+                                    else if (blockedByChronology)
+                                       title =
+                                          "Disponibil doar după ultima lecție selectată";
                                     else if (alreadyPicked)
                                        title = "Deja adăugat";
                                     else if (full)
@@ -2986,7 +3499,8 @@ export default function SAddProg({ onClose }) {
                                  !oraSelectata ||
                                  reachedPackLimit ||
                                  dayIsBooked ||
-                                 dayIsFullyBlocked
+                                 dayIsFullyBlocked ||
+                                 dayIsBeforeCiocanaChronologyLock
                               }
                               className="saddprogramari__add-btn"
                               type="button"
@@ -3198,14 +3712,14 @@ export default function SAddProg({ onClose }) {
                                                          phaseTag === 1 && (
                                                             <span className="saddprogramari__muted-note">
                                                                {" "}
-                                                               · Botanica
+                                                               · Poligon
                                                             </span>
                                                          )}
                                                       {isCiocanaSplitScenario &&
                                                          phaseTag === 2 && (
                                                             <span className="saddprogramari__muted-note">
                                                                {" "}
-                                                               · Ciocana
+                                                               · Oras
                                                             </span>
                                                          )}
                                                    </div>

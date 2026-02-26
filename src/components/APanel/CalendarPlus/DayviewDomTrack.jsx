@@ -333,6 +333,44 @@ function escapeAttrSelectorValue(value) {
       .replace(/"/g, '\\"');
 }
 
+function resolveActiveEventElementById(rootEl, reservationId) {
+   if (!rootEl || !reservationId) return null;
+   const safeId = escapeAttrSelectorValue(reservationId);
+   const selector = `[data-cp-kind="event"][data-res-id="${safeId}"]`;
+   const nodes = Array.from(rootEl.querySelectorAll(selector));
+   if (!nodes.length) return null;
+
+   let best = null;
+   let bestScore = -Infinity;
+
+   for (const node of nodes) {
+      if (!node || !node.isConnected) continue;
+      const slotEl = node.closest?.("[data-cp-kind='slot']");
+      const padType = String(slotEl?.getAttribute?.("data-pad-type") || "")
+         .trim()
+         .toLowerCase();
+
+      let score = 0;
+      if (node.classList?.contains("is-active-event")) score += 12;
+      if (node.classList?.contains("is-search-event")) score += 8;
+
+      if (!padType) score += 10;
+      else if (padType === "lateral") score += 7;
+      else if (padType === "cancel") score += 2;
+      else if (padType === "wait") score += 1;
+      else if (padType === "gap") score -= 2;
+
+      if (node.classList?.contains("is-cancel-origin")) score += 3;
+
+      if (score > bestScore) {
+         bestScore = score;
+         best = node;
+      }
+   }
+
+   return best;
+}
+
 function getReservationId(ev) {
    return ev?.raw?.id ?? ev?.id ?? null;
 }
@@ -3112,7 +3150,6 @@ function DayviewDomTrack({
       if (typeof onActiveEventRectChange !== "function") return;
       const id = String(activeEventId ?? "");
       if (!id) return;
-      if (!eventByReservationId.has(id)) return;
 
       let rafId = 0;
       let cancelled = false;
@@ -3122,7 +3159,16 @@ function DayviewDomTrack({
          if (cancelled) return;
          tries += 1;
 
-         const el = eventRefMap.current.get(id);
+         let el = eventRefMap.current.get(id);
+         if (
+            !el ||
+            !el.isConnected ||
+            String(el.getAttribute?.("data-res-id") || "") !== id
+         ) {
+            el = resolveActiveEventElementById(rootRef.current, id);
+            if (el) eventRefMap.current.set(id, el);
+         }
+
          if (el) {
             const rect = el.getBoundingClientRect();
             if (rect && rect.height > 0) {
@@ -3135,6 +3181,43 @@ function DayviewDomTrack({
                   centerY: rect.top + rect.height / 2,
                   canvasRect: rootRef.current?.getBoundingClientRect?.() || null,
                });
+            }
+         } else {
+            // Fallback pentru rânduri virtualizate: trimitem rect aproximativ
+            // ca parent-ul să poată face scroll până când evenimentul real intră în DOM.
+            const eventMeta = eventByReservationId.get(id) || null;
+            const instId = String(eventMeta?.instructorId || "");
+            const slotIdx = Math.trunc(Number(eventMeta?.slotIdx));
+
+            if (instId && Number.isFinite(slotIdx) && slotIdx >= 0) {
+               const headerMeta =
+                  headersMeta.find(
+                     (meta) => String(meta?.inst?.id || "") === instId,
+                  ) || null;
+               const rootRect = rootRef.current?.getBoundingClientRect?.() || null;
+
+               if (headerMeta && rootRect) {
+                  const rowTop = Number(headerMetrics?.rowTops?.[headerMeta.row] || 0);
+                  const colLeft = Number(headerMeta.col || 0) * (colWidth + colGap);
+                  const slotTop =
+                     rowTop + headerHeight + slotIdx * (slotHeight + slotGap);
+
+                  const topY = rootRect.top + slotTop;
+                  const bottomY = topY + slotHeight;
+                  const leftX = rootRect.left + colLeft;
+                  const rightX = leftX + colWidth;
+
+                  onActiveEventRectChange({
+                     leftX,
+                     rightX,
+                     centerX: leftX + (rightX - leftX) / 2,
+                     topY,
+                     bottomY,
+                     centerY: topY + (bottomY - topY) / 2,
+                     canvasRect: rootRect,
+                     synthetic: true,
+                  });
+               }
             }
          }
 
@@ -3156,6 +3239,13 @@ function DayviewDomTrack({
       selectionVersion,
       dayNearViewportBuffered,
       eventByReservationId,
+      headersMeta,
+      headerMetrics,
+      colWidth,
+      colGap,
+      headerHeight,
+      slotHeight,
+      slotGap,
    ]);
 
    if (!dayNearViewportBuffered) {
@@ -3463,13 +3553,16 @@ function DayviewDomTrack({
                                        type="button"
                                        className={
                                           "cpdom__event dayview__event" +
-                                          (selectedEventId === displayEvent.reservationId
+                                          (String(selectedEventId || "") ===
+                                          String(displayEvent.reservationId || "")
                                              ? " is-selected-event"
                                              : "") +
-                                          (renderActiveId === displayEvent.reservationId
+                                          (String(renderActiveId || "") ===
+                                          String(displayEvent.reservationId || "")
                                              ? " is-active-event"
                                              : "") +
-                                          (renderSearchId === displayEvent.reservationId
+                                          (String(renderSearchId || "") ===
+                                          String(displayEvent.reservationId || "")
                                              ? " is-search-event"
                                              : "") +
                                           (isOptimisticCreateEvent

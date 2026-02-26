@@ -67,6 +67,20 @@
       opacity: 0.4;
       cursor: not-allowed;
    }
+   &__loading {
+      color: var(--white-s);
+   }
+   &__muted-note {
+      color: var(--white-s);
+   }
+   &__guide {
+      color: var(--white-s);
+      background: var(--black-p);
+      padding: 8px;
+      text-align: center;
+      border-radius: 18px;
+   }
+
    &__time-btn {
       border: 0;
       background: var(--black-p);
@@ -79,14 +93,18 @@
       height: 100%;
       //margin: 0 ;
       &:hover {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          color: var(--accent-l);
          border-radius: 16px;
          padding: 12px 16px;
          //margin: -1px 0;
       }
       &:active {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          transform: scale(0.93);
          margin: 0;
          padding: 12px 16px;
@@ -322,7 +340,9 @@
          border-radius: 10px;
          padding: 11.5px 12px;
          cursor: pointer;
-         transition: all var(--elastic-f), background var(--classic-f);
+         transition:
+            all var(--elastic-f),
+            background var(--classic-f);
          background: #f6808000;
          color: var(--white-p);
          width: 100%;
@@ -357,12 +377,16 @@
       position: relative;
       width: auto;
       &:hover {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          border-radius: 16px;
          padding: 13px 22px;
       }
       &:active {
-         transition: all var(--elastic-s), background var(--classic-s);
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s);
          transform: scale(0.95);
          padding: 13px 20px;
          border-radius: 32px;
