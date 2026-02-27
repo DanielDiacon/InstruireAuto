@@ -52,7 +52,7 @@ const I18N = {
 
       // ✅ home tabs
       tickets_tab: "Bilete",
-      categories_tab: "Categorii",
+      categories_tab: "Teme",
       refresh: "Refresh",
       categories_loading: "Se încarcă categoriile…",
       categories_empty: "Nu există categorii.",
@@ -84,7 +84,7 @@ const I18N = {
 
       // ✅ home tabs
       tickets_tab: "Билеты",
-      categories_tab: "Категории",
+      categories_tab: "Темы",
       refresh: "Обновить",
       categories_loading: "Загрузка категорий…",
       categories_empty: "Категории отсутствуют.",
@@ -1599,7 +1599,18 @@ export default function Practice() {
                            return (
                               <button
                                  key={c.id}
-                                 className="practice__cat-item"
+                                 className={"practice__cat-item" +
+                                       (state === "ok"
+                                          ? " practice__cat-item--ok"
+                                          : "") +
+                                       (state === "bad"
+                                          ? " practice__cat-item--bad"
+                                          : "") +
+                                       (state === "none"
+                                          ? " practice__cat-item--none"
+                                          : "")}
+
+                                 
                                  onClick={() => enterCategory(c)}
                                  disabled={loading}
                                  title={title}
@@ -1610,7 +1621,7 @@ export default function Practice() {
                                     </div>
                                  </div>
 
-                                 <div
+                                 {/*<div
                                     className={
                                        "practice__cat-badge" +
                                        (state === "ok"
@@ -1629,7 +1640,7 @@ export default function Practice() {
                                     }}
                                  >
                                     {badgeText}
-                                 </div>
+                                 </div>*/}
                               </button>
                            );
                         })
