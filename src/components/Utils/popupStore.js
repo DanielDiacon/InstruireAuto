@@ -1,3 +1,5 @@
+import { openPopup as openPopupUI } from "../Common/popupUIStore";
+
 // popupStore.js
 let currentPopup = null;
 let listeners = [];
@@ -10,6 +12,11 @@ export function subscribePopup(callback) {
 }
 
 export function openPopup(type, props = {}) {
+   if (type === "sAddProg") {
+      openPopupUI("sAddProg", props);
+      return;
+   }
+
    currentPopup = { type, props };
    listeners.forEach((cb) => cb({ detail: currentPopup }));
 }

@@ -1,0 +1,105 @@
+.studentMobileTopBar {
+   display: none;
+}
+
+@media (max-width: $tablet) {
+   .studentMobileTopBar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 120;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px;
+
+      &__btn {
+         width: 50px;
+         min-width: 50px;
+         height: 50px;
+         border-radius: 32px;
+         background: var(--blur-bg);
+         color: var(--white-p);
+         display: grid;
+         place-items: center;
+         transition: var(--elastic-f);
+         backdrop-filter: blur(20px);
+
+         &:active {
+            transform: scale(0.95);
+         }
+      }
+
+      &__name {
+         max-width: 170px;
+         min-width: 0;
+         height: 50px;
+
+         display: grid;
+         place-items: center;
+
+         overflow: hidden; // taie în border-radius
+         border-radius: 32px;
+
+         background: var(--blur-bg);
+         color: var(--white-p);
+         backdrop-filter: blur(20px);
+
+         flex: 1;
+
+         white-space: nowrap;
+         text-overflow: ellipsis;
+         text-align: center;
+         font-family: "Clash Display";
+         font-weight: 500;
+         font-size: 18px;
+         padding: 4px 16px;
+
+         flex: 0 0 auto;
+         border-radius: 32px;
+      }
+
+      &__name p {
+         // important: să NU fie "shrink-to-fit" centrat
+         justify-self: stretch; // ocupă lățimea containerului
+         min-width: 0;
+         max-width: 100%;
+
+         display: block;
+         text-align: center;
+
+         white-space: nowrap;
+         overflow: hidden;
+         text-overflow: ellipsis;
+      }
+
+      &__icon {
+         display: grid;
+         place-items: center;
+
+         div {
+            display: grid;
+            place-items: center;
+         }
+
+         svg {
+            width: 26px;
+            height: 26px;
+         }
+      }
+   }
+
+   body.student-mobile-topbar-enabled .main {
+      padding-top: calc(68px + env(safe-area-inset-top));
+   }
+
+   body.is-exam-mode .studentMobileTopBar {
+      display: none !important;
+   }
+
+   body.is-exam-mode.student-mobile-topbar-enabled .main {
+      padding-top: 0 !important;
+   }
+}

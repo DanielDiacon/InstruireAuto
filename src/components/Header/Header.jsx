@@ -8,7 +8,8 @@ import React, {
 } from "react";
 import { NavLink as RouterLink } from "react-router-dom";
 import { ReactSVG } from "react-svg";
-import { openPopup } from "../Utils/popupStore";
+import { openPopup as openLegacyPopup } from "../Utils/popupStore";
+import { openPopup as openPopupUI } from "../Common/popupUIStore";
 
 import crownIcon from "../../assets/svg/crown.svg";
 import wrenchIcon from "../../assets/svg/wrench.svg";
@@ -17,6 +18,7 @@ import studentIcon from "../../assets/svg/graduate.svg";
 import DarkModeToggle from "./DarkModeToggle";
 import { UserContext } from "../../UserContext";
 import { getInstructors } from "../../api/instructorsService";
+import { normalizeRole, ROOT_ROLE_LINKS, ROLES } from "../../auth/access";
 
 import { getLinksForRole } from "./navLinks";
 
@@ -45,21 +47,25 @@ function useIsMobile(bp = 992) {
    return isMobile;
 }
 
-const ROOT_LINKS = [
-   "/admin",
-   "/manager",
-   "/instructor",
-   "/student",
-   "/professor",
-];
-const isRootLink = (link) => ROOT_LINKS.includes(link);
+const isRootLink = (link) => ROOT_ROLE_LINKS.includes(link);
 
 /* ===================== component ===================== */
 const Header = ({ children }) => {
    const { user } = useContext(UserContext);
+   const normalizedRole = normalizeRole(user?.role);
 
    // ✅ links vin din Header, nu din pagini
-   const links = useMemo(() => getLinksForRole(user?.role), [user?.role]);
+   const links = useMemo(() => getLinksForRole(normalizedRole), [normalizedRole]);
+   const mobileLinks = useMemo(() => {
+      if (normalizedRole !== ROLES.USER) return links;
+
+      return (links || []).filter((item) => {
+         if (!item) return false;
+         if (item.popup === "profile") return false;
+         if (item.link === "/student/exam") return false;
+         return true;
+      });
+   }, [links, normalizedRole]);
 
    const TABLET_BP = 992;
    const isMobile = useIsMobile(TABLET_BP);
@@ -73,16 +79,16 @@ const Header = ({ children }) => {
    let iconSrc = studentIcon;
    let roleLabel = "Student";
 
-   if (user?.role === "ADMIN") {
+   if (normalizedRole === ROLES.ADMIN) {
       iconSrc = crownIcon;
       roleLabel = "Administrator";
-   } else if (user?.role === "MANAGER") {
+   } else if (normalizedRole === ROLES.MANAGER) {
       iconSrc = wrenchIcon;
       roleLabel = "Manager";
-   } else if (user?.role === "INSTRUCTOR") {
+   } else if (normalizedRole === ROLES.INSTRUCTOR) {
       iconSrc = wrenchIcon;
       roleLabel = "Instructor";
-   } else if (user?.role === "PROFESSOR") {
+   } else if (normalizedRole === ROLES.PROFESSOR) {
       iconSrc = wrenchIcon;
       roleLabel = "Professor";
    }
@@ -99,7 +105,7 @@ const Header = ({ children }) => {
          let firstName = user.firstName || "";
          let lastName = user.lastName || "";
 
-         if (user.role === "INSTRUCTOR") {
+         if (normalizedRole === ROLES.INSTRUCTOR) {
             try {
                const list = await getInstructors();
                const mine = list.find(
@@ -121,13 +127,16 @@ const Header = ({ children }) => {
       return () => {
          cancelled = true;
       };
-   }, [user]);
+   }, [user, normalizedRole]);
 
    useEffect(() => {
       if (!isMobile && mobileOpen) setMobileOpen(false);
    }, [isMobile, mobileOpen]);
 
-   const primaryLinks = useMemo(() => (links || []).slice(0, 3), [links]);
+   const primaryLinks = useMemo(() => {
+      const source = isMobile ? mobileLinks : links;
+      return (source || []).slice(0, 3);
+   }, [isMobile, links, mobileLinks]);
 
    const closeMobile = useCallback(() => setMobileOpen(false), []);
    const toggleMobile = useCallback(() => setMobileOpen((v) => !v), []);
@@ -144,7 +153,9 @@ const Header = ({ children }) => {
                   type="button"
                   className="menu__link"
                   onClick={() => {
-                     openPopup(item.popup);
+                     if (item.popup === "profile" && normalizedRole === ROLES.USER)
+                        openPopupUI("studentProfile");
+                     else openLegacyPopup(item.popup);
                      onNavItemClick();
                   }}
                >
@@ -217,9 +228,10 @@ const Header = ({ children }) => {
                                  </ul>
                                  <span className="menu__drawer-hr"></span>
 
-                                 {Array.isArray(links) && links.length > 0 && (
+                                 {Array.isArray(mobileLinks) &&
+                                    mobileLinks.length > 0 && (
                                     <ul className="menu__drawer-list">
-                                       {links.map(renderItem)}
+                                       {mobileLinks.map(renderItem)}
                                     </ul>
                                  )}
                               </div>

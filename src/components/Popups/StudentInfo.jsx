@@ -89,7 +89,34 @@ function isReservationCancelled(r) {
 }
 
 function getReservationStudentId(r) {
-   return r?.studentId ?? r?.student_id ?? r?.student?.id ?? r?.userId ?? null;
+   return (
+      r?.studentId ??
+      r?.student_id ??
+      r?.student?.id ??
+      r?.userId ??
+      r?.user_id ??
+      r?.user?.id ??
+      null
+   );
+}
+
+function resolveStudentId(src) {
+   const candidates = [
+      src?.id,
+      src?.userId,
+      src?.user_id,
+      src?.studentId,
+      src?.student_id,
+      src?.user?.id,
+      src?.student?.id,
+   ];
+   for (const v of candidates) {
+      if (v === null || v === undefined) continue;
+      const s = String(v).trim();
+      if (!s || s === "null" || s === "undefined") continue;
+      return s;
+   }
+   return "";
 }
 
 // ✅ extras helpers (copiate logic din PP)
@@ -220,11 +247,15 @@ function StudentItemInline({
 
 export default function StudentInfoPopup({ student, onClose }) {
    const dispatch = useDispatch();
+   const studentId = useMemo(() => resolveStudentId(student), [student]);
+
    const storeStudent = useSelector((s) => {
-      const sid = student?.id;
-      if (!sid) return null;
+      if (!studentId) return null;
       const list = s.students?.list || [];
-      return list.find((u) => String(u.id) === String(sid)) || null;
+      return (
+         list.find((u) => String(resolveStudentId(u)) === String(studentId)) ||
+         null
+      );
    });
 
    const {
@@ -271,7 +302,7 @@ export default function StudentInfoPopup({ student, onClose }) {
    const noteLastSavedRef = useRef("");
 
    const requestSaveNote = (nextText) => {
-      if (!student?.id) return;
+      if (!studentId) return;
 
       const desired = String(nextText ?? "");
       noteDesiredRef.current = desired;
@@ -286,7 +317,7 @@ export default function StudentInfoPopup({ student, onClose }) {
 
             const updated = await dispatch(
                updateStudent({
-                  id: student.id,
+                  id: studentId,
                   data: { privateMessage: cur },
                }),
             ).unwrap();
@@ -339,7 +370,7 @@ export default function StudentInfoPopup({ student, onClose }) {
    const lastSentRef = useRef("");
 
    const requestSaveExtras = (nextForm) => {
-      if (!student?.id) return;
+      if (!studentId) return;
 
       const desired = normExtras(nextForm);
       desiredRef.current = desired;
@@ -355,7 +386,7 @@ export default function StudentInfoPopup({ student, onClose }) {
             if (curJson === lastSentRef.current) return;
 
             const updated = await dispatch(
-               updateStudent({ id: student.id, data: cur }),
+               updateStudent({ id: studentId, data: cur }),
             ).unwrap();
             lastSentRef.current = curJson;
 
@@ -552,8 +583,8 @@ export default function StudentInfoPopup({ student, onClose }) {
    /* ===================== reservations load ===================== */
 
    useEffect(() => {
-      if (student?.id) dispatch(fetchUserReservations(String(student.id)));
-   }, [dispatch, student?.id]);
+      if (studentId) dispatch(fetchUserReservations(String(studentId)));
+   }, [dispatch, studentId]);
 
    /* ===================== profile edit handlers ===================== */
 
@@ -580,7 +611,7 @@ export default function StudentInfoPopup({ student, onClose }) {
    };
 
    const handleSave = async () => {
-      if (!student?.id) return;
+      if (!studentId) return;
 
       setSaving(true);
       setSaveError("");
@@ -595,7 +626,7 @@ export default function StudentInfoPopup({ student, onClose }) {
          };
 
          const updated = await dispatch(
-            updateStudent({ id: student.id, data: payload }),
+            updateStudent({ id: studentId, data: payload }),
          ).unwrap();
 
          const next = { ...liveStudent, ...payload, ...(updated || {}) };
@@ -613,8 +644,9 @@ export default function StudentInfoPopup({ student, onClose }) {
    /* ===================== delete ===================== */
 
    const handleDelete = async () => {
+      if (!studentId) return;
       try {
-         await dispatch(removeStudent(student.id)).unwrap();
+         await dispatch(removeStudent(studentId)).unwrap();
          setIsEditing(false);
          setLiveStudent({});
          safeClose();
@@ -627,12 +659,12 @@ export default function StudentInfoPopup({ student, onClose }) {
    /* ===================== reservations derived ===================== */
 
    const myReservations = useMemo(() => {
-      if (!student?.id) return [];
-      const sid = String(student.id);
+      if (!studentId) return [];
+      const sid = String(studentId);
       return reservations.filter(
          (r) => String(getReservationStudentId(r) ?? "") === sid,
       );
-   }, [reservations, student?.id]);
+   }, [reservations, studentId]);
 
    const { activeReservations, cancelledReservations } = useMemo(() => {
       const active = [];
@@ -658,14 +690,14 @@ export default function StudentInfoPopup({ student, onClose }) {
 
    useEffect(() => {
       let stop = false;
-      if (tab !== "attempts" || !student?.id) return;
+      if (tab !== "attempts" || !studentId) return;
 
       (async () => {
          setAttemptsLoading(true);
          setAttemptsError("");
          try {
             const all = await getExamHistoryForStudentIdAll(
-               String(student.id),
+               String(studentId),
                {
                   pageSize: 50,
                   maxPages: 10,
@@ -685,7 +717,7 @@ export default function StudentInfoPopup({ student, onClose }) {
       return () => {
          stop = true;
       };
-   }, [tab, student?.id]);
+   }, [tab, studentId]);
 
    /* ===================== derived “TOP UI” ===================== */
 
@@ -791,7 +823,7 @@ export default function StudentInfoPopup({ student, onClose }) {
    ]);
 
    const avatarKey =
-      student?.id ?? liveStudent?.id ?? phone ?? email ?? "__student__";
+      studentId ?? liveStudent?.id ?? phone ?? email ?? "__student__";
    const avatarSeed = useMemo(() => {
       const k = String(avatarKey ?? "").trim();
       if (k) return k;

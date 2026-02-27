@@ -61,7 +61,7 @@
    }
 }
 
-//old logic
+//old logic =============================================================
 .calendar.student {
    padding: 12px 12px 0 12px;
 }
@@ -69,6 +69,7 @@
 @media only screen and (max-width: $mobile) {
    .calendar.student {
       padding: 6px 6px 0 6px;
+      display: none;
    }
 }
 .intro {

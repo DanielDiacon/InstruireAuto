@@ -18,6 +18,9 @@ import {
 import { ReactSVG } from "react-svg";
 import addIcon from "../../assets/svg/add-s.svg";
 import StudentProfileUI from "../Popups/StudentProfileUI";
+import StudentSelfProfilePopup from "../Popups/StudentSelfProfilePopup";
+import StudentReservationsPopup from "../Popups/StudentReservationsPopup";
+import SAddProg from "../Popups/SAddProg";
 
 // ține-l egal cu durata din CSS
 const ANIM_MS = 300;
@@ -73,6 +76,15 @@ export default function PopupUI() {
       }, ANIM_MS + 60);
    }, []);
 
+   const confirmPopupClose = useCallback((type, options = {}) => {
+      if (options?.skipConfirm) return true;
+      if (type !== "sAddProg") return true;
+      if (typeof window === "undefined") return true;
+      return window.confirm(
+         "Sigur dorești să ieși? Vei pierde progresul de selectare a rezervărilor.",
+      );
+   }, []);
+
    // ✅ arm back-guard (pushState) când deschizi popup
    const armBackGuard = useCallback(() => {
       if (typeof window === "undefined") return;
@@ -124,13 +136,26 @@ export default function PopupUI() {
          }
 
          // 2) altfel -> închide popup-ul principal
+         const popupType = getCurrentPopup()?.type;
+         if (!confirmPopupClose(popupType)) {
+            try {
+               window.history.pushState(
+                  { [POPUP_HISTORY_MARK]: true, t: Date.now() },
+                  "",
+                  window.location.href,
+               );
+               backArmedRef.current = true;
+            } catch {}
+            return;
+         }
+
          closePopupStore();
          backArmedRef.current = false;
       };
 
       window.addEventListener("popstate", onPopState);
       return () => window.removeEventListener("popstate", onPopState);
-   }, []);
+   }, [confirmPopupClose]);
 
    // OPEN/CLOSE driven de storePopup
    useEffect(() => {
@@ -165,12 +190,15 @@ export default function PopupUI() {
    }, [storePopup, clearTimers, scheduleClearContent, armBackGuard]);
 
    // close handler (click X / overlay)
-   const handleClose = useCallback(() => {
+   const handleClose = useCallback((options = {}) => {
       // dacă ai subpopup -> închide subpopup și gata (nu umblăm la history)
       if (getCurrentSubPopup()) {
          requestCloseSubPopup();
          return;
       }
+
+      const popupType = getCurrentPopup()?.type;
+      if (!confirmPopupClose(popupType, options)) return;
 
       closePopupStore();
 
@@ -184,7 +212,7 @@ export default function PopupUI() {
       }
 
       backArmedRef.current = false;
-   }, []);
+   }, [confirmPopupClose]);
 
    // content motion toggle (panel motion rămâne mereu ON)
    const contentMotionOn = useMemo(() => {
@@ -200,12 +228,40 @@ export default function PopupUI() {
       switch (type) {
          case "studentDetails":
             return <StudentProfileUI key={shownPopup?.id} {...props} />;
+         case "studentProfile":
+         case "profile":
+            return <StudentSelfProfilePopup key={shownPopup?.id} {...props} />;
+         case "studentReservations":
+            return <StudentReservationsPopup key={shownPopup?.id} {...props} />;
+         case "sAddProg":
+            return (
+               <SAddProg
+                  key={shownPopup?.id}
+                  {...props}
+                  onClose={handleClose}
+               />
+            );
          default:
             return null;
       }
-   }, [shownPopup]);
+   }, [shownPopup, handleClose]);
 
    const hasContent = Boolean(shownPopup);
+
+   useEffect(() => {
+      if (typeof window === "undefined") return;
+
+      const isPhone = window.matchMedia("(max-width: 860px)").matches;
+      const shouldLockScroll = isPhone && (isOpen || hasContent);
+
+      document.body.classList.toggle("popupui-open", shouldLockScroll);
+      document.documentElement.classList.toggle("popupui-open", shouldLockScroll);
+
+      return () => {
+         document.body.classList.remove("popupui-open");
+         document.documentElement.classList.remove("popupui-open");
+      };
+   }, [isOpen, hasContent]);
 
    return (
       <>

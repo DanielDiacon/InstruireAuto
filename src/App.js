@@ -1,5 +1,5 @@
 // src/App.js
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import React from "react";
 import "./App.scss";
 
@@ -12,6 +12,7 @@ import EnrollFrom from "./pages/EnrollForm";
 
 import ProtectedRoute from "./ProtectedRoute";
 import AppShell from "./AppShell";
+import { ALLOW } from "./auth/access";
 
 // pages (fără Header în ele)
 import SPanel from "./pages/SPanel";
@@ -91,7 +92,7 @@ const App = () => {
                   <Route
                      path="/student"
                      element={
-                        <ProtectedRoute allowedRoles={["USER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.STUDENT}>
                            <SPanel />
                         </ProtectedRoute>
                      }
@@ -99,7 +100,7 @@ const App = () => {
                   <Route
                      path="/student/test"
                      element={
-                        <ProtectedRoute allowedRoles={["USER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.STUDENT}>
                            <SPTest />
                         </ProtectedRoute>
                      }
@@ -107,7 +108,7 @@ const App = () => {
                   <Route
                      path="/student/exam"
                      element={
-                        <ProtectedRoute allowedRoles={["USER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.STUDENT}>
                            <SPExam />
                         </ProtectedRoute>
                      }
@@ -115,7 +116,7 @@ const App = () => {
                   <Route
                      path="/student/calendar"
                      element={
-                        <ProtectedRoute allowedRoles={["USER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.STUDENT}>
                            <SPCalendar />
                         </ProtectedRoute>
                      }
@@ -125,7 +126,7 @@ const App = () => {
                   <Route
                      path="/admin"
                      element={
-                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.ADMIN}>
                            <APanel />
                         </ProtectedRoute>
                      }
@@ -133,7 +134,7 @@ const App = () => {
                   <Route
                      path="/admin/groups"
                      element={
-                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.ADMIN}>
                            <APGroups />
                         </ProtectedRoute>
                      }
@@ -141,7 +142,7 @@ const App = () => {
                   <Route
                      path="/admin/instr-groups"
                      element={
-                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.ADMIN}>
                            <APInstrGroups />
                         </ProtectedRoute>
                      }
@@ -149,7 +150,7 @@ const App = () => {
                   <Route
                      path="/admin/calendar"
                      element={
-                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.ADMIN}>
                            <APCalendar />
                         </ProtectedRoute>
                      }
@@ -157,7 +158,7 @@ const App = () => {
                   <Route
                      path="/calendarplus"
                      element={
-                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.ADMIN}>
                            <APCalendarPlus />
                         </ProtectedRoute>
                      }
@@ -165,7 +166,7 @@ const App = () => {
                   <Route
                      path="/admin/calendarplus"
                      element={
-                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.ADMIN}>
                            <APCalendarPlus />
                         </ProtectedRoute>
                      }
@@ -173,7 +174,7 @@ const App = () => {
                   <Route
                      path="/admin/history"
                      element={
-                        <ProtectedRoute allowedRoles={["ADMIN"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.ADMIN}>
                            <APHistory />
                         </ProtectedRoute>
                      }
@@ -183,7 +184,7 @@ const App = () => {
                   <Route
                      path="/manager"
                      element={
-                        <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.MANAGER}>
                            <MPanel />
                         </ProtectedRoute>
                      }
@@ -191,7 +192,7 @@ const App = () => {
                   <Route
                      path="/manager/groups"
                      element={
-                        <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.MANAGER}>
                            <MPGroups />
                         </ProtectedRoute>
                      }
@@ -199,7 +200,7 @@ const App = () => {
                   <Route
                      path="/manager/instr-groups"
                      element={
-                        <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.MANAGER}>
                            <MPInstrGroups />
                         </ProtectedRoute>
                      }
@@ -207,7 +208,7 @@ const App = () => {
                   <Route
                      path="/manager/calendar"
                      element={
-                        <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.MANAGER}>
                            <MPCalendar />
                         </ProtectedRoute>
                      }
@@ -215,7 +216,7 @@ const App = () => {
                   <Route
                      path="/manager/calendarplus"
                      element={
-                        <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.MANAGER}>
                            <MPCalendarPlus />
                         </ProtectedRoute>
                      }
@@ -223,7 +224,7 @@ const App = () => {
                   <Route
                      path="/manager/history"
                      element={
-                        <ProtectedRoute allowedRoles={["MANAGER"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.MANAGER}>
                            <MPHistory />
                         </ProtectedRoute>
                      }
@@ -233,7 +234,7 @@ const App = () => {
                   <Route
                      path="/professor"
                      element={
-                        <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.PROFESSOR}>
                            <PPanel />
                         </ProtectedRoute>
                      }
@@ -241,7 +242,7 @@ const App = () => {
                   <Route
                      path="/professor/students"
                      element={
-                        <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.PROFESSOR}>
                            <PPStudents />
                         </ProtectedRoute>
                      }
@@ -249,7 +250,7 @@ const App = () => {
                   <Route
                      path="/professor/groups"
                      element={
-                        <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.PROFESSOR}>
                            <PPGropus />
                         </ProtectedRoute>
                      }
@@ -257,7 +258,7 @@ const App = () => {
                   <Route
                      path="/professor/student/:studentId/statistics"
                      element={
-                        <ProtectedRoute allowedRoles={["PROFESSOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.PROFESSOR}>
                            <PPStudentStatistics />
                         </ProtectedRoute>
                      }
@@ -267,7 +268,7 @@ const App = () => {
                   <Route
                      path="/instructor"
                      element={
-                        <ProtectedRoute allowedRoles={["INSTRUCTOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.INSTRUCTOR}>
                            <IPanel />
                         </ProtectedRoute>
                      }
@@ -275,7 +276,7 @@ const App = () => {
                   <Route
                      path="/instructor/calendar"
                      element={
-                        <ProtectedRoute allowedRoles={["INSTRUCTOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.INSTRUCTOR}>
                            <IPCalendar />
                         </ProtectedRoute>
                      }
@@ -283,7 +284,7 @@ const App = () => {
                   <Route
                      path="/instructor/today"
                      element={
-                        <ProtectedRoute allowedRoles={["INSTRUCTOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.INSTRUCTOR}>
                            <IPToday />
                         </ProtectedRoute>
                      }
@@ -291,12 +292,14 @@ const App = () => {
                   <Route
                      path="/instructor/groups"
                      element={
-                        <ProtectedRoute allowedRoles={["INSTRUCTOR"]}>
+                        <ProtectedRoute allowedRoles={ALLOW.INSTRUCTOR}>
                            <IPInstrGroups />
                         </ProtectedRoute>
                      }
                   />
                </Route>
+
+               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
          </div>
       </BrowserRouter>

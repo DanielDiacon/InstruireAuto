@@ -22,12 +22,13 @@ import todayIcon from "../../assets/svg/material-symbols--today-outline.svg";
 
 // Professor
 import studentsIcon from "../../assets/svg/graduate.svg";
+import { normalizeRole, ROLES } from "../../auth/access";
 
 export function getLinksForRole(roleRaw) {
-   const role = String(roleRaw || "").toUpperCase();
+   const role = normalizeRole(roleRaw);
 
    const map = {
-      USER: [
+      [ROLES.USER]: [
          { link: "/student", text: "Acasă", icon: homeIcon },
          { link: "/student/calendar", text: "Calendar", icon: calendarIcon },
          { popup: "sAddProg", text: "Programare", icon: addIcon },
@@ -36,7 +37,7 @@ export function getLinksForRole(roleRaw) {
          { popup: "profile", text: "Profil", icon: accIcon },
       ],
 
-      INSTRUCTOR: [
+      [ROLES.INSTRUCTOR]: [
          { link: "/instructor", text: "Acasă", icon: homeIcon },
          { link: "/instructor/calendar", text: "Calendar", icon: calendarIcon },
          { link: "/instructor/today", text: "Azi", icon: todayIcon },
@@ -44,17 +45,20 @@ export function getLinksForRole(roleRaw) {
          { popup: "profile", text: "Profil", icon: accIcon },
       ],
 
-      PROFESSOR: [
+      [ROLES.PROFESSOR]: [
          { link: "/professor", text: "Acasă", icon: homeIcon },
          { link: "/professor/students", text: "Studenți", icon: studentsIcon },
          { link: "/professor/groups", text: "Grupe", icon: groupsIcon },
          { popup: "profile", text: "Profil", icon: accIcon },
       ],
 
-      MANAGER: [
+      [ROLES.MANAGER]: [
          { link: "/manager", text: "Acasă", icon: homeIcon },
-         { link: "/manager/calendar", text: "Calendar", icon: calendarIcon },
-         { link: "/manager/calendarplus", text: "Calendar+", icon: addIcon },
+         {
+            link: "/manager/calendarplus",
+            text: "Calendar+",
+            icon: calendarIcon,
+         },
          //{ popup: "addProg", text: "Programare", icon: addIcon },
          { popup: "addInstr", text: "Instructori", icon: instrIcon },
          { popup: "addProfessor", text: "Profesori", icon: instrIcon },
@@ -73,10 +77,9 @@ export function getLinksForRole(roleRaw) {
          },
       ],
 
-      ADMIN: [
+      [ROLES.ADMIN]: [
          { link: "/admin", text: "Acasă", icon: homeIcon },
-         { link: "/admin/calendar", text: "Calendar", icon: calendarIcon },
-         { link: "/admin/calendarplus", text: "Calendar+", icon: addIcon },
+         { link: "/admin/calendarplus", text: "Calendar+", icon: calendarIcon },
          //{ popup: "addProg", text: "Programare", icon: addIcon },
          { popup: "addInstr", text: "Instructori", icon: instrIcon },
          { popup: "addProfessor", text: "Profesori", icon: instrIcon },

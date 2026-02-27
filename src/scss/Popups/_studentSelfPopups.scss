@@ -1,0 +1,246 @@
+.studentSelfProfilePopup,
+.studentReservationsPopup {
+   height: 100%;
+   display: flex;
+   flex-direction: column;
+   padding: 12px;
+}
+
+.studentSelfProfilePopup {
+   &__hero {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: left;
+   }
+
+   &__avatar {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: var(--accent-l);
+      display: grid;
+      place-items: center;
+      margin-bottom: 12px;
+   }
+
+   &__avatarIcon {
+      display: grid;
+      place-items: center;
+
+      div {
+         display: grid;
+         place-items: center;
+      }
+
+      svg {
+         width: 30px;
+         height: 30px;
+         color: var(--accent-d);
+      }
+   }
+
+   &__name {
+      margin: 0;
+      color: var(--white-p);
+      font-family: "Clash Display";
+      font-size: 24px;
+      line-height: 1;
+      font-weight: 500;
+   }
+
+   &__role {
+      margin: 0;
+      color: var(--white-s);
+   }
+
+   &__content {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding-bottom: 10px;
+
+      &::-webkit-scrollbar {
+         display: none;
+      }
+   }
+
+   &__list {
+      display: grid;
+      gap: 3px;
+   }
+
+   &__row {
+      background: var(--black-p);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      corner-shape: superellipse(1.2);
+      border-radius: 8px;
+      span {
+         color: var(--white-s);
+      }
+
+      strong {
+         color: var(--white-p);
+         text-align: right;
+         font-weight: 400;
+      }
+      &:first-child {
+         border-radius: 24px 24px 8px 8px;
+      }
+      &:last-child {
+         border-radius: 8px 8px 24px 24px;
+      }
+   }
+
+   &__state {
+      color: var(--white-s);
+      font-style: italic;
+   }
+
+   &__error {
+      margin-top: 8px;
+      color: #ffb3b3;
+   }
+
+   &__footer {
+      margin-top: 8px;
+      display: flex;
+      justify-content: center;
+   }
+
+   &__settings.settings {
+      padding: 0;
+      gap: 8px;
+      width: 100%;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+      .settings__item {
+         display: flex;
+         justify-content: flex-start;
+      }
+      .settings__icons,
+      .settings__mode-btn {
+         width: 100%;
+      }
+   }
+}
+
+.studentReservationsPopup {
+   padding: 12px 12px 0;
+
+   &__header {
+      padding-right: 82px;
+   }
+
+   &__title {
+      font-family: "Clash Display";
+      font-size: 24px;
+      font-weight: 500;
+      color: var(--white-p);
+      padding: 6px 0 12px 8px;
+      margin: 0;
+   }
+
+   &__state {
+      color: var(--white-s);
+      font-style: italic;
+   }
+
+   &__error {
+      color: #ffb3b3;
+   }
+
+   &__content {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      padding-bottom: 8px;
+
+      &::-webkit-scrollbar {
+         display: none;
+      }
+   }
+
+   &__section {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+   }
+
+   &__sectionHead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0px 8px;
+   }
+
+   &__sectionTitle {
+      margin: 0;
+      color: var(--white-p);
+      font-size: 16px;
+   }
+
+   &__sectionCount {
+      border-radius: 99px;
+      padding: 4px 10px;
+      background: var(--black-p);
+      color: var(--accent-l);
+      font-size: 12px;
+      line-height: 1;
+   }
+
+   &__sectionEmpty {
+      margin: 0;
+      color: var(--white-t);
+      font-size: 13px;
+   }
+
+   &__grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px;
+      border-radius: 24px;
+      overflow: hidden;
+   }
+
+   &__card {
+      background: var(--black-p);
+      border-radius: 8px;
+      padding: 16px 20px;
+      display: grid;
+      align-content: center;
+      corner-shape: superellipse(1.2);
+      gap: 2px;
+   }
+   /* dacă numărul total de carduri e impar -> ultimul începe pe col 1 și se întinde pe 2 */
+   &__card:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+   }
+   &__date {
+      color: var(--white-p);
+      margin: 0;
+      font-weight: 500;
+   }
+
+   &__time {
+      margin: 0;
+      color: var(--accent-l);
+      font-weight: 500;
+   }
+
+   &__extra {
+      margin: 0;
+      color: var(--white-t);
+      font-size: 12px;
+   }
+}

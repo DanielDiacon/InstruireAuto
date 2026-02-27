@@ -1,6 +1,24 @@
 // src/components/UI/AlertPills.jsx
 import React, { useEffect, useRef, useState } from "react";
 
+function normalizePillType(type) {
+   const key = String(type || "")
+      .trim()
+      .toLowerCase();
+
+   if (key === "warning" || key === "warn") return "warning";
+   if (
+      key === "error" ||
+      key === "err" ||
+      key === "alert" ||
+      key === "danger"
+   ) {
+      return "error";
+   }
+   if (key === "success" || key === "ok") return "success";
+   return "info";
+}
+
 export default function AlertPills({ messages = [], onDismiss = () => {} }) {
    // Hooks trebuie chemate indiferent de mesaje
    const [leaving, setLeaving] = useState(false);
@@ -8,6 +26,7 @@ export default function AlertPills({ messages = [], onDismiss = () => {} }) {
 
    const hasMessage = Array.isArray(messages) && messages.length > 0;
    const m = hasMessage ? messages[messages.length - 1] : null;
+   const normalizedType = normalizePillType(m?.type);
 
    // când se schimbă mesajul, resetăm starea de ieșire
    useEffect(() => {
@@ -33,11 +52,11 @@ export default function AlertPills({ messages = [], onDismiss = () => {} }) {
       <div className="pillstack" role="region" aria-label="Mesaje sistem">
          <div
             ref={pillRef}
-            className={`pill pill--${m.type || "info"} ${
+            className={`pill pill--${normalizedType} ${
                leaving ? "pill--leaving" : ""
             }`}
-            role={m.type === "error" ? "alert" : "status"}
-            aria-live={m.type === "error" ? "assertive" : "polite"}
+            role={normalizedType === "error" ? "alert" : "status"}
+            aria-live={normalizedType === "error" ? "assertive" : "polite"}
             onClick={handleDismiss}
             onTransitionEnd={handleTransitionEnd}
             tabIndex={0}

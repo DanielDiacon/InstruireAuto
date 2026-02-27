@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useContext, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { ReactSVG } from "react-svg";
 import DarkModeToggle from "../components/Header/DarkModeToggle";
 import M3Link from "../components/Common/M3Link";
@@ -20,6 +21,7 @@ import {
    signup,
    requestPasswordReset,
 } from "../api/authService";
+import { getHomePathForRole } from "../auth/access";
 import FooterSign from "../components/FooterSign";
 
 /* ===== Config telefon local ===== */
@@ -42,6 +44,7 @@ function formatLocalPhone(raw) {
 
 function SignPage() {
    const { setUser } = useContext(UserContext);
+   const navigate = useNavigate();
 
    const [mode, setMode] = useState("sign-in");
 
@@ -76,25 +79,7 @@ function SignPage() {
    const clearMessages = () => setMessages([]);
 
    const redirectByRole = (role) => {
-      switch (role) {
-         case "USER":
-            window.location.href = "/student";
-            break;
-         case "ADMIN":
-            window.location.href = "/admin";
-            break;
-         case "MANAGER":
-            window.location.href = "/manager";
-            break;
-         case "INSTRUCTOR":
-            window.location.href = "/instructor";
-            break;
-         case "PROFESSOR":
-            window.location.href = "/professor";
-            break;
-         default:
-            window.location.href = "/";
-      }
+      navigate(getHomePathForRole(role), { replace: true });
    };
 
    useEffect(() => {

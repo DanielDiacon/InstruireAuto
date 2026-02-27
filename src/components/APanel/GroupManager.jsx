@@ -292,6 +292,10 @@ function GroupManager() {
    const groupsState = useSelector((state) => state.groups || {});
    const groups = Array.isArray(groupsState.list) ? groupsState.list : [];
    const users = Array.isArray(groupsState.users) ? groupsState.users : [];
+   const visibleGroups = useMemo(
+      () => groups.filter((g) => !isProtectedToken(g?.token)),
+      [groups],
+   );
 
    const professors = useMemo(
       () =>
@@ -326,7 +330,7 @@ function GroupManager() {
    };
 
    const groupedUsersByGroup = useMemo(() => {
-      return groups.map((group) => ({
+      return visibleGroups.map((group) => ({
          ...group,
          members: users.filter(
             (u) =>
@@ -334,7 +338,7 @@ function GroupManager() {
                String(u?.role || "").toUpperCase() === "USER",
          ),
       }));
-   }, [groups, users]);
+   }, [visibleGroups, users]);
 
    const filteredGroups = useMemo(() => {
       const q = (search.query || "").toLowerCase();
@@ -368,6 +372,15 @@ function GroupManager() {
          values: { name: "", token: "", professorId: "" },
       });
    };
+
+   // Dacă grupa curentă devine invizibilă (token protejat), revenim la listă.
+   useEffect(() => {
+      if (viewMode.mode !== "details" || !viewMode.group) return;
+      const stillVisible = visibleGroups.some(
+         (g) => String(g.id) === String(viewMode.group.id),
+      );
+      if (!stillVisible) setViewMode({ mode: "list", group: null });
+   }, [viewMode, visibleGroups]);
 
    /* CREATE */
    const openCreate = () => {

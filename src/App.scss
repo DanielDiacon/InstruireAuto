@@ -316,7 +316,7 @@ body {
       font-weight: 400;
       color: var(--white-s);
       @media only screen and (max-width: $mobile) {
-         padding: 15px 20px;
+         padding: 18px;
       }
       a {
          color: var(--white-s);
@@ -372,6 +372,7 @@ body.is-exam-mode main {
 @import "./scss/_popupUI";
 @import "./scss/_sign";
 @import "./scss/_header";
+@import "./scss/_studentMobileTopBar";
 
 //panels
 @import "./scss/_panel";
@@ -394,6 +395,7 @@ body.is-exam-mode main {
 @import "./scss/Popups/aAddProg";
 @import "./scss/Popups/_eventInfo";
 @import "./scss/Popups/_permision";
+@import "./scss/Popups/_studentSelfPopups";
 
 // ui no cu corectii =======================================
 @import "./scss/APanel/adminPanel";

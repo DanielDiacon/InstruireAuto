@@ -24,6 +24,7 @@ import {
    getQuestionCategories,
    getQuestionCategoriesWithCount,
 } from "../../api/questionCategoriesService";
+import { searchQuestions } from "../../api/questionsService";
 
 /* ================= i18n ================= */
 const I18N = {
@@ -197,8 +198,19 @@ function normalizeSessionToTicket(sess, lang) {
          ? q.answers
          : [q?.a1, q?.a2, q?.a3, q?.a4].filter((v) => v != null);
 
-      const localId = Number(q?.id ?? q?.questionId ?? i + 1);
-      const serverQuestionId = Number(q?.questionId ?? q?.id ?? localId);
+      const rawLocalId = q?.id ?? q?.questionId ?? i + 1;
+      const parsedLocalId = Number(rawLocalId);
+      const localId =
+         Number.isInteger(parsedLocalId) && parsedLocalId > 0
+            ? parsedLocalId
+            : i + 1;
+
+      const rawServerId = q?.questionId ?? q?.id ?? localId;
+      const parsedServerId = Number(rawServerId);
+      const serverQuestionId =
+         Number.isInteger(parsedServerId) && parsedServerId > 0
+            ? parsedServerId
+            : localId;
 
       return {
          id: localId, // UI key
@@ -256,6 +268,16 @@ function firstUnansweredIndex(ticket, pendingMap) {
    return i >= 0 ? i : 0;
 }
 
+function isSessionOpenForAnswers(sess) {
+   if (!sess || typeof sess !== "object") return false;
+
+   const st = String(sess?.status || "").toUpperCase();
+   if (st) return isInProgressStatus(st);
+
+   if (sess?.completedAt || sess?.finishedAt || sess?.endedAt) return false;
+   return true;
+}
+
 async function tryResumeFromLocal(tid, lang) {
    try {
       const last = localStorage.getItem(lastKeyForTicket(tid));
@@ -276,35 +298,116 @@ function normalizeCorrectIdx(raw, answersLen) {
    return null;
 }
 
-/* === normalize response de la submitPracticeAnswer (category) === */
-function normalizeSubmitAnswerResponse(raw, answersLen) {
-   const obj =
-      raw && typeof raw === "object"
-         ? raw.data || raw.result || raw.payload || raw
-         : {};
+function normalizeSelectedToZeroBased(raw, answersLen) {
+   const n = Number(raw);
+   if (!Number.isInteger(n) || answersLen <= 0) return null;
+   if (n >= 0 && n < answersLen) return n; // 0-based
+   if (n >= 1 && n <= answersLen) return n - 1; // 1-based
+   return null;
+}
 
-   const correctRaw =
-      obj.correct ??
-      obj.isCorrect ??
-      obj.ok ??
-      obj.success ??
-      obj.right ??
-      obj.isRight;
+function isInProgressStatus(status) {
+   const up = String(status || "").toUpperCase();
+   return (
+      up.includes("IN_PROGRESS") ||
+      up.includes("STARTED") ||
+      up.includes("ACTIVE")
+   );
+}
 
-   const correct = typeof correctRaw === "boolean" ? correctRaw : null;
+function normalizeQuestionsSearchItems(raw) {
+   if (Array.isArray(raw)) return raw;
+   const items = raw?.data || raw?.items || raw?.results || raw?.rows || [];
+   return Array.isArray(items) ? items : [];
+}
 
-   const idxRaw =
-      obj.correctIdx ??
-      obj.correctIndex ??
-      obj.correctAnswerIdx ??
-      obj.correctAnswerIndex ??
-      obj.correctAnswer ??
-      obj.rightAnswerIndex ??
-      obj.rightAnswer;
+function readTotalPages(raw) {
+   const n = Number(
+      raw?.pagination?.totalPages ??
+         raw?.meta?.totalPages ??
+         raw?.totalPages ??
+         raw?.pages ??
+         0
+   );
+   return Number.isInteger(n) && n > 0 ? n : null;
+}
 
-   const correctIdx = normalizeCorrectIdx(idxRaw, answersLen);
+async function loadCategoryCorrectMapFromQuestionsApi(categoryId, sessQuestions) {
+   const cid = Number(categoryId);
+   if (!Number.isInteger(cid) || cid <= 0) return {};
 
-   return { correct, correctIdx };
+   const wantedByServerId = new Map(); // serverQid -> [localId/serverId keys]
+   for (const q of sessQuestions || []) {
+      const localId = Number(q?.id);
+      const serverQid = Number(q?.serverQuestionId ?? q?.questionId ?? q?.id);
+      if (!Number.isInteger(serverQid) || serverQid <= 0) continue;
+
+      const keys = wantedByServerId.get(serverQid) || [];
+      if (Number.isInteger(localId) && localId > 0 && !keys.includes(localId)) {
+         keys.push(localId);
+      }
+      if (!keys.includes(serverQid)) keys.push(serverQid);
+      wantedByServerId.set(serverQid, keys);
+   }
+   if (!wantedByServerId.size) return {};
+
+   const out = {};
+   const LIMIT = 200;
+   const MAX_PAGES = 40;
+   let page = 1;
+   let totalPages = null;
+
+   while (page <= MAX_PAGES) {
+      const raw = await searchQuestions({
+         page,
+         limit: LIMIT,
+         categoryId: cid,
+      });
+      const items = normalizeQuestionsSearchItems(raw);
+      if (!items.length) break;
+
+      for (const qq of items) {
+         const serverQid = Number(qq?.id ?? qq?.questionId);
+         if (!Number.isInteger(serverQid) || !wantedByServerId.has(serverQid)) {
+            continue;
+         }
+
+         const answersRaw = Array.isArray(qq?.answers)
+            ? qq.answers
+            : [qq?.a1, qq?.a2, qq?.a3, qq?.a4].filter((v) => v != null);
+         const answersLen = Array.isArray(answersRaw) ? answersRaw.length : 0;
+         const ci = normalizeCorrectIdx(
+            qq?.correctAnswer ?? qq?.correctIndex ?? qq?.rightIndex,
+            answersLen
+         );
+         if (!Number.isInteger(ci)) continue;
+
+         const keys = wantedByServerId.get(serverQid) || [];
+         for (const key of keys) out[key] = ci;
+      }
+
+      let done = true;
+      for (const keys of wantedByServerId.values()) {
+         let hasAny = false;
+         for (const k of keys) {
+            if (Number.isInteger(out[k])) {
+               hasAny = true;
+               break;
+            }
+         }
+         if (!hasAny) {
+            done = false;
+            break;
+         }
+      }
+      if (done) break;
+
+      totalPages = totalPages || readTotalPages(raw);
+      if (totalPages && page >= totalPages) break;
+      page += 1;
+   }
+
+   return out;
 }
 
 /* ===== Categories helpers ===== */
@@ -417,11 +520,7 @@ function histCorrect(it, total) {
    return Math.max(0, Math.floor(c));
 }
 
-/**
- * ✅ IMPORTANT FIX:
- * Badge-ul pe categorie trebuie să reflecte ULTIMA încercare (latest),
- * nu "cel mai recent PASSED".
- */
+/* Category badge: preferă ultima încercare finalizată; dacă nu există, folosește latest. */
 function computeCategoryStat(items, fallbackTotal) {
    const list = Array.isArray(items) ? items.slice() : [];
    const fbTotal = Number(fallbackTotal) || 0;
@@ -430,18 +529,19 @@ function computeCategoryStat(items, fallbackTotal) {
       return { state: "none", correct: 0, total: fbTotal };
    }
 
-   list.sort((a, b) => histTs(b) - histTs(a)); // latest first
+   list.sort((a, b) => histTs(b) - histTs(a));
 
-   const last = list[0];
-   const total = Math.max(0, Number(histTotal(last, fbTotal)) || 0);
+   const latestFinished = list.find((it) => !isInProgressStatus(it?.status));
+   const target = latestFinished || list[0];
+   const total = Math.max(0, Number(histTotal(target, fbTotal)) || 0);
    const correct = Math.min(
       total,
-      Math.max(0, Number(histCorrect(last, total)) || 0)
+      Math.max(0, Number(histCorrect(target, total)) || 0)
    );
 
-   const st = String(last?.status || "").toUpperCase();
+   const st = String(target?.status || "").toUpperCase();
 
-   if (st.includes("IN_PROGRESS") || st.includes("STARTED")) {
+   if (!latestFinished && (st.includes("IN_PROGRESS") || st.includes("STARTED"))) {
       return { state: "none", correct, total };
    }
    if (st.includes("FAILED")) return { state: "bad", correct, total };
@@ -516,7 +616,7 @@ export default function Practice() {
    const [pillMsgs, setPillMsgs] = useState([]);
    const qTextRef = useRef(null);
    const timerRef = useRef(null);
-   const [remaining, setRemaining] = useState(20 * 60);
+   const [remaining, setRemaining] = useState(60 * 60);
 
    // ✅ anti-race pentru category stats
    const catStatsReqRef = useRef(0);
@@ -605,9 +705,6 @@ export default function Practice() {
                         0
                   ) || 0;
 
-               const prev = lastByPNr.get(pNr);
-               if (prev && ts <= prev.ts) continue;
-
                const total = Number(
                   it.totalQuestions ??
                      it.total ??
@@ -625,14 +722,30 @@ export default function Practice() {
                      0
                );
 
-               lastByPNr.set(pNr, { ts, status, total, correct });
+               const prev = lastByPNr.get(pNr) || {
+                  finished: null,
+                  inProgress: null,
+               };
+               const record = { ts, status, total, correct };
+
+               if (isInProgressStatus(status)) {
+                  if (!prev.inProgress || ts > prev.inProgress.ts) {
+                     prev.inProgress = record;
+                  }
+               } else if (!prev.finished || ts > prev.finished.ts) {
+                  prev.finished = record;
+               }
+
+               lastByPNr.set(pNr, prev);
             }
 
             const mapObj = {};
-            for (const [pNr, v] of lastByPNr.entries()) {
+            for (const [pNr, rec] of lastByPNr.entries()) {
+               const v = rec?.finished || rec?.inProgress;
+               if (!v) continue;
+
                const localId = START_ID + (pNr - 1);
-               if (String(v.status).toUpperCase().includes("IN_PROGRESS"))
-                  continue;
+               if (isInProgressStatus(v.status)) continue;
 
                let cls;
                const up = String(v.status || "").toUpperCase();
@@ -757,9 +870,19 @@ export default function Practice() {
             data = normalizePagedResponse(raw);
          }
          const list = Array.isArray(data) ? data : normalizePagedResponse(data);
-         setCategories(list);
+         const sortedList = [...list].sort((a, b) => {
+            const aId = Number(a?.id);
+            const bId = Number(b?.id);
+            const aOk = Number.isFinite(aId);
+            const bOk = Number.isFinite(bId);
+            if (aOk && bOk) return aId - bId;
+            if (aOk) return -1;
+            if (bOk) return 1;
+            return 0;
+         });
 
-         await loadCategoryStats(list);
+         setCategories(sortedList);
+         await loadCategoryStats(sortedList);
       } catch (e) {
          setCategories([]);
          setCatStatsMap({});
@@ -860,46 +983,53 @@ export default function Practice() {
             const pid = Number(resumed.pid);
             const sess = resumed.sess;
 
-            setPracticeMode("server");
-            setPracticeId(pid);
-            setTicketId(Number(tid));
-            rememberPractice(Number(tid), pid);
+            // Nu reluăm sesiuni închise/expirate din localStorage.
+            if (!isSessionOpenForAnswers(sess)) {
+               try {
+                  localStorage.removeItem(lastKeyForTicket(tid));
+               } catch {}
+            } else {
+               setPracticeMode("server");
+               setPracticeId(pid);
+               setTicketId(Number(tid));
+               rememberPractice(Number(tid), pid);
 
-            let tkt = normalizeSessionToTicket(sess, lang);
-            tkt = {
-               ...tkt,
-               questions: [...(tkt?.questions || [])].sort(
-                  (a, b) => (a.order ?? 0) - (b.order ?? 0)
-               ),
-            };
-            setTicket(tkt);
+               let tkt = normalizeSessionToTicket(sess, lang);
+               tkt = {
+                  ...tkt,
+                  questions: [...(tkt?.questions || [])].sort(
+                     (a, b) => (a.order ?? 0) - (b.order ?? 0)
+                  ),
+               };
+               setTicket(tkt);
 
-            const base = buildBaselineFromSession(sess);
-            setBaselineMap(base);
+               const base = buildBaselineFromSession(sess);
+               setBaselineMap(base);
 
-            try {
-               const srvQs = await getTicketQuestions(tid);
-               const cm = {};
-               (srvQs || []).forEach((q) => {
-                  const answersLen = Array.isArray(q?.answers)
-                     ? q.answers.length
-                     : 0;
-                  const ci = normalizeCorrectIdx(q?.correctAnswer, answersLen);
-                  if (Number.isInteger(q?.id) && Number.isInteger(ci))
-                     cm[q.id] = ci;
-               });
-               setCorrectMap(cm);
-            } catch {
-               setCorrectMap({});
-            } finally {
-               setCorrectLoaded(true);
+               try {
+                  const srvQs = await getTicketQuestions(tid);
+                  const cm = {};
+                  (srvQs || []).forEach((q) => {
+                     const answersLen = Array.isArray(q?.answers)
+                        ? q.answers.length
+                        : 0;
+                     const ci = normalizeCorrectIdx(q?.correctAnswer, answersLen);
+                     if (Number.isInteger(q?.id) && Number.isInteger(ci))
+                        cm[q.id] = ci;
+                  });
+                  setCorrectMap(cm);
+               } catch {
+                  setCorrectMap({});
+               } finally {
+                  setCorrectLoaded(true);
+               }
+
+               setAnswersMap({});
+               setIdx(firstUnansweredIndex(tkt, {}));
+               setView("test");
+               setLoading(false);
+               return;
             }
-
-            setAnswersMap({});
-            setIdx(firstUnansweredIndex(tkt, {}));
-            setView("test");
-            setLoading(false);
-            return;
          }
 
          const started = await startPracticeSession(tid, lang);
@@ -1027,7 +1157,28 @@ export default function Practice() {
          const base = buildBaselineFromSession(sess);
          setBaselineMap(base);
 
-         setCorrectMap({});
+         const cm = {};
+         (tkt?.questions || []).forEach((q) => {
+            const qid = Number(q?.id);
+            const serverQid = Number(q?.serverQuestionId ?? q?.id);
+            const answersLen = Array.isArray(q?.answers) ? q.answers.length : 0;
+            const ci = normalizeCorrectIdx(q?.correctAnswer, answersLen);
+            if (Number.isInteger(ci)) {
+               if (Number.isInteger(qid) && qid > 0) cm[qid] = ci;
+               if (Number.isInteger(serverQid) && serverQid > 0)
+                  cm[serverQid] = ci;
+            }
+         });
+
+         try {
+            const byQuestionsApi = await loadCategoryCorrectMapFromQuestionsApi(
+               cid,
+               tkt?.questions || []
+            );
+            Object.assign(cm, byQuestionsApi);
+         } catch {}
+
+         setCorrectMap(cm);
          setCorrectLoaded(true);
 
          setAnswersMap({});
@@ -1047,7 +1198,6 @@ export default function Practice() {
 
    useEffect(() => {
       if (!correctLoaded || !ticket) return;
-      if (sessionKind === "category") return;
 
       setAnswersMap((prev) => {
          let changed = false;
@@ -1144,21 +1294,37 @@ export default function Practice() {
       }));
    };
 
-   // ✅ Category: 0-based la submit
-   const onChooseCategory = async (answerIdx) => {
+   // Category (separat): simulare locală, fără submit instant.
+   const handleCategoryAnswerLocal = (answerIdx) => {
       if (!current) return;
-      if (practiceMode !== "server" || !practiceId) return;
+      if (loading) return;
 
       const qKey = Number(current.id);
-      const serverQid = getServerQid(current);
-
       if (!Number.isInteger(qKey) || qKey <= 0) return;
-      if (!Number.isInteger(serverQid) || serverQid <= 0) return;
 
       const already = answersMap[qKey];
       if (already?.selected != null || already?.pending) return;
 
       const selected = Number(answerIdx);
+      const ci = Number.isInteger(correctMap[qKey])
+         ? Number(correctMap[qKey])
+         : null;
+      const hasLocalCorrect = Number.isInteger(ci);
+
+      if (hasLocalCorrect) {
+         const corr = Number(selected) === Number(ci);
+         setAnswersMap((prev) => ({
+            ...prev,
+            [qKey]: {
+               selected,
+               correct: corr,
+               correctIdx: ci,
+               at: new Date().toISOString(),
+               pending: false,
+            },
+         }));
+         return;
+      }
 
       setAnswersMap((prev) => ({
          ...prev,
@@ -1167,75 +1333,94 @@ export default function Practice() {
             correct: null,
             correctIdx: null,
             at: new Date().toISOString(),
-            pending: true,
+            pending: false,
+            error: false,
          },
       }));
-
-      try {
-         const resp = await submitPracticeAnswer(practiceId, {
-            questionId: serverQid,
-            selectedAnswer: selected, // ✅ 0-based (NU +1)
-         });
-
-         const answersLen = (current.answers || []).length;
-         const payload = typeof resp === "function" ? resp(answersLen) : resp;
-         const norm = normalizeSubmitAnswerResponse(payload, answersLen);
-
-         const finalCorrectIdx = Number.isInteger(norm.correctIdx)
-            ? norm.correctIdx
-            : norm.correct === true
-            ? selected
-            : null;
-
-         setAnswersMap((prev) => ({
-            ...prev,
-            [qKey]: {
-               ...prev[qKey],
-               pending: false,
-               correct:
-                  typeof norm.correct === "boolean"
-                     ? norm.correct
-                     : prev[qKey]?.correct ?? null,
-               correctIdx: Number.isInteger(finalCorrectIdx)
-                  ? finalCorrectIdx
-                  : null,
-            },
-         }));
-
-         setBaselineMap((prev) => ({ ...prev, [qKey]: selected }));
-      } catch (e) {
-         setAnswersMap((prev) => ({
-            ...prev,
-            [qKey]: { ...prev[qKey], pending: false, error: true },
-         }));
-         pushError(t("cannot_submit"));
-      }
    };
 
-   // ✅ Trimite diffs DOAR pentru bilete (categorii deja trimit la fiecare click)
-   async function sendPendingDiffs() {
+   // Ticket flow (neschimbat): submit la final, 1-based.
+   async function sendPendingTicketDiffs() {
       if (sessionKind !== "ticket") return;
       if (practiceMode !== "server" || !practiceId) return;
+      if (!ticket?.questions?.length) return;
+
+      try {
+         const sess = await getPracticeSession(practiceId, lang);
+         if (!isSessionOpenForAnswers(sess)) return;
+      } catch {
+         return;
+      }
 
       const diffs = [];
       for (const q of ticket?.questions || []) {
          const qKey = Number(q.id);
+         const answersLen = Array.isArray(q?.answers) ? q.answers.length : 0;
          const pendingSel =
             answersMap[qKey] && Number.isInteger(answersMap[qKey].selected)
                ? Number(answersMap[qKey].selected)
                : null;
          if (pendingSel == null) continue;
 
-         const baselineSel = Number.isInteger(baselineMap[qKey])
-            ? Number(baselineMap[qKey])
-            : null;
+         const baselineSel = normalizeSelectedToZeroBased(
+            baselineMap[qKey],
+            answersLen
+         );
 
          if (baselineSel === null || pendingSel !== baselineSel) {
             const serverQid = getServerQid(q);
             if (Number.isInteger(serverQid) && serverQid > 0) {
                diffs.push({
                   questionId: serverQid,
-                  selectedAnswer: pendingSel + 1, // ✅ bilete rămân 1-based pe server
+                  selectedAnswer: pendingSel + 1,
+               });
+            }
+         }
+      }
+
+      for (const d of diffs) {
+         try {
+            await submitPracticeAnswer(practiceId, d);
+         } catch {
+            // ignore punctual
+         }
+      }
+   }
+
+   // Category flow (separat): submit la final, 0-based.
+   async function sendPendingCategoryDiffs() {
+      if (sessionKind !== "category") return;
+      if (practiceMode !== "server" || !practiceId) return;
+      if (!ticket?.questions?.length) return;
+
+      try {
+         const sess = await getPracticeSession(practiceId, lang);
+         if (!isSessionOpenForAnswers(sess)) return;
+      } catch {
+         return;
+      }
+
+      const diffs = [];
+      for (const q of ticket?.questions || []) {
+         const qKey = Number(q.id);
+         const answersLen = Array.isArray(q?.answers) ? q.answers.length : 0;
+         const pendingSel =
+            answersMap[qKey] && Number.isInteger(answersMap[qKey].selected)
+               ? Number(answersMap[qKey].selected)
+               : null;
+         if (pendingSel == null) continue;
+
+         const baselineSel = normalizeSelectedToZeroBased(
+            baselineMap[qKey],
+            answersLen
+         );
+
+         if (baselineSel === null || pendingSel !== baselineSel) {
+            const serverQid = getServerQid(q);
+            if (Number.isInteger(serverQid) && serverQid > 0) {
+               diffs.push({
+                  questionId: serverQid,
+                  selectedAnswer: pendingSel,
                });
             }
          }
@@ -1251,16 +1436,20 @@ export default function Practice() {
    }
 
    const finalizeAttempt = async (reason = "user-finish") => {
+      if (reason === "user-finish") {
+         try {
+            if (sessionKind === "ticket") {
+               await sendPendingTicketDiffs();
+            } else if (sessionKind === "category") {
+               await sendPendingCategoryDiffs();
+            }
+         } catch {}
+      }
+
       // mic "sync" pentru ca serverul să finalizeze statusul înainte de history
       if (practiceMode === "server" && practiceId) {
          try {
             await getPracticeSession(practiceId, lang);
-         } catch {}
-      }
-
-      if (reason === "user-finish") {
-         try {
-            await sendPendingDiffs();
          } catch {}
       }
 
@@ -1309,7 +1498,7 @@ export default function Practice() {
                   style={{
                      display: "flex",
                      alignItems: "center",
-                     gap: 10,
+                     gap: 6,
                      justifyContent: "space-between",
                      flexWrap: "wrap",
                   }}
@@ -1317,67 +1506,65 @@ export default function Practice() {
                   <h2 style={{ margin: 0 }}>{t("practice_title")}</h2>
 
                   <div
-                     style={{ display: "flex", gap: 10, alignItems: "center" }}
+                     style={{ display: "flex", gap: 6, alignItems: "center" }}
                   >
-                     <div
-                        className="practice__tabs"
-                        style={{ display: "flex", gap: 8 }}
-                     >
-                        <button
-                           type="button"
-                           className={
-                              "practice__back bottom toggle" +
-                              (homeTab === "tickets" ? " yellow" : "")
-                           }
-                           onClick={() => setHomeTab("tickets")}
+                     <div className="practice__selector practice__selector--row">
+                        <div
+                           className={`practice__radio-wrapper ${
+                              homeTab === "tickets"
+                                 ? "practice__radio-wrapper--left"
+                                 : "practice__radio-wrapper--right"
+                           }`}
                         >
-                           {t("tickets_tab")}
-                        </button>
+                           <button
+                              type="button"
+                              className="practice__back practice__back--toggle"
+                              onClick={() => setHomeTab("tickets")}
+                           >
+                              {t("tickets_tab")}
+                           </button>
 
-                        <button
-                           type="button"
-                           className={
-                              "practice__back bottom toggle" +
-                              (homeTab === "categories" ? " yellow" : "")
-                           }
-                           onClick={() => {
-                              setHomeTab("categories");
-                              if (!categories.length) loadCategories();
-                              else if (!hasAnyCatStats && !catStatsLoading)
-                                 loadCategoryStats(categories);
-                           }}
-                        >
-                           {t("categories_tab")}
-                        </button>
+                           <button
+                              type="button"
+                              className="practice__back practice__back--toggle"
+                              onClick={() => {
+                                 setHomeTab("categories");
+                                 if (!categories.length) loadCategories();
+                                 else if (!hasAnyCatStats && !catStatsLoading)
+                                    loadCategoryStats(categories);
+                              }}
+                           >
+                              {t("categories_tab")}
+                           </button>
+                        </div>
                      </div>
 
-                     <div
-                        className="exam-lang"
-                        style={{ display: "flex", gap: 8 }}
-                     >
-                        <button
-                           type="button"
-                           className={
-                              "practice__back bottom toggle" +
-                              (lang === "ro" ? " yellow" : "")
-                           }
-                           onClick={() => setLang("ro")}
-                           title={t("lang_ro")}
+                     <div className="practice__selector practice__selector--row">
+                        <div
+                           className={`practice__radio-wrapper ${
+                              lang === "ro"
+                                 ? "practice__radio-wrapper--left"
+                                 : "practice__radio-wrapper--right"
+                           }`}
                         >
-                           RO
-                        </button>
+                           <button
+                              type="button"
+                              className="practice__back practice__back--toggle"
+                              onClick={() => setLang("ro")}
+                              title={t("lang_ro")}
+                           >
+                              RO
+                           </button>
 
-                        <button
-                           type="button"
-                           className={
-                              "practice__back bottom toggle" +
-                              (lang === "ru" ? " yellow" : "")
-                           }
-                           onClick={() => setLang("ru")}
-                           title={t("lang_ru")}
-                        >
-                           RU
-                        </button>
+                           <button
+                              type="button"
+                              className="practice__back practice__back--toggle"
+                              onClick={() => setLang("ru")}
+                              title={t("lang_ru")}
+                           >
+                              RU
+                           </button>
+                        </div>
                      </div>
                   </div>
                </div>
@@ -1402,12 +1589,12 @@ export default function Practice() {
                            const stat = catStatsMap[c.id];
                            const state = stat?.state || "none";
                            const totalDisp = Number(stat?.total ?? cnt ?? 0);
-                           const correctDisp = Number(stat?.correct ?? 0);
+                           const answeredDisp = Number(stat?.answered ?? 0);
 
                            const badgeText =
                               !stat && catStatsLoading
                                  ? `…/${totalDisp || cnt || 0}`
-                                 : `${correctDisp}/${totalDisp || cnt || 0}`;
+                                 : `${answeredDisp}/${totalDisp || cnt || 0}`;
 
                            return (
                               <button
@@ -1420,9 +1607,6 @@ export default function Practice() {
                                  <div className="practice__cat-left">
                                     <div className="practice__cat-title">
                                        {title}
-                                    </div>
-                                    <div className="practice__cat-sub">
-                                       ID: {c.id}
                                     </div>
                                  </div>
 
@@ -1630,7 +1814,7 @@ export default function Practice() {
                                     className={className}
                                     onClick={() =>
                                        sessionKind === "category"
-                                          ? onChooseCategory(i)
+                                          ? handleCategoryAnswerLocal(i)
                                           : onChooseTicket(i)
                                     }
                                     title={t("choose_answer")}

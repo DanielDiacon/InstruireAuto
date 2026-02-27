@@ -1,27 +1,125 @@
-.saddprogramari {
+.studentAddReservation {
+   position: relative;
+   padding: 12px;
+   padding-bottom: 76px;
+   height: 100%;
+   &__title-main {
+      color: var(--white-p);
+      font-family: "Clash Display";
+      z-index: 22;
+      font-size: 24px;
+      font-weight: 500;
+      padding: 6px 0 12px 8px;
+   }
+
+   &__content {
+      flex: 1 1 auto;
+      display: flex;
+      gap: 6px;
+      flex-direction: column;
+      height: 100%;
+   }
+
+   &__pick-topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      position: relative;
+      z-index: 2;
+   }
+
    &__selector {
       display: grid;
       gap: 6px;
       grid-template-columns: 5fr 3fr;
       flex-wrap: wrap;
-      &.row {
-         grid-template-columns: 1fr 1fr;
-         padding: 0 0 6px 0px;
+      &--row {
+         grid-template-columns: 1fr;
          align-items: center;
+         background: var(--black-p);
+         padding: 6px;
+         corner-shape: superellipse(1.2);
+         border-radius: 28px;
       }
-      &.col {
+      &--col {
          grid-template-columns: 1fr;
       }
    }
    &__title {
       color: var(--white-p);
+      text-align: center;
+      padding: 8px;
    }
+
+   &__radio-wrapper {
+      display: flex;
+      width: 100%;
+      position: relative;
+      gap: 6px;
+      label {
+         flex: 1 1 50%;
+         text-align: center;
+         padding: 12px 0;
+         cursor: pointer;
+         color: var(--white-p);
+         position: relative;
+         z-index: 1;
+         transition:
+            all var(--elastic-s),
+            background var(--classic-s),
+            color var(--classic-s);
+
+         input {
+            display: none;
+         }
+      }
+
+      &--left {
+         label:first-child {
+            color: var(--accent-d);
+            background: var(--accent-l);
+            border-radius: 30px;
+         }
+         label:nth-child(2) {
+            color: var(--white-s);
+            background: var(--black-s);
+            border-radius: 8px 30px 30px 8px;
+         }
+      }
+
+      &--right {
+         label:first-child {
+            color: var(--white-s);
+            background: var(--black-s);
+            border-radius: 30px 8px 8px 30px;
+         }
+         label:nth-child(2) {
+            color: var(--accent-d);
+            background: var(--accent-l);
+            border-radius: 30px;
+         }
+      }
+
+      &--group-disabled {
+         label:first-child {
+            opacity: 0.5;
+            cursor: not-allowed;
+         }
+      }
+   }
+
    &__calendar {
       gap: 6px;
       display: flex;
       flex-direction: column;
       border-radius: 25px;
       color: var(--white-p);
+      & > div {
+         background: #000;
+         height: 100%;
+         min-height: 300px;
+      }
    }
    &__day--inactive {
       opacity: 0.4;
@@ -42,8 +140,8 @@
       position: relative;
       display: grid;
       gap: 6px;
-      grid-template-columns: repeat(auto-fit, minmax(50px, 1fr));
-      grid-template-rows: repeat(5, 1fr);
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: repeat(4, 1fr);
       height: 100%;
    }
    &__disclaimer {
@@ -127,7 +225,7 @@
             margin: 0;
          }
       }
-      &--outline-daily.saddprogramari__time-btn--disabled {
+      &--outline-daily.studentAddReservation__time-btn--disabled {
          opacity: 0.8;
       }
       &--outline-daily {
@@ -151,6 +249,18 @@
       gap: 6px;
       justify-content: center;
       padding: 6px;
+
+      &--single {
+         .studentAddReservation__add-btn {
+            width: 100%;
+         }
+      }
+
+      &--dual {
+         .studentAddReservation__add-btn {
+            flex: 1 1 0;
+         }
+      }
    }
    &__add-btn {
       background: var(--accent-l);
@@ -170,7 +280,7 @@
          justify-content: center;
          align-items: center;
       }
-      &-icon.delete {
+      &-icon--delete {
          color: var(--white-p);
 
          background: #f6808000;
@@ -194,7 +304,7 @@
          transition: var(--classic-s);
          color: var(--accent-d);
       }
-      &.arrow {
+      &--arrow {
          span {
             padding: 7px 0 7px 14px;
          }
@@ -202,7 +312,7 @@
             transform: rotate(180deg);
          }
       }
-      &.list {
+      &--list {
          background: var(--black-p);
 
          span {
@@ -211,7 +321,7 @@
          }
       }
 
-      &.arrow0 {
+      &--back {
          background: var(--black-p);
 
          span {
@@ -230,6 +340,9 @@
                color: var(--accent-l);
             }
          }
+      }
+      &--full {
+         width: 100%;
       }
       &:hover {
          transition: var(--elastic-s);
@@ -265,8 +378,48 @@
          }
       }
    }
+   &__auto-fab {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      border: none;
+      border-radius: 999px;
+      background: var(--black-p);
+      color: var(--white-p);
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: var(--classic-s);
+      z-index: 3;
+
+      &:hover {
+         border-radius: 18px;
+         color: var(--accent-l);
+      }
+
+      &:active {
+         transform: scale(0.96);
+      }
+
+      &:disabled {
+         opacity: 0.45;
+         cursor: not-allowed;
+
+         &:hover {
+            border-radius: 999px;
+            color: var(--white-p);
+         }
+      }
+   }
    &__added {
       color: var(--white-p);
+   }
+   &__empty-note {
+      color: var(--white-s);
+      background: var(--black-p);
+      border-radius: 20px;
+      padding: 12px;
+      text-align: center;
+      margin-top: 6px;
    }
 
    &__added-list {
@@ -302,7 +455,24 @@
          color: var(--white-p);
       }
       &--conflict {
-         background: #f2919179;
+         background: var(--red-t);
+         border: 1px solid var(--red-l);
+         box-shadow: inset 0 0 0 1px #f6808059;
+
+         .studentAddReservation__added-item-date,
+         .studentAddReservation__added-item-time,
+         .studentAddReservation__muted-note {
+            color: var(--red-d);
+            opacity: 1;
+         }
+
+         .studentAddReservation__add-btn-icon--delete {
+            color: var(--red-d);
+            &:hover {
+               color: var(--red-d);
+               background: #f6808070;
+            }
+         }
       }
    }
    /* containere & spacing */
@@ -335,29 +505,34 @@
       display: grid;
       grid-template-columns: repeat(2, 1fr);
       width: 100%;
-      .btn {
-         border: none;
-         border-radius: 10px;
-         padding: 11.5px 12px;
-         cursor: pointer;
-         transition:
-            all var(--elastic-f),
-            background var(--classic-f);
-         background: #f6808000;
-         color: var(--white-p);
-         width: 100%;
-         &:hover {
-            border-radius: 20px;
-         }
-         &:active {
-            scale: 0.95;
-         }
+   }
+
+   &__confirm-btn {
+      border: none;
+      border-radius: 10px;
+      padding: 11.5px 12px;
+      cursor: pointer;
+      transition:
+         all var(--elastic-f),
+         background var(--classic-f);
+      background: #f6808000;
+      color: var(--white-p);
+      width: 100%;
+
+      &:hover {
+         border-radius: 20px;
       }
-      .btn-danger {
+
+      &:active {
+         scale: 0.95;
+      }
+
+      &--danger {
          color: #410000;
          background: #f68080;
       }
-      .btn-secondary {
+
+      &--secondary {
          color: var(--white-s);
          background: var(--black-s);
       }
@@ -477,38 +652,45 @@
       --sw: var(--black-s);
    }
 }
-.phone-suggestions {
-   display: grid;
-   grid-template-columns: 1fr 1fr;
-   gap: 6px;
-   padding: 6px 0;
-   &__item {
-      background: var(--black-p);
-      border-radius: 16px;
-      padding: 10px 14px;
-      cursor: pointer;
-      transition: var(--classic-f);
-      color: var(--white-s);
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      &:hover {
-         background: var(--green-l);
-         color: var(--green-d);
-      }
-      &:active {
-         transform: scale(0.97);
-      }
-   }
-}
+//.phone-suggestions {
+//   display: grid;
+//   grid-template-columns: 1fr 1fr;
+//   gap: 6px;
+//   padding: 6px 0;
+//   &__item {
+//      background: var(--black-p);
+//      border-radius: 16px;
+//      padding: 10px 14px;
+//      cursor: pointer;
+//      transition: var(--classic-f);
+//      color: var(--white-s);
+//      display: flex;
+//      flex-direction: column;
+//      gap: 3px;
+//      &:hover {
+//         background: var(--green-l);
+//         color: var(--green-d);
+//      }
+//      &:active {
+//         transform: scale(0.97);
+//      }
+//   }
+//}
 /* butoane simple reutilizabile */
 
 @media only screen and (max-width: $mobile) {
-   .saddprogramari {
+   .studentAddReservation {
+      &__title-main {
+         font-size: 24px;
+
+         color: var(--white-p);
+         font-family: "Clash Display";
+         font-weight: 500;
+         z-index: 22;
+      }
       &__selector {
          grid-template-columns: 1fr;
-         &.row {
-            grid-template-columns: 2fr 3fr;
+         &--row {
             align-items: center;
          }
       }
@@ -522,6 +704,9 @@
          gap: 6px;
          height: 100%;
          padding: 0;
+      }
+      &__times-title {
+         display: none;
       }
 
       &__times-list {
@@ -538,10 +723,10 @@
    }
    .react-datepicker {
       &__day {
-         aspect-ratio: 4/3;
          display: flex !important;
          align-items: center;
          justify-content: center;
+         height: 30px;
       }
    }
 }

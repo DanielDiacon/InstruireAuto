@@ -19,6 +19,7 @@ import { ReactSVG } from "react-svg";
 import * as ReservationsAPI from "../../api/reservationsService";
 import * as InstructorsAPI from "../../api/instructorsService";
 import * as UsersAPI from "../../api/usersService";
+import { fetchUserInfo } from "../../api/authService";
 
 import { UserContext } from "../../UserContext";
 import { useDispatch, useSelector } from "react-redux";
@@ -226,6 +227,25 @@ const addMonths = (d, n) => {
 
 const asStr = (v) => (v == null ? "" : String(v));
 const asStrLower = (v) => asStr(v).trim().toLowerCase();
+const asBool = (v) => {
+   if (typeof v === "boolean") return v;
+   if (typeof v === "number") return v === 1;
+   if (typeof v === "string") {
+      const s = v.trim().toLowerCase();
+      return s === "true" || s === "1" || s === "yes" || s === "da";
+   }
+   return false;
+};
+const readMedicalDocumentsFlag = (src) => {
+   const candidates = [
+      src?.medical_documents,
+      src?.medicalDocuments,
+      src?.extras?.medical_documents,
+      src?.profile?.medical_documents,
+      src?.user?.medical_documents,
+   ];
+   return candidates.some((v) => asBool(v));
+};
 
 function toPositiveIntOrNull(v) {
    const n = Number(v);
@@ -244,23 +264,6 @@ function normalizeInstructorIds(ids) {
    return out;
 }
 
-const PRIVILEGED_FOR_USER_ROLES = new Set(["ADMIN", "MANAGER", "INSTRUCTOR"]);
-
-function userCanUseForUserEndpoint(userLike) {
-   const roleCandidates = [];
-
-   if (userLike?.role != null) roleCandidates.push(userLike.role);
-   if (Array.isArray(userLike?.roles)) roleCandidates.push(...userLike.roles);
-   if (Array.isArray(userLike?.authorities))
-      roleCandidates.push(...userLike.authorities);
-
-   for (const raw of roleCandidates) {
-      const role = asStr(raw).trim().toUpperCase().replace(/^ROLE_/, "");
-      if (PRIVILEGED_FOR_USER_ROLES.has(role)) return true;
-   }
-   return false;
-}
-
 function getUserIdFromContext(userLike) {
    return toPositiveIntOrNull(
       userLike?.id ??
@@ -269,6 +272,18 @@ function getUserIdFromContext(userLike) {
          userLike?.sub ??
          null,
    );
+}
+
+const FOR_USER_ALLOWED_ROLES = new Set(["ADMIN", "MANAGER", "INSTRUCTOR"]);
+
+function getUserRoleFromContext(userLike) {
+   return asStr(userLike?.role ?? userLike?.user?.role ?? "")
+      .trim()
+      .toUpperCase();
+}
+
+function canUseForUserEndpoint(userLike) {
+   return FOR_USER_ALLOWED_ROLES.has(getUserRoleFromContext(userLike));
 }
 
 const getInstructorIdFromReservation = (r) =>
@@ -373,7 +388,7 @@ function sortIsoAsc(arr) {
 }
 
 const SERVER_ERROR_ISO_RE =
-   /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})/g;
+   /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?/g;
 
 function normalizeIsoOrNull(value) {
    const ms = new Date(value).getTime();
@@ -445,7 +460,11 @@ function collectErrorTextParts(errorLike) {
 
 function extractServerConflictSelectedDates(errorLike, selectedIsoDates = []) {
    const texts = collectErrorTextParts(errorLike);
-   if (!texts.length || !Array.isArray(selectedIsoDates) || !selectedIsoDates.length)
+   if (
+      !texts.length ||
+      !Array.isArray(selectedIsoDates) ||
+      !selectedIsoDates.length
+   )
       return [];
 
    const conflictIsoSet = new Set();
@@ -459,8 +478,12 @@ function extractServerConflictSelectedDates(errorLike, selectedIsoDates = []) {
    if (!conflictIsoSet.size) return [];
 
    const conflictLocalKeySet = new Set();
+   const conflictBusyKeySet = new Set();
    for (const iso of conflictIsoSet) {
-      conflictLocalKeySet.add(localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ));
+      conflictLocalKeySet.add(
+         localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ),
+      );
+      conflictBusyKeySet.add(busyLocalKeyFromStored(iso));
    }
 
    const out = [];
@@ -472,9 +495,11 @@ function extractServerConflictSelectedDates(errorLike, selectedIsoDates = []) {
          new Date(normalized).getTime(),
          MOLDOVA_TZ,
       );
+      const busyKey = busyLocalKeyFromStored(normalized);
       if (
          !conflictIsoSet.has(normalized) &&
-         !conflictLocalKeySet.has(localKey)
+         !conflictLocalKeySet.has(localKey) &&
+         !conflictBusyKeySet.has(busyKey)
       ) {
          continue;
       }
@@ -838,6 +863,37 @@ function findDominantAnchor(resArr) {
 export default function SAddProg({ onClose }) {
    const dispatch = useDispatch();
    const { user } = useContext(UserContext);
+   const fallbackMedicalDocsFlag = useMemo(
+      () => readMedicalDocumentsFlag(user),
+      [user],
+   );
+   const [medicalDocumentsOk, setMedicalDocumentsOk] = useState(
+      () => fallbackMedicalDocsFlag,
+   );
+   const [medicalDocumentsChecked, setMedicalDocumentsChecked] =
+      useState(false);
+   const medicalDocumentsBlockedMessage =
+      "Pentru a programa este necesar să prezinți documentele medicale. Dacă le-ai prezentat deja, contactează un manager pentru a primi acces la rezervări.";
+
+   useEffect(() => {
+      let alive = true;
+      (async () => {
+         setMedicalDocumentsChecked(false);
+         try {
+            const me = await fetchUserInfo();
+            if (!alive) return;
+            setMedicalDocumentsOk(readMedicalDocumentsFlag(me));
+         } catch {
+            if (!alive) return;
+            setMedicalDocumentsOk(fallbackMedicalDocsFlag);
+         } finally {
+            if (alive) setMedicalDocumentsChecked(true);
+         }
+      })();
+      return () => {
+         alive = false;
+      };
+   }, [user?.id, fallbackMedicalDocsFlag]);
 
    const { busyLoading, list: rezervariExistente } = useSelector(
       (s) => s.reservations,
@@ -856,8 +912,8 @@ export default function SAddProg({ onClose }) {
       [],
    );
 
-   const safeClose = useCallback(() => {
-      if (typeof onClose === "function") onClose();
+   const safeClose = useCallback((options = {}) => {
+      if (typeof onClose === "function") onClose(options);
       else closePopupStore();
    }, [onClose]);
 
@@ -934,6 +990,7 @@ export default function SAddProg({ onClose }) {
    // conflicte
    const [rejected, setRejected] = useState([]); // { iso, reason }[]
    const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
+   const totalPickedCount = selectedDates.length + rejected.length;
 
    // anti-spam submit
    const submitGuardRef = useRef(false);
@@ -978,11 +1035,7 @@ export default function SAddProg({ onClose }) {
                ? 0
                : Math.min(CIOCANA_BOTANICA_FIRST_LESSONS, requiredSubmitCount)
             : 0,
-      [
-         isCiocanaSplitScenario,
-         hasCompletedFirst15Ciocana,
-         requiredSubmitCount,
-      ],
+      [isCiocanaSplitScenario, hasCompletedFirst15Ciocana, requiredSubmitCount],
    );
    const ciocanaPhase2Target = useMemo(
       () => Math.max(0, requiredSubmitCount - ciocanaPhase1Target),
@@ -1170,7 +1223,10 @@ export default function SAddProg({ onClose }) {
 
    const ciocanaPhase2ChronologyLockDay = useMemo(() => {
       if (!Number.isFinite(ciocanaPhase2ChronologyLockTs)) return null;
-      return localDateStrTZ(new Date(ciocanaPhase2ChronologyLockTs), MOLDOVA_TZ);
+      return localDateStrTZ(
+         new Date(ciocanaPhase2ChronologyLockTs),
+         MOLDOVA_TZ,
+      );
    }, [ciocanaPhase2ChronologyLockTs]);
 
    const isBlockedByCiocanaPhase2Chronology = useCallback(
@@ -1388,7 +1444,10 @@ export default function SAddProg({ onClose }) {
             allInstructorIds,
          );
 
-         if (!botanicaId && typeof InstructorsAPI?.getInstructors === "function") {
+         if (
+            !botanicaId &&
+            typeof InstructorsAPI?.getInstructors === "function"
+         ) {
             try {
                const allInstructors = await InstructorsAPI.getInstructors();
                const arr = normalizeInstructorsList(allInstructors);
@@ -1678,6 +1737,8 @@ export default function SAddProg({ onClose }) {
    // ✅ AUTO START (anchor)
    useEffect(() => {
       if (initLoading) return;
+      if (!medicalDocumentsChecked) return;
+      if (!medicalDocumentsOk) return;
       if (autoBootOnceRef.current) return;
       if (!autoEligible) return;
       if (!autoAnchor) return;
@@ -1689,8 +1750,8 @@ export default function SAddProg({ onClose }) {
          autoAnchor.type === "group" && lectiiExistente >= 15
             ? "Ciocana"
             : autoAnchor.type === "group"
-            ? "Botanica"
-            : autoAnchor.sector || "Botanica";
+              ? "Botanica"
+              : autoAnchor.sector || "Botanica";
 
       setCutie(inferredCutie);
       setSector(inferredSector);
@@ -1725,6 +1786,8 @@ export default function SAddProg({ onClose }) {
       autoEligible,
       autoAnchor,
       lectiiExistente,
+      medicalDocumentsChecked,
+      medicalDocumentsOk,
       loadAvailabilityForAnchor,
       notify,
    ]);
@@ -1791,7 +1854,7 @@ export default function SAddProg({ onClose }) {
 
       if (!candidates.length) {
          throw new Error(
-            "Nu am găsit entitate (grup/instructor) pentru opțiuni.",
+            "Nu am găsit un grup sau instructor disponibil pentru opțiunile selectate.",
          );
       }
 
@@ -1891,6 +1954,10 @@ export default function SAddProg({ onClose }) {
    ]);
 
    const handleContinue = async () => {
+      if (!medicalDocumentsOk) {
+         notify("warn", medicalDocumentsBlockedMessage);
+         return;
+      }
       if (hardLock30 || remainingTo30 <= 0) {
          notify(
             "warn",
@@ -1923,7 +1990,8 @@ export default function SAddProg({ onClose }) {
    const fetchLiveMapsForAssigned = useCallback(async () => {
       const type = assignedGroupId ? "group" : "instructor";
       const chosenId = assignedGroupId || assignedInstructorId;
-      if (!chosenId) throw new Error("Nu există entitate aleasă.");
+      if (!chosenId)
+         throw new Error("Nu este selectat niciun grup sau instructor.");
 
       const range = {
          start: new Date(minSelectableDate).toISOString(),
@@ -1973,7 +2041,7 @@ export default function SAddProg({ onClose }) {
 
          if (!busyItem) {
             throw new Error(
-               `Busy fallback nu conține entitatea aleasă (${type}:${chosenId}).`,
+               `Datele de disponibilitate nu conțin entitatea selectată (${type}:${chosenId}).`,
             );
          }
       }
@@ -2157,8 +2225,7 @@ export default function SAddProg({ onClose }) {
                   if (keptPhase1 >= ciocanaPhase1Target) {
                      conflicts.push({
                         iso,
-                        reason:
-                           "Depășești etapa Poligon (primele 7 lecții).",
+                        reason: "Depășești etapa Poligon (primele 7 lecții).",
                      });
                      continue;
                   }
@@ -2236,35 +2303,8 @@ export default function SAddProg({ onClose }) {
       }));
    };
 
-   const confirmSlotsPersistedForUser = useCallback(
-      async (userId, expectedIsoDates) => {
-         const uid = toPositiveIntOrNull(userId);
-         const expected = Array.isArray(expectedIsoDates) ? expectedIsoDates : [];
-         if (!uid || !expected.length) return false;
-
-         const latest = await dispatch(fetchUserReservations(uid))
-            .unwrap()
-            .catch(() => []);
-         const arr = Array.isArray(latest) ? latest : [];
-
-         const existingKeys = new Set();
-         for (const r of arr) {
-            const st = getStartFromReservation(r);
-            if (!st) continue;
-            existingKeys.add(busyLocalKeyFromStored(st));
-         }
-
-         for (const iso of expected) {
-            const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
-            if (!existingKeys.has(key)) return false;
-         }
-         return true;
-      },
-      [dispatch],
-   );
-
    // ====== adaugă programare (UI) ======
-   const reachedPackLimit = selectedDates.length >= requiredSubmitCount;
+   const reachedPackLimit = totalPickedCount >= requiredSubmitCount;
 
    const adaugaProgramare = () => {
       if (!data || !oraSelectata) return;
@@ -2406,7 +2446,10 @@ export default function SAddProg({ onClose }) {
             // ne asigurăm că avem hărți actuale
             await doLiveRefresh(true);
 
-            const need = requiredSubmitCount - selectedDates.length;
+            const pickedForNeed = alsoClearConflicts
+               ? selectedDates.length
+               : totalPickedCount;
+            const need = requiredSubmitCount - pickedForNeed;
             if (need <= 0) {
                notify("info", "Pachetul este deja complet.");
                return;
@@ -2424,7 +2467,10 @@ export default function SAddProg({ onClose }) {
                : null;
             if (!Number.isFinite(tmpChronologyLockTs)) {
                for (const iso of selectedDates || []) {
-                  const key = localKeyFromTs(new Date(iso).getTime(), MOLDOVA_TZ);
+                  const key = localKeyFromTs(
+                     new Date(iso).getTime(),
+                     MOLDOVA_TZ,
+                  );
                   const phase = ciocanaPhaseByKeyRef.current.get(key);
                   if (phase !== 1 && phase !== 2) continue;
                   const ts = new Date(iso).getTime();
@@ -2518,7 +2564,10 @@ export default function SAddProg({ onClose }) {
                   if (found.phase === 1) tmpPhase1Count += 1;
                   if (found.phase === 2) tmpPhase2Count += 1;
                   if (Number.isFinite(found.ts)) {
-                     if (tmpChronologyLockTs == null || found.ts > tmpChronologyLockTs) {
+                     if (
+                        tmpChronologyLockTs == null ||
+                        found.ts > tmpChronologyLockTs
+                     ) {
                         tmpChronologyLockTs = found.ts;
                      }
                   }
@@ -2565,7 +2614,7 @@ export default function SAddProg({ onClose }) {
          autoFillRunning,
          hardLock30,
          requiredSubmitCount,
-         selectedDates.length,
+         totalPickedCount,
          bookedDaySet,
          selectedKeySet,
          selectedCountByKey,
@@ -2631,7 +2680,9 @@ export default function SAddProg({ onClose }) {
          }
 
          beforeSubmitKeySet.clear();
-         for (const r of Array.isArray(beforeReservations) ? beforeReservations : []) {
+         for (const r of Array.isArray(beforeReservations)
+            ? beforeReservations
+            : []) {
             const st = getStartFromReservation(r);
             if (!st) continue;
             beforeSubmitKeySet.add(busyLocalKeyFromStored(st));
@@ -2685,13 +2736,19 @@ export default function SAddProg({ onClose }) {
          }
          if (!ids.length) return { attempted: false, total: 0, failed: 0 };
 
-         const results = await Promise.allSettled(ids.map((id) => deleteFn(id)));
+         const results = await Promise.allSettled(
+            ids.map((id) => deleteFn(id)),
+         );
          const failed = results.filter((r) => r.status === "rejected").length;
          return { attempted: true, total: ids.length, failed };
       };
 
       setLoading(true);
       try {
+         if (!medicalDocumentsOk) {
+            notify("warn", medicalDocumentsBlockedMessage);
+            return;
+         }
          if (hardLock30 || remainingTo30 <= 0) {
             notify(
                "warn",
@@ -2743,7 +2800,7 @@ export default function SAddProg({ onClose }) {
          if (!chosenId) {
             notify(
                "error",
-               "Nu am entitate aleasă (grup/instructor). Reia setup.",
+               "Nu este selectat niciun grup sau instructor. Revino la pasul anterior și alege din nou opțiunile.",
             );
             resetPickState();
             setStage("setup");
@@ -2788,44 +2845,80 @@ export default function SAddProg({ onClose }) {
 
          notify("info", "Trimit programările...");
          const createFnForUser = ReservationsAPI?.createReservationsForUser;
-         const createFnSelf = ReservationsAPI?.createReservations;
+         const createFnForMe = ReservationsAPI?.createReservations;
+         const me = await fetchUserInfo().catch(() => null);
+         const authUser = me ?? user ?? null;
+         const useForUserEndpoint = canUseForUserEndpoint(authUser);
+         const userIdNum =
+            getUserIdFromContext(me) ?? getUserIdFromContext(user);
 
-         const canUseForUser = userCanUseForUserEndpoint(user);
-         if (canUseForUser && typeof createFnForUser !== "function") {
-            throw new Error("createReservationsForUser nu există.");
-         }
-         if (!canUseForUser && typeof createFnSelf !== "function") {
-            throw new Error("createReservations nu există.");
-         }
+         const sendReservationsBatch = async (basePayload) => {
+            if (useForUserEndpoint) {
+               if (typeof createFnForUser !== "function") {
+                  throw new Error("createReservationsForUser nu există.");
+               }
+               if (!userIdNum) {
+                  throw new Error(
+                     "userId invalid. Trimiterea prin /reservations/for-user cere userId.",
+                  );
+               }
 
-         const userIdNum = getUserIdFromContext(user);
-         if (canUseForUser && !userIdNum) {
-            throw new Error(
-               "userId invalid. Trimiterea prin /reservations/for-user cere userId.",
-            );
-         }
-         const mapReservationPayload = (isoDate, forcedSector) => ({
-            startTime:
-               BUSY_KEYS_MODE === "local-match"
-                  ? isoForDbMatchLocalHour(isoDate)
-                  : isoDate,
-            sector: String(forcedSector || sector || "Botanica"),
-            gearbox: normalizedGearbox,
-            isFavorite: false,
-            isImportant: true,
-            privateMessage: "",
-            color: "--black-t",
-         });
+               try {
+                  return await createFnForUser({
+                     ...basePayload,
+                     userId: userIdNum,
+                  });
+               } catch (err) {
+                  const errorText = collectErrorTextParts(err)
+                     .join(" ")
+                     .toLowerCase();
+                  const isForUserForbidden =
+                     errorText.includes(
+                        "only admins, managers, and instructors can create reservations for other users",
+                     ) || errorText.includes("\"statuscode\":403");
+
+                  if (
+                     isForUserForbidden &&
+                     typeof createFnForMe === "function"
+                  ) {
+                     return await createFnForMe(basePayload);
+                  }
+                  throw err;
+               }
+            }
+
+            if (typeof createFnForMe !== "function") {
+               throw new Error("createReservations nu există.");
+            }
+
+            return await createFnForMe(basePayload);
+         };
+
+         const mapReservationPayload = (
+            isoDate,
+            forcedSector,
+            forcedInstructorId,
+         ) => {
+            const payload = {
+               startTime:
+                  BUSY_KEYS_MODE === "local-match"
+                     ? isoForDbMatchLocalHour(isoDate)
+                     : isoDate,
+               sector: String(forcedSector || sector || "Botanica"),
+               gearbox: normalizedGearbox,
+               isFavorite: false,
+               isImportant: true,
+               privateMessage: "",
+               color: "--black-t",
+            };
+            const iid = toPositiveIntOrNull(forcedInstructorId);
+            if (iid) payload.instructorId = iid;
+            return payload;
+         };
 
          if (isCiocanaSplitScenario && type === "group") {
             const groupIdNum = toPositiveIntOrNull(chosenId);
             const botanicaId = toPositiveIntOrNull(ciocanaBotanicaInstructorId);
-            const excludedFromGroup = normalizeInstructorIds([
-               ciocanaBotanicaInstructorId,
-            ]);
-            const excludedFromBotanica = normalizeInstructorIds(
-               ciocanaRemainingInstructorIds,
-            );
 
             if (!groupIdNum || !botanicaId) {
                throw new Error(
@@ -2839,21 +2932,14 @@ export default function SAddProg({ onClose }) {
             );
             const secondTarget = Math.max(0, mustSubmitExactly - firstTarget);
 
-            const phase1 = [];
-            const phase2 = [];
-            for (const isoDate of ok) {
-               const key = localKeyFromTs(
-                  new Date(isoDate).getTime(),
-                  MOLDOVA_TZ,
-               );
-               const phase = ciocanaPhaseByKeyRef.current.get(key);
-               if (phase === 1) phase1.push(isoDate);
-               else if (phase === 2) phase2.push(isoDate);
-               else if (phase1.length < firstTarget) phase1.push(isoDate);
-               else phase2.push(isoDate);
-            }
+            const ordered = sortIsoAsc(ok);
+            const phase1 = ordered.slice(0, firstTarget);
+            const phase2 = ordered.slice(firstTarget);
 
-            if (phase1.length !== firstTarget || phase2.length !== secondTarget) {
+            if (
+               phase1.length !== firstTarget ||
+               phase2.length !== secondTarget
+            ) {
                notify(
                   "warn",
                   `Split invalid: Poligon ${phase1.length}/${firstTarget}, Oras ${phase2.length}/${secondTarget}.`,
@@ -2862,53 +2948,20 @@ export default function SAddProg({ onClose }) {
                return;
             }
 
-            const payloadPhase1 = {
-               instructorsGroupId: groupIdNum,
-               instructorId: botanicaId,
-               excludedInstructorIds: excludedFromBotanica,
-               reservations: phase1.map((isoDate) =>
-                  mapReservationPayload(isoDate, "Botanica"),
-               ),
-            };
-            if (canUseForUser && userIdNum) payloadPhase1.userId = userIdNum;
-
-            const payloadPhase2 = {
+            const payload = {
                instructorsGroupId: groupIdNum,
                instructorId: null,
-               excludedInstructorIds: excludedFromGroup,
-               reservations: phase2.map((isoDate) =>
-                  mapReservationPayload(isoDate, "Ciocana"),
-               ),
+               reservations: [
+                  ...phase1.map((isoDate) =>
+                     mapReservationPayload(isoDate, "Botanica", botanicaId),
+                  ),
+                  ...phase2.map((isoDate) =>
+                     mapReservationPayload(isoDate, "Ciocana"),
+                  ),
+               ],
             };
-            if (canUseForUser && userIdNum) payloadPhase2.userId = userIdNum;
-
-            if (payloadPhase1.reservations.length > 0) {
-               const phase1Result = canUseForUser
-                  ? await createFnForUser(payloadPhase1)
-                  : await createFnSelf(payloadPhase1);
-               registerCreatedFromResponse(phase1Result);
-
-               // Etapa 2 pornește doar după confirmarea în DB a tuturor sloturilor din etapa 1.
-               const phase1Confirmed = await confirmSlotsPersistedForUser(
-                  userIdNum,
-                  phase1,
-               );
-               if (!phase1Confirmed) {
-                  notify(
-                     "error",
-                     "Primele lecții (Poligon) nu au fost confirmate integral. Etapa 2 nu se trimite.",
-                  );
-                  setShowList(true);
-                  return;
-               }
-            }
-
-            if (payloadPhase2.reservations.length > 0) {
-               const phase2Result = canUseForUser
-                  ? await createFnForUser(payloadPhase2)
-                  : await createFnSelf(payloadPhase2);
-               registerCreatedFromResponse(phase2Result);
-            }
+            const batchResult = await sendReservationsBatch(payload);
+            registerCreatedFromResponse(batchResult);
          } else {
             const topLevel =
                type === "group"
@@ -2926,13 +2979,8 @@ export default function SAddProg({ onClose }) {
                   mapReservationPayload(isoDate, sector),
                ),
             };
-            if (type === "instructor" && canUseForUser)
-               payload.excludedInstructorIds = [];
-            if (canUseForUser && userIdNum) payload.userId = userIdNum;
 
-            const batchResult = canUseForUser
-               ? await createFnForUser(payload)
-               : await createFnSelf(payload);
+            const batchResult = await sendReservationsBatch(payload);
             registerCreatedFromResponse(batchResult);
          }
 
@@ -2984,7 +3032,7 @@ export default function SAddProg({ onClose }) {
          setStage("setup");
          setAutoFlowActive(false);
 
-         closePopupStore();
+         safeClose({ skipConfirm: true });
          setTimeout(() => {
             window.location.reload();
          }, 0);
@@ -3033,7 +3081,8 @@ export default function SAddProg({ onClose }) {
                   prev,
                   serverConflicts.map((iso) => ({
                      iso,
-                     reason: "Slot ocupat / rezervat între timp (confirmat de server).",
+                     reason:
+                        "",
                   })),
                ),
             );
@@ -3049,7 +3098,7 @@ export default function SAddProg({ onClose }) {
                "warn",
                `Serverul a respins ${serverConflicts.length} sloturi ocupate. Le-am mutat la conflicte (roșu).`,
             );
-            if (e?.message) notify("alert", `Detalii: ${e.message}`);
+            //if (e?.message) notify("alert", `Detalii: ${e.message}`);
             return;
          }
 
@@ -3063,29 +3112,30 @@ export default function SAddProg({ onClose }) {
    };
 
    const handleBack = () => {
-      // dacă e autoFlow și ești în pick, back = close (nu revenim la setup)
-      if (stage === "pick" && autoFlowActive) {
-         if (showList) {
-            setShowList(false);
+      if (stage === "pick") {
+         const confirmed =
+            typeof window === "undefined"
+               ? true
+               : window.confirm(
+                    "Sigur dorești să ieși? Vei pierde progresul de selectare a rezervărilor.",
+                 );
+         if (!confirmed) return;
+
+         resetPickState();
+         setAutoFlowActive(false);
+
+         if (autoFlowActive) {
+            safeClose();
             return;
          }
-         safeClose();
-         return;
-      }
-
-      if (stage === "pick" && showList) {
-         setShowList(false);
-         return;
-      }
-      if (stage === "pick") {
-         resetPickState();
          setStage("setup");
          return;
       }
       safeClose();
    };
 
-   const showLoadingScreen = initLoading || loading || busyLoading;
+   const showLoadingScreen =
+      initLoading || loading || busyLoading || !medicalDocumentsChecked;
 
    const dayLocal = data ? localDateStrTZ(data, MOLDOVA_TZ) : null;
    const dayIsBooked = !!(dayLocal && bookedDaySet.has(dayLocal));
@@ -3095,6 +3145,11 @@ export default function SAddProg({ onClose }) {
       ciocanaPhase2ChronologyLockDay &&
       dayLocal <= ciocanaPhase2ChronologyLockDay
    );
+   const isCriteriaLocked = Number(lectiiExistente) > 0;
+   const canSubmitInPick =
+      requiredSubmitCount > 0 &&
+      selectedDates.length === requiredSubmitCount &&
+      rejected.length === 0;
 
    const liveRefreshLabel = useMemo(() => {
       if (!lastLiveRefreshAt) return "never";
@@ -3122,301 +3177,364 @@ export default function SAddProg({ onClose }) {
    return (
       <>
          <AlertPills messages={messages} onDismiss={dismissLast} />
+         <div className="studentAddReservation">
+            <h3 className="studentAddReservation__title-main">
+               Adaugă rezervări
+            </h3>
 
-         <div className="popup-panel__header">
-            <h3 className="popup-panel__title">Adaugă programare</h3>
-         </div>
-
-         <div className="popup-panel__content">
-            {showLoadingScreen ? (
-               <div className="saddprogramari__loading">Se încarcă…</div>
-            ) : hardLock30 ? (
-               <div className="saddprogramari__box">
-                  <div className="saddprogramari__info">
-                     <b>Ai deja {MAX_TOTAL_LESSONS} lecții programate.</b> Nu
-                     mai poți adăuga alte programări.
+            <div className="studentAddReservation__content">
+               {showLoadingScreen ? (
+                  <div className="studentAddReservation__loading">
+                     Se încarcă…
                   </div>
-               </div>
-            ) : stage === "setup" ? (
-               <>
-                  {/* ====== SETUP MANUAL ====== */}
-                  <div className="saddprogramari__selector row">
-                     <h3 className="saddprogramari__title">
-                        Selectează pachetul:
-                     </h3>
-                     <div
-                        className={`instructors-popup__radio-wrapper addprog ${
-                           numarLectii === 15
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        }`}
-                     >
-                        <label
-                           htmlFor="lectii-15"
-                           style={{ cursor: "pointer" }}
+               ) : !medicalDocumentsOk ? (
+                  <div className="studentAddReservation__box">
+                     <div className="studentAddReservation__info">
+                        <b>Programările sunt blocate.</b>{" "}
+                        {medicalDocumentsBlockedMessage}
+                     </div>
+                  </div>
+               ) : hardLock30 ? (
+                  <div className="studentAddReservation__box">
+                     <div className="studentAddReservation__info">
+                        <b>Ai deja {MAX_TOTAL_LESSONS} lecții programate.</b> Nu
+                        mai poți adăuga alte programări.
+                     </div>
+                  </div>
+               ) : stage === "setup" ? (
+                  <>
+                     {/* ====== SETUP MANUAL ====== */}
+                     <div className="studentAddReservation__selector studentAddReservation__selector--row">
+                        <h3 className="studentAddReservation__title">
+                           Selectează pachetul de lecții
+                        </h3>
+                        <div
+                           className={`studentAddReservation__radio-wrapper ${
+                              numarLectii === 15
+                                 ? "studentAddReservation__radio-wrapper--left"
+                                 : "studentAddReservation__radio-wrapper--right"
+                           }`}
                         >
-                           <input
-                              id="lectii-15"
-                              type="radio"
-                              name="lectii"
-                              value={15}
-                              checked={Number(numarLectii) === 15}
-                              onChange={(e) =>
-                                 setNumarLectii(Number(e.target.value))
-                              }
-                           />
-                           15 lecții
-                        </label>
-
-                        <label
-                           htmlFor="lectii-30"
-                           style={{ cursor: "pointer" }}
-                        >
-                           <input
-                              id="lectii-30"
-                              type="radio"
-                              name="lectii"
-                              value={30}
-                              checked={Number(numarLectii) === 30}
-                              onChange={(e) =>
-                                 setNumarLectii(Number(e.target.value))
-                              }
-                           />
-                           30 lecții
-                        </label>
-                     </div>
-                  </div>
-
-                  <div className="saddprogramari__selector row">
-                     <h3 className="saddprogramari__title">
-                        Selectează cutia de viteze:
-                     </h3>
-                     <div
-                        className={`instructors-popup__radio-wrapper addprog ${
-                           cutie === "manual"
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        }`}
-                     >
-                        <label>
-                           <input
-                              type="radio"
-                              name="cutie"
-                              value="manual"
-                              checked={cutie === "manual"}
-                              onChange={(e) => setCutie(e.target.value)}
-                           />
-                           Manual
-                        </label>
-                        <label>
-                           <input
-                              type="radio"
-                              name="cutie"
-                              value="automat"
-                              checked={cutie === "automat"}
-                              onChange={(e) => setCutie(e.target.value)}
-                           />
-                           Automat
-                        </label>
-                     </div>
-                  </div>
-
-                  <div className="saddprogramari__selector row">
-                     <h3 className="saddprogramari__title">
-                        Selectează sectorul:
-                     </h3>
-                     <div
-                        className={`instructors-popup__radio-wrapper addprog ${
-                           sector === "Botanica"
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        }`}
-                     >
-                        <label>
-                           <input
-                              type="radio"
-                              name="sector"
-                              value="Botanica"
-                              checked={sector === "Botanica"}
-                              onChange={(e) => setSector(e.target.value)}
-                           />
-                           Botanica
-                        </label>
-                        <label>
-                           <input
-                              type="radio"
-                              name="sector"
-                              value="Ciocana"
-                              checked={sector === "Ciocana"}
-                              onChange={(e) => setSector(e.target.value)}
-                           />
-                           Ciocana
-                        </label>
-                     </div>
-                  </div>
-
-                  <div className="saddprogramari__selector row">
-                     <h3 className="saddprogramari__title">Alegere tip:</h3>
-                     <div
-                        className={`instructors-popup__radio-wrapper addprog ${
-                           tip === "group"
-                              ? "active-botanica"
-                              : "active-ciocana"
-                        } ${sector === "Botanica" ? "" : "inactive"}`}
-                     >
-                        <label>
-                           <input
-                              type="radio"
-                              name="tip"
-                              value="group"
-                              checked={tip === "group"}
-                              onChange={(e) => setTip(e.target.value)}
-                              disabled={sector === "Ciocana"}
-                           />
-                           Mai mulți
-                        </label>
-                        <label>
-                           <input
-                              type="radio"
-                              name="tip"
-                              value="single"
-                              checked={tip === "single"}
-                              onChange={(e) => setTip(e.target.value)}
-                           />
-                           Unul
-                        </label>
-                     </div>
-                  </div>
-
-                  <button
-                     onClick={handleContinue}
-                     disabled={busyLoading || loading || remainingTo30 <= 0}
-                     className="saddprogramari__add-btn arrow"
-                     type="button"
-                  >
-                     <span>{loading ? "Se pregătește..." : "Continuă"}</span>
-                     <ReactSVG
-                        src={arrowIcon}
-                        className="saddprogramari__add-btn-icon"
-                     />
-                  </button>
-               </>
-            ) : (
-               <>
-                  {/* ====== PICK ====== */}
-                  {isCiocanaSplitScenario && (
-                     <div
-                        className="saddprogramari__guide"
-                        style={{ marginBottom: 8 }}
-                     >
-                        {ciocanaPhaseStatusText ||
-                           "Pregătesc împărțirea lecțiilor (Poligon + Oras)..."}
-                     </div>
-                  )}
-                 
-
-                  {!showList ? (
-                     <>
-                        <div className="saddprogramari__selector">
-                           <div className="saddprogramari__calendar">
-                              <h3 className="saddprogramari__title">
-                                 Selectează data și ora (3 luni):
-                              </h3>
-
-                              <DatePicker
-                                 selected={data}
-                                 onChange={(date) => {
-                                    setData(date);
-                                    setOraSelectata(null);
-                                 }}
-                                 inline
-                                 locale="ro"
-                                 formatWeekDay={(name) =>
-                                    name
-                                       .substring(0, 2)
-                                       .replace(/^./, (c) => c.toUpperCase())
+                           <label
+                              htmlFor="lectii-15"
+                              style={{ cursor: "pointer" }}
+                           >
+                              <input
+                                 id="lectii-15"
+                                 type="radio"
+                                 name="lectii"
+                                 value={15}
+                                 checked={Number(numarLectii) === 15}
+                                 onChange={(e) =>
+                                    setNumarLectii(Number(e.target.value))
                                  }
-                                 minDate={minSelectableDate}
-                                 maxDate={maxSelectableDate}
-                                 filterDate={(date) => {
-                                    if (isPastOrTodayInMoldova(date))
-                                       return false;
-
-                                    const day = localDateStrTZ(
-                                       date,
-                                       MOLDOVA_TZ,
-                                    );
-                                    if (bookedDaySet.has(day)) return false;
-                                    if (fullyBlockedDaySet.has(day))
-                                       return false;
-                                    if (
-                                       ciocanaPhase2ChronologyLockDay &&
-                                       day <= ciocanaPhase2ChronologyLockDay
-                                    )
-                                       return false;
-
-                                    return true;
-                                 }}
-                                 dayClassName={(date) => {
-                                    const day = localDateStrTZ(
-                                       date,
-                                       MOLDOVA_TZ,
-                                    );
-                                    if (isPastOrTodayInMoldova(date))
-                                       return "saddprogramari__day--inactive";
-                                    if (bookedDaySet.has(day))
-                                       return "saddprogramari__day--inactive";
-                                    if (fullyBlockedDaySet.has(day))
-                                       return "saddprogramari__day--inactive";
-                                    if (
-                                       ciocanaPhase2ChronologyLockDay &&
-                                       day <= ciocanaPhase2ChronologyLockDay
-                                    )
-                                       return "saddprogramari__day--inactive";
-                                    return "";
-                                 }}
                               />
-                           </div>
+                              15 lecții
+                           </label>
 
-                           <div className="saddprogramari__times">
-                              <h3 className="saddprogramari__title">
-                                 Selectează:
-                              </h3>
+                           <label
+                              htmlFor="lectii-30"
+                              style={{ cursor: "pointer" }}
+                           >
+                              <input
+                                 id="lectii-30"
+                                 type="radio"
+                                 name="lectii"
+                                 value={30}
+                                 checked={Number(numarLectii) === 30}
+                                 onChange={(e) =>
+                                    setNumarLectii(Number(e.target.value))
+                                 }
+                              />
+                              30 lecții
+                           </label>
+                        </div>
+                     </div>
 
-                              <div className="saddprogramari__times-list">
-                                 {!data && (
-                                    <div className="saddprogramari__disclaimer">
-                                       Te rog să selectezi mai întâi o zi!
-                                    </div>
-                                 )}
+                     <div className="studentAddReservation__selector studentAddReservation__selector--row">
+                        <h3 className="studentAddReservation__title">
+                           Selectează cutia de viteza
+                        </h3>
+                        <div
+                           className={`studentAddReservation__radio-wrapper ${
+                              cutie === "manual"
+                                 ? "studentAddReservation__radio-wrapper--left"
+                                 : "studentAddReservation__radio-wrapper--right"
+                           }`}
+                        >
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="cutie"
+                                 value="manual"
+                                 checked={cutie === "manual"}
+                                 onChange={(e) => setCutie(e.target.value)}
+                              />
+                              Manual
+                           </label>
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="cutie"
+                                 value="automat"
+                                 checked={cutie === "automat"}
+                                 onChange={(e) => setCutie(e.target.value)}
+                              />
+                              Automat
+                           </label>
+                        </div>
+                     </div>
 
-                                 {data && dayIsBooked && (
-                                    <div className="saddprogramari__disclaimer">
-                                       Ai deja o programare în această zi. Alege
-                                       altă zi.
-                                    </div>
-                                 )}
+                     <div className="studentAddReservation__selector studentAddReservation__selector--row">
+                        <h3 className="studentAddReservation__title">
+                           Selectează sectorul dorit
+                        </h3>
+                        <div
+                           className={`studentAddReservation__radio-wrapper ${
+                              sector === "Botanica"
+                                 ? "studentAddReservation__radio-wrapper--left"
+                                 : "studentAddReservation__radio-wrapper--right"
+                           }`}
+                        >
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="sector"
+                                 value="Botanica"
+                                 checked={sector === "Botanica"}
+                                 onChange={(e) => setSector(e.target.value)}
+                              />
+                              Botanica
+                           </label>
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="sector"
+                                 value="Ciocana"
+                                 checked={sector === "Ciocana"}
+                                 onChange={(e) => setSector(e.target.value)}
+                              />
+                              Ciocana
+                           </label>
+                        </div>
+                     </div>
 
-                                 {data && dayIsFullyBlocked && (
-                                    <div className="saddprogramari__disclaimer">
-                                       Ziua este blocată complet. Alege altă zi.
-                                    </div>
-                                 )}
-                                 {data && dayIsBeforeCiocanaChronologyLock && (
-                                    <div className="saddprogramari__disclaimer">
-                                       Pentru etapa Oras poți selecta doar după
-                                       ultima lecție deja stabilită.
-                                    </div>
-                                 )}
+                     <div className="studentAddReservation__selector studentAddReservation__selector--row">
+                        <h3 className="studentAddReservation__title">
+                           Alege tipul de repartizare a rezervărilor
+                        </h3>
+                        <div
+                           className={`studentAddReservation__radio-wrapper ${
+                              tip === "group"
+                                 ? "studentAddReservation__radio-wrapper--left"
+                                 : "studentAddReservation__radio-wrapper--right"
+                           } ${
+                              sector === "Botanica"
+                                 ? ""
+                                 : "studentAddReservation__radio-wrapper--group-disabled"
+                           }`}
+                        >
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="tip"
+                                 value="group"
+                                 checked={tip === "group"}
+                                 onChange={(e) => setTip(e.target.value)}
+                                 disabled={sector === "Ciocana"}
+                              />
+                              Mai mulți
+                           </label>
+                           <label>
+                              <input
+                                 type="radio"
+                                 name="tip"
+                                 value="single"
+                                 checked={tip === "single"}
+                                 onChange={(e) => setTip(e.target.value)}
+                              />
+                              Unul
+                           </label>
+                        </div>
+                     </div>
+                     <div className="studentAddReservation__add-btns ">
+                        <button
+                           onClick={handleContinue}
+                           disabled={
+                              busyLoading || loading || remainingTo30 <= 0
+                           }
+                           className="studentAddReservation__add-btn studentAddReservation__add-btn--arrow studentAddReservation__add-btn--full"
+                           type="button"
+                        >
+                           <span>
+                              {loading ? "Se pregătește..." : "Continuă"}
+                           </span>
+                           <ReactSVG
+                              src={arrowIcon}
+                              className="studentAddReservation__add-btn-icon"
+                           />
+                        </button>
+                     </div>
+                  </>
+               ) : (
+                  <>
+                     {/* ====== PICK ====== */}
+                     <div className="studentAddReservation__pick-topbar">
+                        <button
+                           onClick={handleBack}
+                           className="studentAddReservation__add-btn studentAddReservation__add-btn--back"
+                           type="button"
+                           disabled={isCriteriaLocked}
+                           title={
+                              isCriteriaLocked
+                                 ? "Criteriile sunt blocate după ce există cel puțin o programare."
+                                 : "Înapoi la criterii"
+                           }
+                        >
+                           <ReactSVG
+                              src={arrowIcon}
+                              className="studentAddReservation__add-btn-icon"
+                           />
+                           <span>Criterii</span>
+                        </button>
 
-                                 {oreDisponibile.map((ora) => {
-                                    const key =
-                                       data && dayLocal
-                                          ? `${dayLocal}|${ora.oraStart}`
-                                          : null;
+                        <button
+                           type="button"
+                           className="studentAddReservation__add-btn studentAddReservation__add-btn--list"
+                           onClick={() => setShowList((prev) => !prev)}
+                           title={
+                              showList
+                                 ? "Înapoi la selecția orelor"
+                                 : "Vezi lista selectată"
+                           }
+                        >
+                           <span>
+                              {showList
+                                 ? "Selecție"
+                                 : `Lista (${totalPickedCount})`}
+                           </span>
+                        </button>
+                     </div>
 
-                                    const { used, blocked, total, full, sum } =
-                                       key
+                     {isCiocanaSplitScenario && (
+                        <div
+                           className="studentAddReservation__guide"
+                           style={{ marginBottom: 8 }}
+                        >
+                           {ciocanaPhaseStatusText ||
+                              "Selecteaza lecțiile pentru oraș"}
+                        </div>
+                     )}
+
+                     {!showList ? (
+                        <>
+                           <div className="studentAddReservation__selector">
+                              <div className="studentAddReservation__calendar">
+                                 <h3 className="studentAddReservation__title">
+                                    Selectează data și ora (3 luni):
+                                 </h3>
+
+                                 <DatePicker
+                                    selected={data}
+                                    onChange={(date) => {
+                                       setData(date);
+                                       setOraSelectata(null);
+                                    }}
+                                    inline
+                                    locale="ro"
+                                    formatWeekDay={(name) =>
+                                       name
+                                          .substring(0, 2)
+                                          .replace(/^./, (c) => c.toUpperCase())
+                                    }
+                                    minDate={minSelectableDate}
+                                    maxDate={maxSelectableDate}
+                                    filterDate={(date) => {
+                                       if (isPastOrTodayInMoldova(date))
+                                          return false;
+
+                                       const day = localDateStrTZ(
+                                          date,
+                                          MOLDOVA_TZ,
+                                       );
+                                       if (bookedDaySet.has(day)) return false;
+                                       if (fullyBlockedDaySet.has(day))
+                                          return false;
+                                       if (
+                                          ciocanaPhase2ChronologyLockDay &&
+                                          day <= ciocanaPhase2ChronologyLockDay
+                                       )
+                                          return false;
+
+                                       return true;
+                                    }}
+                                    dayClassName={(date) => {
+                                       const day = localDateStrTZ(
+                                          date,
+                                          MOLDOVA_TZ,
+                                       );
+                                       if (isPastOrTodayInMoldova(date))
+                                          return "studentAddReservation__day--inactive";
+                                       if (bookedDaySet.has(day))
+                                          return "studentAddReservation__day--inactive";
+                                       if (fullyBlockedDaySet.has(day))
+                                          return "studentAddReservation__day--inactive";
+                                       if (
+                                          ciocanaPhase2ChronologyLockDay &&
+                                          day <= ciocanaPhase2ChronologyLockDay
+                                       )
+                                          return "studentAddReservation__day--inactive";
+                                       return "";
+                                    }}
+                                 />
+                              </div>
+
+                              <div className="studentAddReservation__times">
+                                 <h3 className="studentAddReservation__title studentAddReservation__times-title">
+                                    Selectează:
+                                 </h3>
+
+                                 <div className="studentAddReservation__times-list">
+                                    {!data && (
+                                       <div className="studentAddReservation__disclaimer">
+                                          Te rog să selectezi mai întâi o zi!
+                                       </div>
+                                    )}
+
+                                    {data && dayIsBooked && (
+                                       <div className="studentAddReservation__disclaimer">
+                                          Ai deja o programare în această zi.
+                                          Alege altă zi.
+                                       </div>
+                                    )}
+
+                                    {data && dayIsFullyBlocked && (
+                                       <div className="studentAddReservation__disclaimer">
+                                          Ziua este blocată complet. Alege altă
+                                          zi.
+                                       </div>
+                                    )}
+                                    {data &&
+                                       dayIsBeforeCiocanaChronologyLock && (
+                                          <div className="studentAddReservation__disclaimer">
+                                             Pentru etapa Oras poți selecta doar
+                                             după ultima lecție deja stabilită.
+                                          </div>
+                                       )}
+
+                                    {oreDisponibile.map((ora) => {
+                                       const key =
+                                          data && dayLocal
+                                             ? `${dayLocal}|${ora.oraStart}`
+                                             : null;
+
+                                       const {
+                                          used,
+                                          blocked,
+                                          total,
+                                          full,
+                                          sum,
+                                       } = key
                                           ? getSlotMeta(key)
                                           : {
                                                used: 0,
@@ -3426,388 +3544,345 @@ export default function SAddProg({ onClose }) {
                                                sum: 0,
                                             };
 
-                                    const alreadyPicked = key
-                                       ? selectedKeySet.has(key)
-                                       : false;
-                                    const isSelected =
-                                       oraSelectata?.eticheta === ora.eticheta;
-                                    const blockedByChronology =
-                                       !!data &&
-                                       isBlockedByCiocanaPhase2Chronology(
-                                          data,
-                                          ora.oraStart,
-                                       );
-
-                                    const disabled =
-                                       !data ||
-                                       dayIsBooked ||
-                                       dayIsFullyBlocked ||
-                                       blockedByChronology ||
-                                       reachedPackLimit ||
-                                       alreadyPicked ||
-                                       full;
-
-                                    let title = "";
-                                    if (!data)
-                                       title = "Selectează o zi mai întâi";
-                                    else if (dayIsBooked)
-                                       title =
-                                          "Ai deja o programare în această zi";
-                                    else if (dayIsFullyBlocked)
-                                       title = "Zi blocată complet";
-                                    else if (blockedByChronology)
-                                       title =
-                                          "Disponibil doar după ultima lecție selectată";
-                                    else if (alreadyPicked)
-                                       title = "Deja adăugat";
-                                    else if (full)
-                                       title = `Indisponibil: rez ${used}, bl ${blocked} (sum ${sum}/${total})`;
-                                    else if (reachedPackLimit)
-                                       title = `Ai atins limita (${requiredSubmitCount}).`;
-                                    else
-                                       title = `Disponibil: rez ${used}, bl ${blocked} (sum ${sum}/${total})`;
-
-                                    return (
-                                       <button
-                                          key={ora.eticheta}
-                                          onClick={() => setOraSelectata(ora)}
-                                          disabled={disabled}
-                                          className={`saddprogramari__time-btn ${
-                                             isSelected
-                                                ? "saddprogramari__time-btn--selected"
-                                                : ""
-                                          } ${
-                                             disabled
-                                                ? "saddprogramari__time-btn--disabled"
-                                                : ""
-                                          }`}
-                                          title={title}
-                                       >
-                                          {ora.eticheta}
-                                       </button>
-                                    );
-                                 })}
-                              </div>
-                           </div>
-                        </div>
-
-                        <div className="saddprogramari__add-btns">
-                           <button
-                              onClick={adaugaProgramare}
-                              disabled={
-                                 !data ||
-                                 !oraSelectata ||
-                                 reachedPackLimit ||
-                                 dayIsBooked ||
-                                 dayIsFullyBlocked ||
-                                 dayIsBeforeCiocanaChronologyLock
-                              }
-                              className="saddprogramari__add-btn"
-                              type="button"
-                           >
-                              <ReactSVG
-                                 src={addIcon}
-                                 className="saddprogramari__add-btn-icon"
-                              />
-                              <span>Adaugă</span>
-                           </button>
-
-                           <button
-                              type="button"
-                              className="saddprogramari__add-btn list"
-                              onClick={() => setShowList(true)}
-                              disabled={
-                                 selectedDates.length === 0 &&
-                                 rejected.length === 0
-                              }
-                              title="Vezi lista"
-                           >
-                              <span>
-                                 Lista ({selectedDates.length + rejected.length}
-                                 )
-                              </span>
-                           </button>
-
-                           <button
-                              type="button"
-                              className="saddprogramari__add-btn list"
-                              onClick={() =>
-                                 autoCompletePack({ alsoClearConflicts: false })
-                              }
-                              disabled={
-                                 autoFillRunning ||
-                                 requiredSubmitCount <= 0 ||
-                                 reachedPackLimit
-                              }
-                              title="Completează automat restul lecțiilor disponibile"
-                           >
-                              <span>
-                                 {autoFillRunning ? "Auto..." : "Auto"}
-                              </span>
-                           </button>
-                        </div>
-                     </>
-                  ) : (
-                     <>
-                        <div className="saddprogramari__selector col">
-                           <div className="saddprogramari__header-row">
-                              <h3 className="saddprogramari__title saddprogramari__title--mt-12">
-                                 Lecții selectate: {selectedDates.length} /{" "}
-                                 {requiredSubmitCount}
-                                 {rejected.length > 0 && (
-                                    <span className="saddprogramari__muted-note">
-                                       {" "}
-                                       · conflicte: {rejected.length}
-                                    </span>
-                                 )}
-                              </h3>
-
-                              <div style={{ display: "flex", gap: 8 }}>
-                                 <button
-                                    type="button"
-                                    className="saddprogramari__ghost-btn"
-                                    onClick={() => setShowList(false)}
-                                    title="Înapoi la selecție"
-                                 >
-                                    Înapoi la selecție
-                                 </button>
-
-                                 <button
-                                    type="button"
-                                    className="saddprogramari__ghost-btn"
-                                    onClick={() =>
-                                       autoCompletePack({
-                                          alsoClearConflicts: true,
-                                       })
-                                    }
-                                    disabled={
-                                       autoFillRunning ||
-                                       requiredSubmitCount <= 0
-                                    }
-                                    title="Șterge conflictele și completează automat"
-                                 >
-                                    {autoFillRunning ? "Auto..." : "Auto-fix"}
-                                 </button>
-                              </div>
-                           </div>
-
-                           <div className="saddprogramari__added">
-                              {selectedDates.length + rejected.length === 0 ? (
-                                 <div className="saddprogramari__disclaimer">
-                                    Nu ai selectat încă nicio lecție.
-                                 </div>
-                              ) : (
-                                 <ul className="saddprogramari__added-list">
-                                    {rejected.map((x, i) => {
-                                       const iso = x.iso;
-                                       const key = makeKey(iso, i);
-                                       const isConfirming =
-                                          confirmDeleteKey === key;
-
-                                       return (
-                                          <li
-                                             key={`r-${i}`}
-                                             className={
-                                                "saddprogramari__added-item saddprogramari__added-item--conflict" +
-                                                (isConfirming
-                                                   ? " saddprogramari__added-item--confirm"
-                                                   : "")
-                                             }
-                                          >
-                                             {!isConfirming ? (
-                                                <>
-                                                   <div className="saddprogramari__added-item-top">
-                                                      <time
-                                                         className="saddprogramari__added-item-date"
-                                                         dateTime={iso}
-                                                      >
-                                                         {formatDateRO(iso)}
-                                                      </time>
-                                                      <span className="saddprogramari__added-item-time">
-                                                         {formatTimeRO(iso)}
-                                                      </span>
-                                                   </div>
-                                                   <div className="saddprogramari__muted-note">
-                                                      {x.reason || "Conflict"}
-                                                   </div>
-
-                                                   <ReactSVG
-                                                      onClick={() =>
-                                                         setConfirmDeleteKey(
-                                                            key,
-                                                         )
-                                                      }
-                                                      role="button"
-                                                      tabIndex={0}
-                                                      focusable="true"
-                                                      aria-label="Șterge conflictul"
-                                                      src={trashIcon}
-                                                      className="saddprogramari__add-btn-icon delete"
-                                                   />
-                                                </>
-                                             ) : (
-                                                <div className="saddprogramari__confirm">
-                                                   <button
-                                                      type="button"
-                                                      className="btn btn-danger"
-                                                      onClick={() =>
-                                                         stergeRejected(iso)
-                                                      }
-                                                   >
-                                                      Șterge
-                                                   </button>
-                                                   <button
-                                                      type="button"
-                                                      className="btn btn-secondary"
-                                                      onClick={() =>
-                                                         setConfirmDeleteKey(
-                                                            null,
-                                                         )
-                                                      }
-                                                   >
-                                                      Renunță
-                                                   </button>
-                                                </div>
-                                             )}
-                                          </li>
-                                       );
-                                    })}
-
-                                    {selectedDates.map((iso, i) => {
-                                       const key = makeKey(iso, i);
-                                       const isConfirming =
-                                          confirmDeleteKey === key;
-                                       const localKey = localKeyFromTs(
-                                          new Date(iso).getTime(),
-                                          MOLDOVA_TZ,
-                                       );
-                                       const phaseTag =
-                                          ciocanaPhaseByKeyRef.current.get(
-                                             localKey,
+                                       const alreadyPicked = key
+                                          ? selectedKeySet.has(key)
+                                          : false;
+                                       const isSelected =
+                                          oraSelectata?.eticheta ===
+                                          ora.eticheta;
+                                       const blockedByChronology =
+                                          !!data &&
+                                          isBlockedByCiocanaPhase2Chronology(
+                                             data,
+                                             ora.oraStart,
                                           );
 
-                                       return (
-                                          <li
-                                             key={`s-${i}`}
-                                             className={
-                                                "saddprogramari__added-item" +
-                                                (isConfirming
-                                                   ? " saddprogramari__added-item--confirm"
-                                                   : "")
-                                             }
-                                          >
-                                             {!isConfirming ? (
-                                                <>
-                                                   <div className="saddprogramari__added-item-top">
-                                                      <time
-                                                         className="saddprogramari__added-item-date"
-                                                         dateTime={iso}
-                                                      >
-                                                         {formatDateRO(iso)}
-                                                      </time>
-                                                      <span className="saddprogramari__added-item-time">
-                                                         {formatTimeRO(iso)}
-                                                      </span>
-                                                      {isCiocanaSplitScenario &&
-                                                         phaseTag === 1 && (
-                                                            <span className="saddprogramari__muted-note">
-                                                               {" "}
-                                                               · Poligon
-                                                            </span>
-                                                         )}
-                                                      {isCiocanaSplitScenario &&
-                                                         phaseTag === 2 && (
-                                                            <span className="saddprogramari__muted-note">
-                                                               {" "}
-                                                               · Oras
-                                                            </span>
-                                                         )}
-                                                   </div>
+                                       const disabled =
+                                          !data ||
+                                          dayIsBooked ||
+                                          dayIsFullyBlocked ||
+                                          blockedByChronology ||
+                                          reachedPackLimit ||
+                                          alreadyPicked ||
+                                          full;
 
-                                                   <ReactSVG
-                                                      onClick={() =>
-                                                         setConfirmDeleteKey(
-                                                            key,
-                                                         )
-                                                      }
-                                                      role="button"
-                                                      tabIndex={0}
-                                                      focusable="true"
-                                                      aria-label="Șterge programarea"
-                                                      src={trashIcon}
-                                                      className="saddprogramari__add-btn-icon delete"
-                                                   />
-                                                </>
-                                             ) : (
-                                                <div className="saddprogramari__confirm">
-                                                   <button
-                                                      type="button"
-                                                      className="btn btn-danger"
-                                                      onClick={() =>
-                                                         stergeSelected(iso)
-                                                      }
-                                                   >
-                                                      Șterge
-                                                   </button>
-                                                   <button
-                                                      type="button"
-                                                      className="btn btn-secondary"
-                                                      onClick={() =>
-                                                         setConfirmDeleteKey(
-                                                            null,
-                                                         )
-                                                      }
-                                                   >
-                                                      Renunță
-                                                   </button>
-                                                </div>
-                                             )}
-                                          </li>
+                                       let title = "";
+                                       if (!data)
+                                          title = "Selectează o zi mai întâi";
+                                       else if (dayIsBooked)
+                                          title =
+                                             "Ai deja o programare în această zi";
+                                       else if (dayIsFullyBlocked)
+                                          title = "Zi blocată complet";
+                                       else if (blockedByChronology)
+                                          title =
+                                             "Disponibil doar după ultima lecție selectată";
+                                       else if (alreadyPicked)
+                                          title = "Deja adăugat";
+                                       else if (full)
+                                          title = `Indisponibil: rez ${used}, bl ${blocked} (sum ${sum}/${total})`;
+                                       else if (reachedPackLimit)
+                                          title = `Ai atins limita (${requiredSubmitCount}).`;
+                                       else
+                                          title = `Disponibil: rez ${used}, bl ${blocked} (sum ${sum}/${total})`;
+
+                                       return (
+                                          <button
+                                             key={ora.eticheta}
+                                             onClick={() =>
+                                                setOraSelectata(ora)
+                                             }
+                                             disabled={disabled}
+                                             className={`studentAddReservation__time-btn ${
+                                                isSelected
+                                                   ? "studentAddReservation__time-btn--selected"
+                                                   : ""
+                                             } ${
+                                                disabled
+                                                   ? "studentAddReservation__time-btn--disabled"
+                                                   : ""
+                                             }`}
+                                             title={title}
+                                          >
+                                             {ora.eticheta}
+                                          </button>
                                        );
                                     })}
-                                 </ul>
+                                 </div>
+                              </div>
+                           </div>
+
+                           <div
+                              className={`studentAddReservation__add-btns ${
+                                 canSubmitInPick
+                                    ? "studentAddReservation__add-btns--dual"
+                                    : "studentAddReservation__add-btns--single"
+                              }`}
+                           >
+                              <button
+                                 onClick={adaugaProgramare}
+                                 disabled={
+                                    !data ||
+                                    !oraSelectata ||
+                                    reachedPackLimit ||
+                                    dayIsBooked ||
+                                    dayIsFullyBlocked ||
+                                    dayIsBeforeCiocanaChronologyLock
+                                 }
+                                 className={`studentAddReservation__add-btn ${
+                                    canSubmitInPick
+                                       ? ""
+                                       : "studentAddReservation__add-btn--full"
+                                 }`}
+                                 type="button"
+                              >
+                                 <ReactSVG
+                                    src={addIcon}
+                                    className="studentAddReservation__add-btn-icon"
+                                 />
+                                 <span>Adaugă</span>
+                              </button>
+
+                              {canSubmitInPick && (
+                                 <button
+                                    onClick={trimiteProgramari}
+                                    disabled={
+                                       loading || requiredSubmitCount <= 0
+                                    }
+                                    className="studentAddReservation__add-btn studentAddReservation__add-btn--arrow"
+                                    type="button"
+                                 >
+                                    <span>
+                                       {loading
+                                          ? "Se trimit..."
+                                          : `Trimite ${selectedDates.length} prog.`}
+                                    </span>
+                                    <ReactSVG
+                                       src={arrowIcon}
+                                       className="studentAddReservation__add-btn-icon"
+                                    />
+                                 </button>
                               )}
                            </div>
-                        </div>
-                     </>
-                  )}
+                        </>
+                     ) : (
+                        <>
+                           <div className="studentAddReservation__selector studentAddReservation__selector--col">
+                              <div className="studentAddReservation__header-row">
+                                 <h3 className="studentAddReservation__title studentAddReservation__title--mt-12">
+                                    Lecții selectate: {totalPickedCount} /{" "}
+                                    {requiredSubmitCount}
+                                    {rejected.length > 0 && (
+                                       <span className="studentAddReservation__muted-note">
+                                          {" "}
+                                          · conflicte: {rejected.length}
+                                       </span>
+                                    )}
+                                 </h3>
+                              </div>
 
-                  <div className="saddprogramari__add-btns">
+                              <div className="studentAddReservation__added">
+                                 {totalPickedCount === 0 ? (
+                                    <div className="studentAddReservation__empty-note">
+                                       Nu ai selectat încă nicio lecție.
+                                    </div>
+                                 ) : (
+                                    <ul className="studentAddReservation__added-list">
+                                       {rejected.map((x, i) => {
+                                          const iso = x.iso;
+                                          const key = makeKey(iso, i);
+                                          const isConfirming =
+                                             confirmDeleteKey === key;
+
+                                          return (
+                                             <li
+                                                key={`r-${i}`}
+                                                className={
+                                                   "studentAddReservation__added-item studentAddReservation__added-item--conflict" +
+                                                   (isConfirming
+                                                      ? " studentAddReservation__added-item--confirm"
+                                                      : "")
+                                                }
+                                             >
+                                                {!isConfirming ? (
+                                                   <>
+                                                      <div className="studentAddReservation__added-item-top">
+                                                         <time
+                                                            className="studentAddReservation__added-item-date"
+                                                            dateTime={iso}
+                                                         >
+                                                            {formatDateRO(iso)}
+                                                         </time>
+                                                         <span className="studentAddReservation__added-item-time">
+                                                            {formatTimeRO(iso)}
+                                                         </span>
+                                                      </div>
+
+                                                      <ReactSVG
+                                                         onClick={() =>
+                                                            setConfirmDeleteKey(
+                                                               key,
+                                                            )
+                                                         }
+                                                         role="button"
+                                                         tabIndex={0}
+                                                         focusable="true"
+                                                         aria-label="Șterge conflictul"
+                                                         src={trashIcon}
+                                                         className="studentAddReservation__add-btn-icon studentAddReservation__add-btn-icon--delete"
+                                                      />
+                                                   </>
+                                                ) : (
+                                                   <div className="studentAddReservation__confirm">
+                                                      <button
+                                                         type="button"
+                                                         className="studentAddReservation__confirm-btn studentAddReservation__confirm-btn--danger"
+                                                         onClick={() =>
+                                                            stergeRejected(iso)
+                                                         }
+                                                      >
+                                                         Șterge
+                                                      </button>
+                                                      <button
+                                                         type="button"
+                                                         className="studentAddReservation__confirm-btn studentAddReservation__confirm-btn--secondary"
+                                                         onClick={() =>
+                                                            setConfirmDeleteKey(
+                                                               null,
+                                                            )
+                                                         }
+                                                      >
+                                                         Renunță
+                                                      </button>
+                                                   </div>
+                                                )}
+                                             </li>
+                                          );
+                                       })}
+
+                                       {selectedDates.map((iso, i) => {
+                                          const key = makeKey(iso, i);
+                                          const isConfirming =
+                                             confirmDeleteKey === key;
+                                          const localKey = localKeyFromTs(
+                                             new Date(iso).getTime(),
+                                             MOLDOVA_TZ,
+                                          );
+                                          const phaseTag =
+                                             ciocanaPhaseByKeyRef.current.get(
+                                                localKey,
+                                             );
+
+                                          return (
+                                             <li
+                                                key={`s-${i}`}
+                                                className={
+                                                   "studentAddReservation__added-item" +
+                                                   (isConfirming
+                                                      ? " studentAddReservation__added-item--confirm"
+                                                      : "")
+                                                }
+                                             >
+                                                {!isConfirming ? (
+                                                   <>
+                                                      <div className="studentAddReservation__added-item-top">
+                                                         <time
+                                                            className="studentAddReservation__added-item-date"
+                                                            dateTime={iso}
+                                                         >
+                                                            {formatDateRO(iso)}
+                                                         </time>
+                                                         <span className="studentAddReservation__added-item-time">
+                                                            {formatTimeRO(iso)}
+                                                         </span>
+                                                         {isCiocanaSplitScenario &&
+                                                            phaseTag === 1 && (
+                                                               <span className="studentAddReservation__muted-note">
+                                                                  {" "}
+                                                                  · Poligon
+                                                               </span>
+                                                            )}
+                                                         {isCiocanaSplitScenario &&
+                                                            phaseTag === 2 && (
+                                                               <span className="studentAddReservation__muted-note">
+                                                                  {" "}
+                                                                  · Oras
+                                                               </span>
+                                                            )}
+                                                      </div>
+
+                                                      <ReactSVG
+                                                         onClick={() =>
+                                                            setConfirmDeleteKey(
+                                                               key,
+                                                            )
+                                                         }
+                                                         role="button"
+                                                         tabIndex={0}
+                                                         focusable="true"
+                                                         aria-label="Șterge programarea"
+                                                         src={trashIcon}
+                                                         className="studentAddReservation__add-btn-icon studentAddReservation__add-btn-icon--delete"
+                                                      />
+                                                   </>
+                                                ) : (
+                                                   <div className="studentAddReservation__confirm">
+                                                      <button
+                                                         type="button"
+                                                         className="studentAddReservation__confirm-btn studentAddReservation__confirm-btn--danger"
+                                                         onClick={() =>
+                                                            stergeSelected(iso)
+                                                         }
+                                                      >
+                                                         Șterge
+                                                      </button>
+                                                      <button
+                                                         type="button"
+                                                         className="studentAddReservation__confirm-btn studentAddReservation__confirm-btn--secondary"
+                                                         onClick={() =>
+                                                            setConfirmDeleteKey(
+                                                               null,
+                                                            )
+                                                         }
+                                                      >
+                                                         Renunță
+                                                      </button>
+                                                   </div>
+                                                )}
+                                             </li>
+                                          );
+                                       })}
+                                    </ul>
+                                 )}
+                              </div>
+                           </div>
+                        </>
+                     )}
+
                      <button
-                        onClick={handleBack}
-                        className="saddprogramari__add-btn arrow0"
                         type="button"
-                     >
-                        <ReactSVG
-                           src={arrowIcon}
-                           className="saddprogramari__add-btn-icon"
-                        />
-                        <span>Înapoi</span>
-                     </button>
-
-                     <button
-                        onClick={trimiteProgramari}
-                        disabled={
-                           selectedDates.length !== requiredSubmitCount ||
-                           loading ||
-                           requiredSubmitCount <= 0
+                        className="studentAddReservation__auto-fab"
+                        onClick={() =>
+                           autoCompletePack({
+                              alsoClearConflicts: showList,
+                           })
                         }
-                        className="saddprogramari__add-btn arrow"
-                        type="button"
+                        disabled={
+                           autoFillRunning ||
+                           requiredSubmitCount <= 0 ||
+                           reachedPackLimit
+                        }
+                        title={
+                           showList
+                              ? "Șterge conflictele și completează automat"
+                              : "Completează automat restul lecțiilor disponibile"
+                        }
                      >
-                        <span>
-                           {loading
-                              ? "Se trimit..."
-                              : `Trimite ${selectedDates.length} prog.`}
-                        </span>
-                        <ReactSVG
-                           src={arrowIcon}
-                           className="saddprogramari__add-btn-icon"
-                        />
+                        {autoFillRunning ? "Auto..." : "Auto"}
                      </button>
-                  </div>
-               </>
-            )}
+                  </>
+               )}
+            </div>
          </div>
       </>
    );

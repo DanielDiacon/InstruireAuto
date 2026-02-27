@@ -5,6 +5,7 @@
    width: 100%;
    max-width: 500px;
    height: calc(100svh - 12px);
+   
    border-radius: 35px;
    corner-shape: superellipse(1.2);
    background-color: var(--black-s);
@@ -14,7 +15,7 @@
    will-change: transform, opacity;
 
    // ✅ închis: împins clar în jos (în afara ecranului)
-   transform: translateX(-120%) scaleY(0.7) scaleX(1);
+   transform: translateX(-120%) scaleY(0.9) scaleX(1);
    pointer-events: none;
 
    transition: transform 0.3s cubic-bezier(0.43, 1, 0.32, 0.875);
@@ -30,6 +31,7 @@
       width: 100%;
       height: 100%;
       overflow: auto;
+      overscroll-behavior: contain;
 
       &::-webkit-scrollbar {
          display: none !important;
@@ -58,20 +60,23 @@
 .popupPanelUI__overlay {
    position: fixed;
    inset: 0;
-   background: linear-gradient(to right, #4b493659, #ffffff00);
-
-   backdrop-filter: blur(5px);
+   background-color: rgba(0, 0, 0, 0.6);
    z-index: 1000;
    opacity: 0;
    pointer-events: none;
    transition: opacity 0.22s ease;
    cursor: pointer;
-
    &.is-open {
       opacity: 1;
 
       pointer-events: auto;
    }
+}
+
+html.popupui-open,
+body.popupui-open {
+   overflow: hidden !important;
+   overscroll-behavior: none;
 }
 
 /* doar scroll lock */
@@ -81,12 +86,19 @@
       min-width: auto;
       padding: 0px;
       top: 0;
+      right: 0;
+      bottom: 0;
       left: 0;
       width: 100%;
+      max-width: none;
       pointer-events: all;
       align-items: center;
       justify-content: center;
       background: none;
+      height: 100svh;
+      height: 100dvh;
+      min-height: 100dvh;
+      border-radius: 0;
 
       transform: translateX(120%) scaleY(1) scaleX(0.8);
       &.is-open {
@@ -104,8 +116,5 @@
          background: var(--black-s);
          backdrop-filter: none;
       }
-   }
-   body.popupui-open {
-      overflow: hidden;
    }
 }

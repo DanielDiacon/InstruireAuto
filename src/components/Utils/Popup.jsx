@@ -184,14 +184,15 @@ export default function Popup() {
       }, 0);
    };
 
-   const confirmCloseCurrentPopup = useCallback(() => {
+   const confirmCloseCurrentPopup = useCallback((options = {}) => {
+      if (options?.skipConfirm) return true;
       if (popupState?.type !== "sAddProg") return true;
       if (typeof window === "undefined") return true;
       return window.confirm("Sigur doriți să ieșiți din acest popup?");
    }, [popupState?.type]);
 
-   const handleCloseClick = () => {
-      if (!confirmCloseCurrentPopup()) return;
+   const handleCloseClick = (options = {}) => {
+      if (!confirmCloseCurrentPopup(options)) return;
 
       // dacă ai subpopup (stack), îl închizi separat
       if (getCurrentSubPopup()) {
